@@ -6,10 +6,10 @@ import { renderLoginPage, renderHomePage, renderSubscriptionsPage, renderSubscri
 // App Proxy handler — receives all requests from Shopify
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
+  { params }: { params: Promise<{ path?: string[] }> }
 ) {
   const { path } = await params;
-  const route = path?.join('/') || '';
+  const route = (path || []).join('/');
   const searchParams = request.nextUrl.searchParams;
 
   // --- Auth: check for token or session ---
