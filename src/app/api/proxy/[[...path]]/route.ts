@@ -35,7 +35,7 @@ export async function GET(
   try {
     // Login page (no auth required)
     if (!session) {
-      return liquidResponse(renderLoginPage(route === 'login-sent'));
+      return portalResponse(renderLoginPage(route === 'login-sent'), request);
     }
 
     const email = session.email;
@@ -44,35 +44,36 @@ export async function GET(
     switch (route) {
       case '':
       case 'inicio':
-        return liquidResponse(await renderHomePage(email, sParam));
+        return portalResponse(await renderHomePage(email, sParam), request);
 
       case 'suscripciones':
-        return liquidResponse(await renderSubscriptionsPage(email, sParam));
+        return portalResponse(await renderSubscriptionsPage(email, sParam), request);
 
       case route.match(/^suscripciones\/(.+)/)?.input: {
         const subId = route.replace('suscripciones/', '');
-        return liquidResponse(await renderSubscriptionDetail(email, subId, sParam));
+        return portalResponse(await renderSubscriptionDetail(email, subId, sParam), request);
       }
 
       case 'recompensas':
-        return liquidResponse(await renderRewardsPage(email, sParam));
+        return portalResponse(await renderRewardsPage(email, sParam), request);
 
       case 'referidos':
-        return liquidResponse(await renderReferralsPage(email, sParam));
+        return portalResponse(await renderReferralsPage(email, sParam), request);
 
       case 'pedidos':
-        return liquidResponse(await renderOrdersPage(email, sParam));
+        return portalResponse(await renderOrdersPage(email, sParam), request);
 
       case 'contenido':
-        return liquidResponse(await renderContentPage(email, sParam));
+        return portalResponse(await renderContentPage(email, sParam), request);
 
       default:
-        return liquidResponse(await renderHomePage(email, sParam));
+        return portalResponse(await renderHomePage(email, sParam), request);
     }
   } catch (error) {
     console.error('[LIT Portal] Error:', error);
-    return liquidResponse(
-      wrapInLiquid('Error', '<div class="empty-state"><h2>Algo salió mal</h2><p>Inténtalo de nuevo más tarde.</p></div>')
+    return portalResponse(
+      wrapInLiquid('Error', '<div class="empty-state"><h2>Algo salió mal</h2><p>Inténtalo de nuevo más tarde.</p></div>'),
+      request
     );
   }
 }
@@ -84,7 +85,7 @@ export async function POST(request: NextRequest) {
     const email = formData.get('email') as string;
 
     if (!email) {
-      return liquidResponse(renderLoginPage(false, 'Por favor introduce tu email.'));
+      return portalResponse(renderLoginPage(false, 'Por favor introduce tu email.'), request);
     }
 
     // Create magic token
@@ -95,17 +96,29 @@ export async function POST(request: NextRequest) {
     // For now, log the link (remove in production)
     console.log(`[LIT Portal] Magic link for ${email}: ${magicLink}`);
 
-    return liquidResponse(renderLoginPage(true));
+    return portalResponse(renderLoginPage(true), request);
   } catch (error) {
     console.error('[LIT Portal] Login error:', error);
-    return liquidResponse(renderLoginPage(false, 'Error al enviar el email. Inténtalo de nuevo.'));
+    return portalResponse(renderLoginPage(false, 'Error al enviar el email. Inténtalo de nuevo.'), request);
   }
 }
 
-function liquidResponse(html: string) {
-  return new NextResponse(html, {
+function isAppProxy(request: NextRequest): boolean {
+  return request.nextUrl.searchParams.has('shop') && request.nextUrl.searchParams.has('signature');
+}
+
+function portalResponse(html: string, request?: NextRequest): NextResponse {
+  const viaProxy = request ? isAppProxy(request) : false;
+  let content = html;
+
+  // Strip Liquid tags when serving directly (not via App Proxy)
+  if (!viaProxy) {
+    content = content.replace(/\{%.*?%\}/g, '');
+  }
+
+  return new NextResponse(content, {
     headers: {
-      'Content-Type': 'application/liquid',
+      'Content-Type': viaProxy ? 'application/liquid' : 'text/html; charset=utf-8',
     },
   });
 }
