@@ -93,5 +93,5 @@ export async function validateSession(token: string): Promise<AuthSession | null
 
 // Generate the magic link URL
 export function getMagicLinkUrl(token: string): string {
-  return `https://portal.litsalt.com/api/proxy?token=${token}`;
+  return `https://portal.litsalt.com?token=${token}`;
 }

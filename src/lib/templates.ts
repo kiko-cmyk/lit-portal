@@ -216,12 +216,12 @@ export function wrapInLiquid(title: string, bodyHtml: string, sessionToken?: str
 </head>
 <body>
   <nav class="portal-nav">
-    <a href="/api/proxy${tokenParam}">Inicio</a>
-    <a href="/api/proxy/suscripciones${tokenParam}">Suscripciones</a>
-    <a href="/api/proxy/recompensas${tokenParam}">Recompensas</a>
-    <a href="/api/proxy/referidos${tokenParam}">Referidos</a>
-    <a href="/api/proxy/pedidos${tokenParam}">Pedidos</a>
-    <a href="/api/proxy/contenido${tokenParam}">Contenido</a>
+    <a href="/${tokenParam}">Inicio</a>
+    <a href="//suscripciones${tokenParam}">Suscripciones</a>
+    <a href="//recompensas${tokenParam}">Recompensas</a>
+    <a href="//referidos${tokenParam}">Referidos</a>
+    <a href="//pedidos${tokenParam}">Pedidos</a>
+    <a href="//contenido${tokenParam}">Contenido</a>
   </nav>
   <div class="portal-container">
     ${bodyHtml}
