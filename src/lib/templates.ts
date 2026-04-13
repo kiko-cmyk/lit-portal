@@ -217,11 +217,11 @@ export function wrapInLiquid(title: string, bodyHtml: string, sessionToken?: str
 <body>
   <nav class="portal-nav">
     <a href="/${tokenParam}">Inicio</a>
-    <a href="//suscripciones${tokenParam}">Suscripciones</a>
-    <a href="//recompensas${tokenParam}">Recompensas</a>
-    <a href="//referidos${tokenParam}">Referidos</a>
-    <a href="//pedidos${tokenParam}">Pedidos</a>
-    <a href="//contenido${tokenParam}">Contenido</a>
+    <a href="/suscripciones${tokenParam}">Suscripciones</a>
+    <a href="/recompensas${tokenParam}">Recompensas</a>
+    <a href="/referidos${tokenParam}">Referidos</a>
+    <a href="/pedidos${tokenParam}">Pedidos</a>
+    <a href="/contenido${tokenParam}">Contenido</a>
   </nav>
   <div class="portal-container">
     ${bodyHtml}
