@@ -33,7 +33,7 @@ export function renderLoginPage(emailSent: boolean, error?: string): string {
           Accede a tu portal de suscriptor. Gestiona tu suscripción, acumula puntos y descubre contenido exclusivo.
         </p>
         ${error ? `<p style="color:#c0392b;margin-bottom:16px;">${error}</p>` : ''}
-        <form method="POST" action="//login" style="max-width:360px;margin:0 auto;">
+        <form method="POST" action="/login" style="max-width:360px;margin:0 auto;">
           <input type="email" name="email" placeholder="tu@email.com" required class="input" style="margin-bottom:12px;">
           <button type="submit" class="btn btn-primary btn-block">Enviar enlace de acceso</button>
         </form>
@@ -90,7 +90,7 @@ export async function renderHomePage(email: string, sessionToken: string): Promi
         <h3>Mis Suscripciones</h3>
         ${subsHtml}
       </div>
-      <a href="//suscripciones${s}" class="btn btn-primary btn-sm">Gestionar</a>
+      <a href="/suscripciones${s}" class="btn btn-primary btn-sm">Gestionar</a>
     </div>
 
     <div class="card">
@@ -99,7 +99,7 @@ export async function renderHomePage(email: string, sessionToken: string): Promi
         <span class="badge badge-${balance.current_tier}">${balance.current_tier}</span>
       </div>
       <p style="font-size:14px;color:#cfbfad;margin-bottom:12px;">Acumula puntos con cada compra y sube de nivel.</p>
-      <a href="//recompensas${s}" class="btn btn-primary btn-sm">Ver mis puntos</a>
+      <a href="/recompensas${s}" class="btn btn-primary btn-sm">Ver mis puntos</a>
     </div>
 
     <div class="card">
@@ -107,15 +107,15 @@ export async function renderHomePage(email: string, sessionToken: string): Promi
         <h3>Invita a un amigo</h3>
       </div>
       <p style="font-size:14px;color:#cfbfad;margin-bottom:12px;">Comparte tu código y ganáis puntos los dos.</p>
-      <a href="//referidos${s}" class="btn btn-primary btn-sm">Mi código de referido</a>
+      <a href="/referidos${s}" class="btn btn-primary btn-sm">Mi código de referido</a>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-      <a href="//pedidos${s}" class="card" style="text-decoration:none;color:inherit;text-align:center;">
+      <a href="/pedidos${s}" class="card" style="text-decoration:none;color:inherit;text-align:center;">
         <div style="font-size:24px;margin-bottom:8px;">📦</div>
         <h3 style="font-size:15px;">Mis Pedidos</h3>
       </a>
-      <a href="//contenido${s}" class="card" style="text-decoration:none;color:inherit;text-align:center;">
+      <a href="/contenido${s}" class="card" style="text-decoration:none;color:inherit;text-align:center;">
         <div style="font-size:24px;margin-bottom:8px;">🎬</div>
         <h3 style="font-size:15px;">Contenido Exclusivo</h3>
       </a>
@@ -182,12 +182,12 @@ export async function renderSubscriptionsPage(email: string, sessionToken: strin
         </div>
         <div class="actions">
           ${sub.status === 'active' ? `
-            <a href="//api/action/skip/${sub.id}${s ? s + '&' : '?'}action=skip" class="btn btn-primary btn-sm">Saltar entrega</a>
-            <a href="//api/action/pause/${sub.id}${s ? s + '&' : '?'}action=pause" class="btn btn-secondary btn-sm">Pausar</a>
+            <a href="/api/action/skip/${sub.id}${s ? s + '&' : '?'}action=skip" class="btn btn-primary btn-sm">Saltar entrega</a>
+            <a href="/api/action/pause/${sub.id}${s ? s + '&' : '?'}action=pause" class="btn btn-secondary btn-sm">Pausar</a>
             <button onclick="showCancelModal('${sub.id}')" class="btn btn-danger btn-sm">Cancelar</button>
           ` : ''}
           ${sub.status === 'paused' ? `
-            <a href="//api/action/resume/${sub.id}${s ? s + '&' : '?'}action=resume" class="btn btn-primary btn-sm">Reanudar</a>
+            <a href="/api/action/resume/${sub.id}${s ? s + '&' : '?'}action=resume" class="btn btn-primary btn-sm">Reanudar</a>
           ` : ''}
         </div>
       </div>
@@ -239,10 +239,10 @@ export async function renderSubscriptionsPage(email: string, sessionToken: strin
         document.getElementById('cancelStep2').style.display = 'block';
       }
       function doSkip() {
-        if (currentSubId) window.location.href = '//api/action/skip/' + currentSubId + '${s ? s + "&" : "?"}action=skip';
+        if (currentSubId) window.location.href = '/api/action/skip/' + currentSubId + '${s ? s + "&" : "?"}action=skip';
       }
       function doCancel() {
-        if (currentSubId) window.location.href = '//api/action/cancel/' + currentSubId + '${s ? s + "&" : "?"}action=cancel';
+        if (currentSubId) window.location.href = '/api/action/cancel/' + currentSubId + '${s ? s + "&" : "?"}action=cancel';
       }
       document.getElementById('cancelModal').addEventListener('click', function(e) {
         if (e.target === this) closeModal();
