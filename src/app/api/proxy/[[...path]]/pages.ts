@@ -53,7 +53,7 @@ export async function renderHomePage(email: string, sessionToken: string): Promi
   let subsHtml = '';
   try {
     const subs = await getSubscriptionsByEmail(email);
-    const activeSubs = (subs || []).filter((sub: { status: string }) => sub.status === 'active');
+    const activeSubs = (subs || []).filter((sub: { status: string }) => (sub.status || '').toLowerCase() === 'active');
     subsHtml = activeSubs.length > 0
       ? `<span class="badge badge-active">${activeSubs.length} activa${activeSubs.length > 1 ? 's' : ''}</span>`
       : '<span style="color:#cfbfad;">Sin suscripciones activas</span>';
@@ -153,40 +153,47 @@ export async function renderSubscriptionsPage(email: string, sessionToken: strin
 
   let cardsHtml = '';
   for (const sub of subs) {
-    const statusClass = sub.status === 'active' ? 'active' : sub.status === 'paused' ? 'paused' : 'cancelled';
-    const statusLabel = sub.status === 'active' ? 'Activa' : sub.status === 'paused' ? 'Pausada' : 'Cancelada';
+    const status = (sub.status || '').toLowerCase();
+    const statusClass = status === 'active' ? 'active' : status === 'paused' ? 'paused' : 'cancelled';
+    const statusLabel = status === 'active' ? 'Activa' : status === 'paused' ? 'Pausada' : 'Cancelada';
 
-    const products = (sub.lines || sub.line_items || [])
-      .map((line: { title: string; quantity: number; price: string }) =>
-        `<div style="font-size:14px;padding:4px 0;">${line.title} × ${line.quantity} — ${line.price}€</div>`
+    const products = (sub.items || sub.lines || sub.line_items || [])
+      .map((line: { title: string; quantity: number; price?: string }) =>
+        `<div style="font-size:14px;padding:4px 0;">${line.title} x ${line.quantity}</div>`
       ).join('');
 
     const nextDelivery = sub.next_billing_date
       ? new Date(sub.next_billing_date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })
       : '—';
 
+    const internalId = sub.internal_id || sub.id;
+
     cardsHtml += `
       <div class="card">
         <div class="card-header">
-          <h3>#${sub.id}</h3>
+          <h3>#${internalId}</h3>
           <span class="badge badge-${statusClass}">${statusLabel}</span>
         </div>
         ${products}
         <div class="detail-row" style="margin-top:12px;">
           <span class="detail-label">Frecuencia</span>
-          <span>Cada ${sub.delivery_interval || '?'} ${sub.delivery_interval_type || 'mes'}</span>
+          <span>${sub.delivery_interval || '—'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Total</span>
+          <span>${sub.total_value || '—'} ${sub.currency || 'EUR'}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">Próxima entrega</span>
           <span>${nextDelivery}</span>
         </div>
         <div class="actions">
-          ${sub.status === 'active' ? `
+          ${status === 'active' ? `
             <a href="/api/action/skip/${sub.id}${s ? s + '&' : '?'}action=skip" class="btn btn-primary btn-sm">Saltar entrega</a>
             <a href="/api/action/pause/${sub.id}${s ? s + '&' : '?'}action=pause" class="btn btn-secondary btn-sm">Pausar</a>
             <button onclick="showCancelModal('${sub.id}')" class="btn btn-danger btn-sm">Cancelar</button>
           ` : ''}
-          ${sub.status === 'paused' ? `
+          ${status === 'paused' ? `
             <a href="/api/action/resume/${sub.id}${s ? s + '&' : '?'}action=resume" class="btn btn-primary btn-sm">Reanudar</a>
           ` : ''}
         </div>
@@ -508,7 +515,7 @@ export async function renderContentPage(email: string, sessionToken: string): Pr
   let isActiveSubscriber = false;
   try {
     const subs = await getSubscriptionsByEmail(email);
-    isActiveSubscriber = (subs || []).some((sub: { status: string }) => sub.status === 'active');
+    isActiveSubscriber = (subs || []).some((sub: { status: string }) => (sub.status || '').toLowerCase() === 'active');
   } catch {
     // ignore
   }

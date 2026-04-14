@@ -36,9 +36,11 @@ async function sealFetch(endpoint: string, options: SealRequestOptions = {}) {
 // --- Subscriptions ---
 
 export async function getSubscriptionsByEmail(email: string) {
-  return sealFetch('/subscriptions', {
+  const response = await sealFetch('/subscriptions', {
     params: { query: email },
   });
+  // Seal wraps subscriptions in payload.subscriptions
+  return response?.payload?.subscriptions || response?.subscriptions || response || [];
 }
 
 export async function getSubscription(subscriptionId: string) {
