@@ -92,9 +92,25 @@ export async function POST(request: NextRequest) {
     const token = await createMagicToken(email);
     const magicLink = getMagicLinkUrl(token);
 
-    // TODO: Send email via Klaviyo
-    // For now, log the link (remove in production)
-    console.log(`[LIT Portal] Magic link for ${email}: ${magicLink}`);
+    // Send magic link event to Klaviyo
+    try {
+      await fetch('https://a.klaviyo.com/client/events/?company_id=TFtcEn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'revision': '2024-10-15' },
+        body: JSON.stringify({
+          data: {
+            type: 'event',
+            attributes: {
+              metric: { data: { type: 'metric', attributes: { name: 'Portal Magic Link Requested' } } },
+              profile: { data: { type: 'profile', attributes: { email: email.toLowerCase() } } },
+              properties: { magic_link: magicLink }
+            }
+          }
+        })
+      });
+    } catch (e) {
+      console.error('[LIT Portal] Klaviyo event error:', e);
+    }
 
     return portalResponse(renderLoginPage(true), request);
   } catch (error) {
