@@ -7,6 +7,7 @@ export interface AuthSession {
   email: string;
   customer_name: string | null;
   shopify_customer_id: string | null;
+  sessionToken?: string;
 }
 
 // Generate a magic link token and store it in Supabase
@@ -69,6 +70,7 @@ export async function validateToken(token: string): Promise<AuthSession | null> 
     email: data.email,
     customer_name: null,
     shopify_customer_id: null,
+    sessionToken,
   };
 }
 

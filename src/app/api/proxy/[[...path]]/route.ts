@@ -18,12 +18,13 @@ export async function GET(
 
   let session = null;
 
+  let activeSessionToken = sessionToken || '';
+
   if (token) {
     // Magic link click — validate and create session
     session = await validateToken(token);
-    if (session) {
-      // Redirect to portal with session token
-      // We need to return the page directly since App Proxy doesn't support redirects well
+    if (session && session.sessionToken) {
+      activeSessionToken = session.sessionToken;
     }
   }
 
@@ -39,7 +40,7 @@ export async function GET(
     }
 
     const email = session.email;
-    const sParam = sessionToken || '';
+    const sParam = activeSessionToken;
 
     switch (route) {
       case '':
@@ -72,7 +73,7 @@ export async function GET(
   } catch (error) {
     console.error('[LIT Portal] Error:', error);
     return portalResponse(
-      wrapInLiquid('Error', '<div class="empty-state"><h2>Algo salió mal</h2><p>Inténtalo de nuevo más tarde.</p></div>'),
+      wrapInLiquid('Error', '<div class="empty-state"><h2>Algo salió mal</h2><p>Inténtalo de nuevo más tarde.</p></div>', activeSessionToken),
       request
     );
   }
