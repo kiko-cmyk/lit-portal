@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addPoints } from '@/lib/rewards';
+import { sendKlaviyoEvent } from '@/lib/klaviyo';
 
 // Webhook handler for Shopify events (orders/create, etc.)
 export async function POST(request: NextRequest) {
@@ -15,11 +16,20 @@ export async function POST(request: NextRequest) {
 
         if (email && totalPrice > 0) {
           const points = Math.floor(totalPrice); // 1 point per EUR
-          await addPoints(email, 'purchase', points, {
+          const result = await addPoints(email, 'purchase', points, {
             order_id: body.id,
             order_name: body.name,
             total_price: totalPrice,
           });
+
+          // Notify via Klaviyo
+          await sendKlaviyoEvent('Portal Points Earned', email, {
+            points_earned: points,
+            total_points: result.total_points,
+            current_tier: result.current_tier,
+            order_name: body.name,
+          });
+
           console.log(`[Webhook] Added ${points} points for ${email} (order ${body.name})`);
         }
 
@@ -58,6 +68,18 @@ export async function POST(request: NextRequest) {
             await addPoints(email, 'referral', 500, {
               referrer_code: refCode,
               type: 'welcome_bonus',
+            });
+
+            // Notify referrer via Klaviyo
+            await sendKlaviyoEvent('Portal Referral Success', codeData.customer_email, {
+              referred_email: email,
+              points_earned: 500,
+            });
+
+            // Notify referred via Klaviyo
+            await sendKlaviyoEvent('Portal Referral Welcome', email, {
+              referrer_code: refCode,
+              points_earned: 500,
             });
 
             console.log(`[Webhook] Referral: ${refCode} → ${email}, 500 pts each`);

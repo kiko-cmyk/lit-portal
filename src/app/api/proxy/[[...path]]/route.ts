@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateToken, validateSession, createMagicToken, getMagicLinkUrl } from '@/lib/auth';
 import { wrapInLiquid } from '@/lib/templates';
+import { sendKlaviyoEvent } from '@/lib/klaviyo';
 import { renderLoginPage, renderHomePage, renderSubscriptionsPage, renderSubscriptionDetail, renderRewardsPage, renderReferralsPage, renderOrdersPage, renderContentPage } from './pages';
 
 // App Proxy handler — receives all requests from Shopify
@@ -94,24 +95,7 @@ export async function POST(request: NextRequest) {
     const magicLink = getMagicLinkUrl(token);
 
     // Send magic link event to Klaviyo
-    try {
-      await fetch('https://a.klaviyo.com/client/events/?company_id=TFtcEn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'revision': '2024-10-15' },
-        body: JSON.stringify({
-          data: {
-            type: 'event',
-            attributes: {
-              metric: { data: { type: 'metric', attributes: { name: 'Portal Magic Link Requested' } } },
-              profile: { data: { type: 'profile', attributes: { email: email.toLowerCase() } } },
-              properties: { magic_link: magicLink }
-            }
-          }
-        })
-      });
-    } catch (e) {
-      console.error('[LIT Portal] Klaviyo event error:', e);
-    }
+    await sendKlaviyoEvent('Portal Magic Link Requested', email, { magic_link: magicLink });
 
     return portalResponse(renderLoginPage(true), request);
   } catch (error) {

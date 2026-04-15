@@ -189,12 +189,12 @@ export async function renderSubscriptionsPage(email: string, sessionToken: strin
         </div>
         <div class="actions">
           ${status === 'active' ? `
-            <a href="/api/action/skip/${sub.id}${s ? s + '&' : '?'}action=skip" class="btn btn-primary btn-sm">Saltar entrega</a>
-            <a href="/api/action/pause/${sub.id}${s ? s + '&' : '?'}action=pause" class="btn btn-secondary btn-sm">Pausar</a>
+            <a href="/api/actions/skip/${sub.id}${s}" class="btn btn-primary btn-sm">Saltar entrega</a>
+            <a href="/api/actions/pause/${sub.id}${s}" class="btn btn-secondary btn-sm">Pausar</a>
             <button onclick="showCancelModal('${sub.id}')" class="btn btn-danger btn-sm">Cancelar</button>
           ` : ''}
           ${status === 'paused' ? `
-            <a href="/api/action/resume/${sub.id}${s ? s + '&' : '?'}action=resume" class="btn btn-primary btn-sm">Reanudar</a>
+            <a href="/api/actions/resume/${sub.id}${s}" class="btn btn-primary btn-sm">Reanudar</a>
           ` : ''}
         </div>
       </div>
@@ -246,10 +246,10 @@ export async function renderSubscriptionsPage(email: string, sessionToken: strin
         document.getElementById('cancelStep2').style.display = 'block';
       }
       function doSkip() {
-        if (currentSubId) window.location.href = '/api/action/skip/' + currentSubId + '${s ? s + "&" : "?"}action=skip';
+        if (currentSubId) window.location.href = '/api/actions/skip/' + currentSubId + '${s}';
       }
       function doCancel() {
-        if (currentSubId) window.location.href = '/api/action/cancel/' + currentSubId + '${s ? s + "&" : "?"}action=cancel';
+        if (currentSubId) window.location.href = '/api/actions/cancel/' + currentSubId + '${s}';
       }
       document.getElementById('cancelModal').addEventListener('click', function(e) {
         if (e.target === this) closeModal();
@@ -488,11 +488,13 @@ export async function renderOrdersPage(email: string, sessionToken: string): Pro
         </div>
         <p style="font-size:13px;color:#cfbfad;margin-bottom:8px;">${date} — ${total}</p>
         ${items}
-        ${tracking ? `
-          <div style="margin-top:12px;">
+        <div class="actions" style="margin-top:12px;">
+          ${tracking ? `
             <a href="${tracking.url}" target="_blank" class="btn btn-secondary btn-sm">📍 Tracking: ${tracking.number}</a>
-          </div>
-        ` : ''}
+          ` : ''}
+          <a href="https://litsalt.com" class="btn btn-primary btn-sm">Recomprar</a>
+          <a href="mailto:hola@litsalt.com?subject=Pedido ${order.name}" class="btn btn-secondary btn-sm">Contactar soporte</a>
+        </div>
       </div>
     `;
   }).join('');
