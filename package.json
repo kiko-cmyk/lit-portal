@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "migrate": "tsx scripts/migrate.ts",
-    "migrate:dry": "tsx scripts/migrate.ts --dry"
+    "migrate:dry": "tsx scripts/migrate.ts --dry",
+    "seed": "node scripts/seed.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

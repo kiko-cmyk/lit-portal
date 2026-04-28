@@ -1,26 +1,71 @@
 @import "tailwindcss";
 
+/*
+ * LIT brand tokens — 6 colors only (per Master Spec § 10).
+ * Three color zones map pages to background/accent combos:
+ *   - Board 1 (warm cream)        → Hub, Account
+ *   - Board 2 (vintage retro)     → Drops, Collection (Phase 2)
+ *   - Board 3 (dark indigo night) → The World, Cancel takeover, First-login
+ *
+ * Fonts: Clash Display for display, Barlow for body. Loaded via next/font.
+ */
+
+@theme {
+  --color-brisky-cream: #E9EBDE;
+  --color-sharp-white: #F8F9F2;
+  --color-zesty-beige: #CFBFAD;
+  --color-bold-yellow: #EBEE62;
+  --color-lit-grey: #323743;
+  --color-dark-indigo: #373554;
+
+  /* Aliases used in HTML hi-fi (matching Diane's CSS variables) */
+  --color-cream: #E9EBDE;
+  --color-yellow: #EBEE62;
+  --color-grey: #323743;
+  --color-indigo: #373554;
+  --color-deepest-indigo: #0F0E1A;
+  --color-darker-indigo: #1B1A2E;
+
+  --font-display: var(--font-clash-display, "Clash Display"), "Helvetica Neue", Arial, sans-serif;
+  --font-body: var(--font-barlow, "Barlow"), system-ui, -apple-system, sans-serif;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Default text + bg for the portal — overridden per page color zone */
+  --background: var(--color-brisky-cream);
+  --foreground: var(--color-lit-grey);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body);
+  font-feature-settings: "ss01", "kern";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Display headlines use Clash */
+h1, h2, h3, .display {
+  font-family: var(--font-display);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+/* No emojis policy — use word/SVG icons. */
+
+/* Color-zone helpers (apply on page wrappers): */
+.zone-cream {
+  --background: var(--color-brisky-cream);
+  --foreground: var(--color-lit-grey);
+}
+.zone-retro {
+  --background: #E2C9A0; /* warm retro placeholder; refine when Drops port lands */
+  --foreground: var(--color-lit-grey);
+}
+.zone-indigo {
+  --background: var(--color-deepest-indigo);
+  --foreground: var(--color-brisky-cream);
 }
