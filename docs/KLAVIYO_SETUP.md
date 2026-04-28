@@ -120,3 +120,52 @@ Cuando subas a Klaviyo: copia el HTML, reemplaza tokens estáticos por merge tag
 2. Subir las plantillas HTML adaptadas
 3. Configurar smart sending / caps por la cadencia § 8
 4. Avísame cuando estén creados y yo enchufo las llamadas `trackEvent` desde los endpoints del backend
+
+---
+
+## ✅ Estado actual (lo que YA hace el backend) — actualizado 2026-04-28
+
+- **Plantilla Confirmation Email subida via API** → ID `Utdb9S` (visible en Klaviyo → Email → Templates)
+- **Llamadas `klaviyo.trackEvent` enchufadas** en:
+  - `POST /api/subscription/skip` → `subscription_skip`
+  - `POST /api/subscription/cancel` (step 4) → `subscription_cancelled`
+  - `POST /api/subscription/reactivate` → `subscription_reactivated`
+  - `POST /api/rewards/claim` → `reward_claimed`
+  - `POST /api/first-login/complete` → `first_login_completed`
+  - `POST /api/webhooks/shopify` topic `orders/paid` → `confirmation_sent`
+  - `POST /api/webhooks/shopify` topic `fulfillments/create` (cuando se cruza 300 lifetime) → `tier_unlocked`
+- **Cron jobs implementados** (Vercel Cron schedules en `vercel.json`):
+  - `0 9 * * *` daily → `/api/cron/winback` → dispara `winback_d14` y `winback_d30` para cancellations a 14/30 días
+  - `0 0 1 * *` monthly → `/api/cron/monthly-streak` → +50 Drops a active subscribers
+  - `0 1 * * *` daily → `/api/cron/drops-cleanup` → reset balance a 0 cuando expira hold de 90 días
+
+**Para que los crons funcionen en Vercel**: Kiko tiene que generar un `CRON_SECRET` (cualquier string aleatoria) y añadirlo a Vercel env vars. Los cron handlers verifican el header `Authorization: Bearer ${CRON_SECRET}` que Vercel inyecta automáticamente.
+
+---
+
+## 🎯 Guion clic-a-clic para crear cada flow
+
+Para cada uno de los 6 flows, en Klaviyo dashboard:
+
+1. **Flows** (sidebar) → **Create Flow** → **Create from scratch**
+2. Trigger: **Metric Triggered Flow**
+3. Selecciona la metric correspondiente (la metric aparece **automáticamente** en cuanto el evento se dispara una vez en producción — si todavía no aparece, fuerza un evento con un test)
+4. Drag-and-drop **Send Email** action al canvas
+5. En el email step, selecciona **Use existing template** → **LIT — Confirmation Email (post-checkout)** (o tu template específico para ese flow)
+6. Configura subject/preheader según las 5 variantes (ver tabla 2.1 del documento)
+7. Activate el flow
+
+Para el flow de Confirmation con 5 variantes:
+- Trigger: `confirmation_sent`
+- Add **Conditional Split** después del trigger
+- Branch por `event.box_count` y `event.plan_label` para escoger subject + variante
+- Cada branch → Send Email con el template + subject/preheader ajustado
+
+Para win-back D14 / D30:
+- Trigger: `winback_d14` o `winback_d30`
+- Send Email → cuerpo simple con "Door's still open" / "Last one from us"
+- Smart Sending ON (respeta global frequency caps)
+
+Para tier_unlocked y reward_claimed:
+- Trigger respectivo
+- 1 email celebratorio con copy "You're in the inner circle now" / "Your reward is on its way"

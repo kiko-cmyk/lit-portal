@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { klaviyo } from "@/lib/klaviyo";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -80,6 +81,13 @@ export const POST = withCustomer(async (req, ctx) => {
       });
     }
   }
+
+  klaviyo
+    .trackEvent("subscription_reactivated", email, {
+      sealSubscriptionId: String(sub.id),
+      dropsRestored: heldBalance,
+    })
+    .catch((err) => console.warn("[reactivate] klaviyo event failed:", err));
 
   return {
     reactivated: true,

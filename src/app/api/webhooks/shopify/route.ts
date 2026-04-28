@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
-import { awardDrops, DROPS_AMOUNTS } from "@/lib/drops";
+import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
+import { klaviyo } from "@/lib/klaviyo";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -86,9 +87,18 @@ function verifyShopifyHmac(rawBody: string, hmacHeader: string | null): boolean 
 
 interface ShopifyOrderPayload {
   id?: number;
-  customer?: { id: number; email?: string };
+  order_number?: number;
+  customer?: { id: number; email?: string; first_name?: string };
   email?: string;
+  total_price?: string;
+  currency?: string;
   note_attributes?: Array<{ name: string; value: string }>;
+  line_items?: Array<{
+    title: string;
+    quantity: number;
+    variant_id?: number;
+    selling_plan_allocation?: { selling_plan?: { id: string; name?: string } };
+  }>;
 }
 
 interface ShopifyFulfillmentPayload {
@@ -100,9 +110,9 @@ interface ShopifyFulfillmentPayload {
 }
 
 async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
+  // 1. Referral attribution
   const refAttr = payload.note_attributes?.find((a) => a.name === "ref" || a.name === "referral_code");
   if (refAttr?.value) {
-    // Look up referrer + record conversion + award +250 Drops
     const sb = supabaseAdmin();
     const { data: codeRow } = await sb
       .from("referral_codes")
@@ -115,14 +125,46 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
         converted_order_id: String(payload.id),
         drops_awarded: 250,
       });
-      // 23505 = already recorded — skip
       if (!convErr) {
         await awardDrops(codeRow.customer_id, "referral_converted", 250, {
           orderId: payload.id,
           code: refAttr.value,
         });
+        // Notify referrer via Klaviyo (resolve their email from their customer ID)
+        const referrerEmail = await shopifyAdmin
+          .getCustomerEmail(codeRow.customer_id)
+          .catch(() => null);
+        if (referrerEmail) {
+          klaviyo
+            .trackEvent("referral_converted" as never, referrerEmail, {
+              orderId: payload.id,
+              dropsAwarded: 250,
+            })
+            .catch(() => null);
+        }
       }
     }
+  }
+
+  // 2. Confirmation email trigger — fires Klaviyo event with plan details
+  const email = payload.customer?.email ?? payload.email;
+  if (email && payload.line_items && payload.line_items.length > 0) {
+    const main = payload.line_items.find((li) => li.selling_plan_allocation) ?? payload.line_items[0];
+    const boxCount = main?.quantity ?? 1;
+    const planName = main?.selling_plan_allocation?.selling_plan?.name ?? null;
+    klaviyo
+      .trackEvent("confirmation_sent", email, {
+        order_id: payload.id,
+        order_number: payload.order_number,
+        first_name: payload.customer?.first_name,
+        box_count: boxCount,
+        sachets: boxCount * 30,
+        plan_label: planName ?? `${boxCount} box${boxCount > 1 ? "es" : ""}`,
+        flavor: main?.title ?? "Lemon Drop",
+        total: payload.total_price,
+        currency: payload.currency,
+      })
+      .catch((err) => console.warn("[orders/paid] confirmation_sent klaviyo failed:", err));
   }
 }
 
@@ -144,6 +186,15 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   }
   const customerId = customerGid.replace(/^gid:\/\/shopify\/Customer\//, "");
 
+  // Snapshot tier state before awarding (to detect first-time crossing)
+  const sb = supabaseAdmin();
+  const { data: pre } = await sb
+    .from("drops_balances")
+    .select("tier_earned_at, lifetime_earned")
+    .eq("customer_id", customerId)
+    .maybeSingle();
+  const wasTierEarned = !!pre?.tier_earned_at;
+
   // Total boxes = sum of quantities of line items (excluding any one-time products
   // tagged as Extras — we'd ideally filter, but for MVP count all line items).
   const totalBoxes = (f.line_items ?? []).reduce((s, li) => s + (li.quantity ?? 0), 0);
@@ -153,6 +204,25 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
       fulfillmentId: f.id,
       boxIndex: i,
     });
+  }
+
+  // Check if this push crossed the INNER CIRCLE tier threshold for the first time
+  const { data: post } = await sb
+    .from("drops_balances")
+    .select("tier_earned_at, lifetime_earned, balance")
+    .eq("customer_id", customerId)
+    .maybeSingle();
+  if (!wasTierEarned && post?.tier_earned_at && (post?.lifetime_earned ?? 0) >= TIER_THRESHOLD) {
+    const email = await shopifyAdmin.getCustomerEmail(customerId).catch(() => null);
+    if (email) {
+      klaviyo
+        .trackEvent("tier_unlocked", email, {
+          earnedAt: post.tier_earned_at,
+          lifetimeDrops: post.lifetime_earned,
+          balance: post.balance,
+        })
+        .catch((err) => console.warn("[fulfillments/create] tier_unlocked klaviyo failed:", err));
+    }
   }
 }
 

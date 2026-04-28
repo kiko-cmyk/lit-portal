@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { REWARD_THRESHOLDS, awardDrops } from "@/lib/drops";
+import { klaviyo } from "@/lib/klaviyo";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -145,6 +146,19 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     .select("balance")
     .eq("customer_id", ctx.customerId)
     .maybeSingle();
+
+  // Fire Klaviyo event for the reward flow (sends confirmation email)
+  const customerEmail = await shopifyAdmin.getCustomerEmail(ctx.customerId).catch(() => null);
+  if (customerEmail) {
+    klaviyo
+      .trackEvent("reward_claimed", customerEmail, {
+        rewardId: body.rewardId,
+        merchOption: body.merchOption,
+        fulfillmentMethod,
+        remainingDrops: refreshed?.balance ?? balance - threshold,
+      })
+      .catch((err) => console.warn("[claim] klaviyo event failed:", err));
+  }
 
   return {
     claimed: true,

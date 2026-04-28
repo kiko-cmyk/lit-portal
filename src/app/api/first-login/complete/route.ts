@@ -1,4 +1,5 @@
 import { withCustomer } from "@/lib/api-helpers";
+import { klaviyo } from "@/lib/klaviyo";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -16,5 +17,22 @@ export const POST = withCustomer(async (_req, ctx) => {
     true,
     "boolean",
   );
+
+  // Fire Klaviyo event so flow can pick up (e.g., welcome WhatsApp message)
+  const email = await shopifyAdmin.getCustomerEmail(ctx.customerId).catch(() => null);
+  if (email) {
+    const { data: prefs } = await sb
+      .from("customer_preferences")
+      .select("whatsapp_opt_in, language")
+      .eq("customer_id", ctx.customerId)
+      .maybeSingle();
+    klaviyo
+      .trackEvent("first_login_completed", email, {
+        whatsappOptIn: prefs?.whatsapp_opt_in ?? false,
+        language: prefs?.language ?? "en",
+      })
+      .catch((err) => console.warn("[first-login/complete] klaviyo event failed:", err));
+  }
+
   return { completed: true };
 });

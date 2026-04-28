@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { klaviyo } from "@/lib/klaviyo";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import type { SkipResponse } from "@/lib/types";
@@ -37,6 +38,14 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   // Undo window: until the new cutoff (72h before the kept attempt), or until
   // the original attempt date — whichever comes first.
   const undoExpiresAt = newNext?.date ?? next.date;
+
+  // Fire Klaviyo event so the flow (if configured) can react.
+  klaviyo
+    .trackEvent("subscription_skip", email, {
+      newNextShipDate: newNext?.date ?? next.date,
+      sealSubscriptionId: String(sub.id),
+    })
+    .catch((err) => console.warn("[skip] klaviyo event failed:", err));
 
   return {
     skipped: true,

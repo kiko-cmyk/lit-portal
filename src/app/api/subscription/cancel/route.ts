@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { awardDrops } from "@/lib/drops";
+import { klaviyo } from "@/lib/klaviyo";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -202,9 +203,16 @@ export const POST = withCustomer(async (req, ctx) => {
         { onConflict: "customer_id" },
       );
 
-    // 6. Win-back emails: trigger Klaviyo event so D14/D30 flows can pick up
-    // (left as TODO — Klaviyo client implemented in lib/klaviyo.ts but no
-    // `cancellation_confirmed` event flow defined yet)
+    // 6. Trigger Klaviyo event — flows can react with confirmation + schedule win-back
+    klaviyo
+      .trackEvent("subscription_cancelled", email, {
+        primaryReason: body.primaryReason,
+        freeText: body.freeText,
+        cancelCount: cancelCount + 1,
+        lastShipDate,
+        dropsHeldUntil: releaseAt,
+      })
+      .catch((err) => console.warn("[cancel] klaviyo event failed:", err));
 
     const resp: CancelStep4Response = {
       cancelled: true,

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/winback",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/drops-cleanup",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/monthly-streak",
+      "schedule": "0 0 1 * *"
+    }
+  ]
+}
