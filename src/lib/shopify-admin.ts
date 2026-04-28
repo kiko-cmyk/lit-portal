@@ -12,7 +12,7 @@
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // e.g. "lit-tienda.myshopify.com"
 const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
-const ADMIN_API_VERSION = "2025-01";
+const ADMIN_API_VERSION = "2026-04";
 
 interface CachedToken {
   token: string;
