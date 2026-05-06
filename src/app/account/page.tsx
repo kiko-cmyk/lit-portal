@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import { BottomNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
 import { CancelTakeover } from "@/components/CancelTakeover";
+import { FlavorOverlay } from "@/components/FlavorOverlay";
+import { LoginScreen } from "@/components/LoginScreen";
 import { api, ApiClientError } from "@/lib/api-client";
+import { useLang, useLangSetter } from "@/lib/i18n";
 import type {
   CustomerProfile,
   OrderHistoryItem,
@@ -19,6 +22,8 @@ export default function AccountPage() {
   const [orders, setOrders] = useState<OrderHistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [flavorOpen, setFlavorOpen] = useState(false);
+  const t = useLang();
 
   useEffect(() => {
     Promise.all([
@@ -34,6 +39,9 @@ export default function AccountPage() {
       .catch((e: ApiClientError) => setError(e.code));
   }, []);
 
+  if (error === "unauthorized") {
+    return <LoginScreen />;
+  }
   if (error) {
     return (
       <main className="zone-cream flex flex-1 items-center justify-center p-8 text-center">
@@ -82,10 +90,15 @@ export default function AccountPage() {
 
         {/* Quick actions */}
         <section className="mx-6 mt-4 grid grid-cols-4 gap-2">
-          <QuickAction label="Plan" />
-          <QuickAction label="Skip" />
-          <QuickAction label="Flavor" subtitle="June" disabled />
-          <QuickAction label="Extras" />
+          <QuickAction label={t({ en: "Plan", es: "Plan" })} />
+          <QuickAction label={t({ en: "Skip", es: "Saltar" })} />
+          <QuickAction
+            label={t({ en: "Flavor", es: "Sabor" })}
+            subtitle={t({ en: "Soon", es: "Pronto" })}
+            comingSoon
+            onClick={() => setFlavorOpen(true)}
+          />
+          <QuickAction label={t({ en: "Extras", es: "Extras" })} />
         </section>
 
         {/* Subscription summary */}
@@ -156,6 +169,7 @@ export default function AccountPage() {
           onClose={() => setCancelOpen(false)}
         />
       )}
+      {flavorOpen && <FlavorOverlay onClose={() => setFlavorOpen(false)} />}
     </div>
   );
 }
@@ -163,22 +177,33 @@ export default function AccountPage() {
 function QuickAction({
   label,
   subtitle,
-  disabled,
+  comingSoon,
+  onClick,
 }: {
   label: string;
   subtitle?: string;
-  disabled?: boolean;
+  comingSoon?: boolean;
+  onClick?: () => void;
 }) {
-  return (
-    <div
-      className={`flex h-16 flex-col items-center justify-center rounded-xl bg-[color:var(--color-sharp-white)] ${
-        disabled ? "opacity-40" : ""
-      }`}
-    >
-      <span className="text-[10px] font-bold uppercase tracking-[0.15em]">{label}</span>
-      {subtitle && <span className="text-[8px] uppercase tracking-[0.18em] opacity-60">{subtitle}</span>}
+  const inner = (
+    <div className="relative flex h-16 flex-col items-center justify-center rounded-xl bg-[color:var(--color-sharp-white)]">
+      {comingSoon && (
+        <span className="absolute right-1.5 top-1.5 rounded-sm bg-[color:var(--color-lit-grey)]/8 px-1 py-0.5 text-[7px] font-bold uppercase tracking-[0.15em] opacity-70">
+          {subtitle ?? "Soon"}
+        </span>
+      )}
+      <span className={`text-[10px] font-bold uppercase tracking-[0.15em] ${comingSoon ? "opacity-70" : ""}`}>{label}</span>
+      {!comingSoon && subtitle && <span className="text-[8px] uppercase tracking-[0.18em] opacity-60">{subtitle}</span>}
     </div>
   );
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className="block w-full text-left">
+        {inner}
+      </button>
+    );
+  }
+  return inner;
 }
 
 function Cell({ label, value }: { label: string; value: string }) {
@@ -209,18 +234,19 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function LanguageToggle({ initial }: { initial: "en" | "es" }) {
-  const [lang, setLang] = useState(initial);
+  const [lang, setLocalLang] = useState(initial);
+  const setGlobalLang = useLangSetter();
   const change = async (next: "en" | "es") => {
     if (next === lang) return;
-    setLang(next);
+    setLocalLang(next);
+    setGlobalLang(next); // updates UI immediately
     try {
       await api("/api/customer/language", {
         method: "PATCH",
         body: JSON.stringify({ language: next }),
       });
     } catch {
-      // revert on error
-      setLang(lang);
+      setLocalLang(lang);
     }
   };
   return (

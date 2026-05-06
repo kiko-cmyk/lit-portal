@@ -4,13 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 /**
- * Bottom navigation — 4 slots in MVP (Hub / Drops / World / Account).
- * Collection deferred to Phase 2 per locked decision 2026-04-27.
+ * Bottom navigation — Phase 1 MVP has 3 slots: Hub / Collection / Account.
+ *
+ * Collection is shown BLURRED in Phase 1 (cards locked, no real progression yet
+ * — physical cards not in production). Drops + The World are NOT in Phase 1
+ * navigation but their code is preserved for Phase 2 reactivation.
+ *
+ * Per locked decision 2026-05-06.
  */
 const ITEMS = [
   { href: "/your-lit", label: "Your LIT" },
-  { href: "/drops", label: "Drops" },
-  { href: "/the-world", label: "World" },
+  { href: "/collection", label: "Collection" },
   { href: "/account", label: "Account" },
 ] as const;
 
@@ -18,7 +22,7 @@ export function BottomNav() {
   const pathname = usePathname();
   return (
     <nav
-      className="sticky bottom-0 left-0 right-0 z-40 grid grid-cols-4 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]"
+      className="sticky bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]"
       aria-label="Primary"
     >
       {ITEMS.map((it) => {

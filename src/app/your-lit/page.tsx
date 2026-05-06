@@ -3,36 +3,29 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav } from "@/components/BottomNav";
-import { FirstLoginWelcome } from "@/components/FirstLoginWelcome";
+import { FlavorOverlay } from "@/components/FlavorOverlay";
+import { LoginScreen } from "@/components/LoginScreen";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
-import type { CustomerProfile, HubDashboard } from "@/lib/types";
+import { T, useLang } from "@/lib/i18n";
+import type { HubDashboard } from "@/lib/types";
 
 export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showWelcome, setShowWelcome] = useState(false);
+  const [showFlavor, setShowFlavor] = useState(false);
+  const t = useLang();
 
   useEffect(() => {
     api<HubDashboard>("/api/hub/dashboard")
       .then(setData)
       .catch((e: ApiClientError) => setError(e.code));
-    // Probe first-login flag via Shopify metafield (read through the customer endpoint
-    // for now — when we wire customer_preferences fully, switch to that source).
-    api<CustomerProfile & { firstLoginCompleted?: boolean }>("/api/customer")
-      .then((c) => {
-        // If we don't yet expose first_login_completed, default to false the first time
-        // and let the user dismiss it.
-        if (!c.firstLoginCompleted && typeof window !== "undefined") {
-          const localKey = `lit_firstlogin_${c.email}`;
-          if (!window.localStorage.getItem(localKey)) {
-            setShowWelcome(true);
-            window.localStorage.setItem(localKey, "shown");
-          }
-        }
-      })
-      .catch(() => null);
   }, []);
+
+  // Not logged in → show LoginScreen instead of Hub
+  if (error === "unauthorized") {
+    return <LoginScreen />;
+  }
 
   if (error === "subscription_not_found") {
     return (
@@ -108,10 +101,15 @@ export default function HubPage() {
 
         {/* Quick Actions — 2x2 */}
         <section className="mx-6 mt-5 grid grid-cols-2 gap-2.5">
-          <QuickAction label="Change plan" href="/account#plan" />
-          <QuickAction label="Skip next box" href="/account#skip" />
-          <QuickAction label="Switch flavor" subtitle="June" href="/account#flavor" disabled />
-          <QuickAction label="Extras" href="/account#extras" />
+          <QuickAction label={t({ en: "Change plan", es: "Cambiar plan" })} href="/account#plan" />
+          <QuickAction label={t({ en: "Skip next box", es: "Saltar próxima" })} href="/account#skip" />
+          <QuickAction
+            label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
+            subtitle={t({ en: "Coming Soon", es: "Pronto" })}
+            comingSoon
+            onClick={() => setShowFlavor(true)}
+          />
+          <QuickAction label={t({ en: "Extras", es: "Extras" })} href="/account#extras" />
         </section>
 
         {/* Drops peek */}
@@ -161,7 +159,7 @@ export default function HubPage() {
 
       <BottomNav />
 
-      {showWelcome && <FirstLoginWelcome onDismiss={() => setShowWelcome(false)} />}
+      {showFlavor && <FlavorOverlay onClose={() => setShowFlavor(false)} />}
     </div>
   );
 }
@@ -170,31 +168,43 @@ function QuickAction({
   label,
   href,
   subtitle,
-  disabled,
+  comingSoon,
+  onClick,
 }: {
   label: string;
-  href: string;
+  href?: string;
   subtitle?: string;
-  disabled?: boolean;
+  comingSoon?: boolean;
+  onClick?: () => void;
 }) {
   const inner = (
-    <div
-      className={`flex h-full flex-col justify-between rounded-2xl bg-[color:var(--color-sharp-white)] p-4 ${
-        disabled ? "opacity-40" : ""
-      }`}
-    >
-      <div className="text-xs font-bold uppercase tracking-[0.12em]">{label}</div>
-      {subtitle && (
+    <div className="relative flex h-full flex-col justify-between rounded-2xl bg-[color:var(--color-sharp-white)] p-4">
+      {comingSoon && (
+        <span className="absolute right-2 top-2 rounded-sm bg-[color:var(--color-lit-grey)]/8 px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-[0.18em] opacity-70">
+          {subtitle ?? "Coming Soon"}
+        </span>
+      )}
+      <div className={`text-xs font-bold uppercase tracking-[0.12em] ${comingSoon ? "opacity-70" : ""}`}>
+        {label}
+      </div>
+      {!comingSoon && subtitle && (
         <div className="text-[10px] uppercase tracking-[0.18em] opacity-60">{subtitle}</div>
       )}
     </div>
   );
-  if (disabled) {
-    return <div aria-disabled className="cursor-not-allowed">{inner}</div>;
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className="block text-left">
+        {inner}
+      </button>
+    );
   }
-  return (
-    <Link href={href} className="block">
-      {inner}
-    </Link>
-  );
+  if (href) {
+    return (
+      <Link href={href} className="block">
+        {inner}
+      </Link>
+    );
+  }
+  return <div>{inner}</div>;
 }

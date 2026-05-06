@@ -1,20 +1,22 @@
 import { NextResponse } from "next/server";
-import {
-  CURRENCY,
-  IS_PLACEHOLDER,
-  PRICE_PER_BOX_EUR,
-  PRICING_LAST_UPDATED,
-} from "@/lib/pricing";
+import { CURRENCY, getPricing } from "@/lib/pricing";
 import type { PricingResponse } from "@/lib/types";
 
 // GET /apps/portal/api/pricing
-// Public — no customer auth required, but App Proxy signature still verified at edge.
-export function GET() {
-  const body: PricingResponse = {
-    currency: CURRENCY,
-    perBox: PRICE_PER_BOX_EUR,
-    isPlaceholder: IS_PLACEHOLDER,
-    lastUpdated: PRICING_LAST_UPDATED,
-  };
-  return NextResponse.json(body);
+// Reads variant prices dynamically from Shopify (5min cache).
+export async function GET(): Promise<NextResponse> {
+  try {
+    const { perBox, compareAtPerBox, isPlaceholder, lastUpdated } = await getPricing();
+    const body: PricingResponse & { compareAtPerBox: (number | null)[] } = {
+      currency: CURRENCY,
+      perBox,
+      compareAtPerBox,
+      isPlaceholder,
+      lastUpdated,
+    };
+    return NextResponse.json(body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown";
+    return NextResponse.json({ error: "pricing_unavailable", message }, { status: 503 });
+  }
 }
