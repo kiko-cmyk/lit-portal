@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BottomNav } from "@/components/BottomNav";
+import { BottomNav, TopNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
 import { T, useLang } from "@/lib/i18n";
 
@@ -30,7 +30,8 @@ export default function CollectionPage() {
         color: "#3A2F22",
       }}
     >
-      <header className="flex items-center justify-between px-6 pt-5 pb-3">
+      <TopNav />
+      <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
         <Link
           href="/your-lit"
           className="text-xs font-bold uppercase tracking-[0.2em] opacity-70"
@@ -43,7 +44,7 @@ export default function CollectionPage() {
         <TierPill visible={false} />
       </header>
 
-      <main className="flex-1 pb-24">
+      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:pb-12">
         <section className="px-6 pt-2 pb-6">
           <h1 className="font-display text-6xl font-black uppercase leading-[0.85] tracking-tight">
             <T en="The" es="La" />
@@ -99,7 +100,7 @@ export default function CollectionPage() {
           <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
             {EDITION_NAME}
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-3 md:grid-cols-4">
             {Array.from({ length: 12 }).map((_, i) => (
               <LockedCard key={i} number={i + 1} />
             ))}

@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BottomNav } from "@/components/BottomNav";
+import { BottomNav, TopNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
 import { CancelTakeover } from "@/components/CancelTakeover";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
 import { api, ApiClientError } from "@/lib/api-client";
-import { useLang, useLangSetter } from "@/lib/i18n";
+import { T, useLang, useLangSetter } from "@/lib/i18n";
 import type {
   CustomerProfile,
   OrderHistoryItem,
@@ -31,44 +31,49 @@ export default function AccountPage() {
       api<Subscription>("/api/subscription").catch(() => null),
       api<TierResponse>("/api/tier"),
     ])
-      .then(([c, s, t]) => {
+      .then(([c, s, ti]) => {
         setCustomer(c);
         setSubscription(s);
-        setTier(t);
+        setTier(ti);
       })
       .catch((e: ApiClientError) => setError(e.code));
   }, []);
 
-  if (error === "unauthorized") {
-    return <LoginScreen />;
-  }
+  if (error === "unauthorized") return <LoginScreen />;
   if (error) {
     return (
       <main className="zone-cream flex flex-1 items-center justify-center p-8 text-center">
-        <p className="text-xs">Error: {error}</p>
+        <p className="text-xs">
+          <T en="Something went wrong." es="Algo no fue bien." /> ({error})
+        </p>
       </main>
     );
   }
   if (!customer) {
     return (
       <main className="zone-cream flex flex-1 items-center justify-center">
-        <p className="text-xs uppercase tracking-[0.2em] opacity-50">Loading…</p>
+        <p className="text-xs uppercase tracking-[0.2em] opacity-50">
+          <T en="Loading…" es="Cargando…" />
+        </p>
       </main>
     );
   }
 
   return (
     <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <header className="flex items-center justify-between px-6 pt-5 pb-3">
+      <TopNav />
+      <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
         <span className="font-display text-2xl font-black tracking-tight">LIT.</span>
         <TierPill visible={tier?.earned ?? false} />
       </header>
 
-      <main className="flex-1 pb-24">
-        <h1 className="px-6 font-display text-5xl font-black uppercase">Account</h1>
+      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pb-12">
+        <h1 className="px-6 font-display text-5xl font-black uppercase md:px-0 md:text-6xl">
+          <T en="Account" es="Cuenta" />
+        </h1>
 
-        {/* Identity card */}
-        <section className="mx-6 mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] px-6 py-5">
+        {/* Identity */}
+        <section className="mx-6 mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] px-6 py-5 md:mx-0">
           <div className="flex items-center gap-4">
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] font-display text-xl font-black">
               {(customer.name[0] ?? "L").toUpperCase()}
@@ -76,20 +81,23 @@ export default function AccountPage() {
             <div>
               <div className="font-display text-xl font-black uppercase">{customer.name}</div>
               <div className="text-[10px] uppercase tracking-[0.18em] opacity-60">
-                Member since{" "}
-                {new Date(customer.memberSince).toLocaleDateString("en", {
-                  month: "long",
-                  year: "numeric",
-                })}{" "}
+                <T en="Member since" es="Miembro desde" />{" "}
+                {new Date(customer.memberSince).toLocaleDateString(
+                  t({ en: "en", es: "es" }),
+                  { month: "long", year: "numeric" },
+                )}{" "}
                 · {customer.boxesReceived}{" "}
-                {customer.boxesReceived === 1 ? "box" : "boxes"} in
+                <T
+                  en={customer.boxesReceived === 1 ? "box in" : "boxes in"}
+                  es={customer.boxesReceived === 1 ? "caja recibida" : "cajas recibidas"}
+                />
               </div>
             </div>
           </div>
         </section>
 
         {/* Quick actions */}
-        <section className="mx-6 mt-4 grid grid-cols-4 gap-2">
+        <section className="mx-6 mt-4 grid grid-cols-4 gap-2 md:mx-0">
           <QuickAction label={t({ en: "Plan", es: "Plan" })} />
           <QuickAction label={t({ en: "Skip", es: "Saltar" })} />
           <QuickAction
@@ -103,19 +111,19 @@ export default function AccountPage() {
 
         {/* Subscription summary */}
         {subscription && (
-          <section className="mx-6 mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] px-6 py-5">
-            <div className="grid grid-cols-2 gap-y-4 gap-x-3 text-[11px] uppercase tracking-[0.15em]">
-              <Cell label="Boxes" value={String(subscription.boxCount)} />
-              <Cell label="Every" value={subscription.frequencyLabel} />
-              <Cell label="Flavor" value={subscription.flavor} />
+          <section className="mx-6 mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] px-6 py-5 md:mx-0">
+            <div className="grid grid-cols-2 gap-y-4 gap-x-3 text-[11px] uppercase tracking-[0.15em] md:grid-cols-4">
+              <Cell label={t({ en: "Boxes", es: "Cajas" })} value={String(subscription.boxCount)} />
+              <Cell label={t({ en: "Every", es: "Cada" })} value={subscription.frequencyLabel} />
+              <Cell label={t({ en: "Flavor", es: "Sabor" })} value={subscription.flavor} />
               <Cell
-                label="Next ship"
+                label={t({ en: "Next ship", es: "Próximo envío" })}
                 value={
                   subscription.nextShipDate
-                    ? new Date(subscription.nextShipDate).toLocaleDateString("en", {
-                        month: "short",
-                        day: "numeric",
-                      })
+                    ? new Date(subscription.nextShipDate).toLocaleDateString(
+                        t({ en: "en", es: "es" }),
+                        { month: "short", day: "numeric" },
+                      )
                     : "—"
                 }
               />
@@ -124,19 +132,19 @@ export default function AccountPage() {
               type="button"
               className="mt-4 text-[11px] font-bold uppercase tracking-[0.18em] underline"
             >
-              Change boxes or frequency →
+              <T en="Change boxes or frequency" es="Cambiar cajas o frecuencia" /> →
             </button>
           </section>
         )}
 
-        {/* Your details */}
-        <Section title="Your details">
-          <Row label="Email" value={customer.email} />
-          <Row label="Phone" value={customer.phone ?? "—"} />
+        {/* Details */}
+        <Section title={t({ en: "Your details", es: "Tus datos" })}>
+          <Row label={t({ en: "Email", es: "Email" })} value={customer.email} />
+          <Row label={t({ en: "Phone", es: "Teléfono" })} value={customer.phone ?? "—"} />
         </Section>
 
         {/* Language */}
-        <Section title="Language">
+        <Section title={t({ en: "Language", es: "Idioma" })}>
           <LanguageToggle initial={customer.languagePref} />
         </Section>
 
@@ -144,18 +152,20 @@ export default function AccountPage() {
         <OrdersSection
           orders={orders}
           loadOrders={() =>
-            api<OrderHistoryItem[]>("/api/orders?limit=10").then(setOrders).catch(() => setOrders([]))
+            api<OrderHistoryItem[]>("/api/orders?limit=10")
+              .then(setOrders)
+              .catch(() => setOrders([]))
           }
         />
 
-        {/* Cancel link */}
-        <div className="mx-6 mt-10 mb-4 text-center">
+        {/* Cancel */}
+        <div className="mx-6 mt-10 mb-4 text-center md:mx-0">
           <button
             type="button"
             onClick={() => setCancelOpen(true)}
             className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/60 underline"
           >
-            Cancel subscription
+            <T en="Cancel subscription" es="Cancelar suscripción" />
           </button>
         </div>
       </main>
@@ -192,8 +202,14 @@ function QuickAction({
           {subtitle ?? "Soon"}
         </span>
       )}
-      <span className={`text-[10px] font-bold uppercase tracking-[0.15em] ${comingSoon ? "opacity-70" : ""}`}>{label}</span>
-      {!comingSoon && subtitle && <span className="text-[8px] uppercase tracking-[0.18em] opacity-60">{subtitle}</span>}
+      <span
+        className={`text-[10px] font-bold uppercase tracking-[0.15em] ${comingSoon ? "opacity-70" : ""}`}
+      >
+        {label}
+      </span>
+      {!comingSoon && subtitle && (
+        <span className="text-[8px] uppercase tracking-[0.18em] opacity-60">{subtitle}</span>
+      )}
     </div>
   );
   if (onClick) {
@@ -217,7 +233,7 @@ function Cell({ label, value }: { label: string; value: string }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mx-6 mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] px-6 py-5">
+    <section className="mx-6 mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] px-6 py-5 md:mx-0">
       <h2 className="text-[11px] font-bold uppercase tracking-[0.2em] opacity-60">{title}</h2>
       <div className="mt-3 space-y-2">{children}</div>
     </section>
@@ -239,7 +255,7 @@ function LanguageToggle({ initial }: { initial: "en" | "es" }) {
   const change = async (next: "en" | "es") => {
     if (next === lang) return;
     setLocalLang(next);
-    setGlobalLang(next); // updates UI immediately
+    setGlobalLang(next);
     try {
       await api("/api/customer/language", {
         method: "PATCH",
@@ -277,8 +293,9 @@ function OrdersSection({
   loadOrders: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const t = useLang();
   return (
-    <Section title="Your orders">
+    <Section title={t({ en: "Your orders", es: "Tus pedidos" })}>
       <button
         type="button"
         onClick={() => {
@@ -288,14 +305,27 @@ function OrdersSection({
         className="flex w-full items-center justify-between text-sm"
       >
         <span className="text-[11px] uppercase tracking-[0.15em] opacity-70">
-          {orders ? `${orders.length} order${orders.length === 1 ? "" : "s"}` : "View history"}
+          {orders
+            ? t({
+                en: `${orders.length} order${orders.length === 1 ? "" : "s"}`,
+                es: `${orders.length} pedido${orders.length === 1 ? "" : "s"}`,
+              })
+            : t({ en: "View history", es: "Ver historial" })}
         </span>
         <span className="opacity-60">{open ? "−" : "+"}</span>
       </button>
-      {open && orders && (
+      {open && orders && orders.length === 0 && (
+        <p className="mt-2 text-[11px] opacity-60">
+          <T en="No orders yet." es="Aún no hay pedidos." />
+        </p>
+      )}
+      {open && orders && orders.length > 0 && (
         <ul className="mt-3 space-y-2">
           {orders.map((o) => (
-            <li key={o.id} className="flex items-center justify-between rounded-sm bg-[color:var(--background)] px-3 py-2">
+            <li
+              key={o.id}
+              className="flex items-center justify-between rounded-sm bg-[color:var(--background)] px-3 py-2"
+            >
               <div>
                 <div className="text-xs font-bold">{o.orderNumber}</div>
                 <div className="text-[10px] uppercase tracking-[0.15em] opacity-60">

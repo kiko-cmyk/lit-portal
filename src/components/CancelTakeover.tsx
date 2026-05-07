@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
+import { T, useLang } from "@/lib/i18n";
 import type {
   CancelStep1Response,
   CancelStep4Response,
@@ -10,19 +11,11 @@ import type {
   Subscription,
 } from "@/lib/types";
 
-const REASONS: { value: CancellationReason; label: string }[] = [
-  { value: "too_expensive", label: "Too expensive" },
-  { value: "too_much_product", label: "Too much product" },
-  { value: "not_using_enough", label: "Not using enough" },
-  { value: "taking_a_break", label: "Taking a break" },
-  { value: "other", label: "Other" },
-];
-
 type Step = 1 | 2 | 3 | 4 | "done";
 
 /**
  * Cancel takeover — full-screen Board 3 (dark indigo). 4 steps + done state.
- * Per Master Spec § 7.
+ * Per Master Spec § 7. Bilingual EN/ES via lib/i18n.
  */
 export function CancelTakeover({
   customer,
@@ -39,7 +32,6 @@ export function CancelTakeover({
   const [freeText, setFreeText] = useState("");
   const [done, setDone] = useState<CancelStep4Response | null>(null);
 
-  // Load stats on mount
   useEffect(() => {
     api<CancelStep1Response>("/api/subscription/cancel", {
       method: "POST",
@@ -51,7 +43,6 @@ export function CancelTakeover({
 
   return (
     <div className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#0F0E1A] text-[color:var(--color-brisky-cream)]">
-      {/* Close X */}
       <button
         type="button"
         onClick={onClose}
@@ -61,7 +52,7 @@ export function CancelTakeover({
         ×
       </button>
 
-      <div className="mx-auto max-w-md px-6 pt-16 pb-10">
+      <div className="mx-auto max-w-md px-6 pt-16 pb-10 sm:max-w-lg md:max-w-2xl">
         {step === 1 && stats && (
           <Step1
             customer={customer}
@@ -130,16 +121,20 @@ function Step1({
   onContinue: () => void;
   onKeepGoing: () => void;
 }) {
+  const t = useLang();
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none">
-        This is what<br />you&apos;ve built<span className="text-[color:var(--color-bold-yellow)]">.</span>
+      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
+        <T en="This is what" es="Esto es lo que" />
+        <br />
+        <T en="you've built" es="has construido" />
+        <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <div className="mt-10 grid grid-cols-2 gap-4">
-        <Stat label="Boxes received" value={stats.boxes} />
-        <Stat label="Cards collected" value={stats.cards} />
-        <Stat label="Drops stacked" value={stats.drops} />
-        <Stat label="Months in inner circle" value={stats.monthsInCircle} />
+        <Stat label={t({ en: "Boxes received", es: "Cajas recibidas" })} value={stats.boxes} />
+        <Stat label={t({ en: "Cards collected", es: "Cartas coleccionadas" })} value={stats.cards} />
+        <Stat label={t({ en: "Drops stacked", es: "Drops acumulados" })} value={stats.drops} />
+        <Stat label={t({ en: "Months in inner circle", es: "Meses en inner circle" })} value={stats.monthsInCircle} />
       </div>
       <div className="mt-10 space-y-3">
         <button
@@ -147,14 +142,14 @@ function Step1({
           onClick={onKeepGoing}
           className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
         >
-          Keep going
+          <T en="Keep going" es="Sigue conmigo" />
         </button>
         <button
           type="button"
           onClick={onContinue}
           className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
         >
-          I still want to cancel
+          <T en="I still want to cancel" es="Aún así quiero cancelar" />
         </button>
       </div>
     </>
@@ -172,36 +167,45 @@ function Step2({
 }) {
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none">
-        We can<br />adjust<span className="text-[color:var(--color-bold-yellow)]">.</span>
+      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
+        <T en="We can" es="Podemos" />
+        <br />
+        <T en="adjust" es="ajustar" />
+        <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <div className="mt-8 space-y-3">
         <Alternative
-          label="Skip the next one"
-          subtitle="Take a breather. Resume any time."
+          labelEn="Skip the next one"
+          labelEs="Saltar la próxima"
+          subEn="Take a breather. Resume any time."
+          subEs="Toma aire. Reanuda cuando quieras."
           onClick={onAlternative}
         />
         <Alternative
-          label="Change your plan"
-          subtitle="Fewer boxes, longer cadence — your call."
+          labelEn="Change your plan"
+          labelEs="Cambia tu plan"
+          subEn="Fewer boxes, longer cadence — your call."
+          subEs="Menos cajas, más espaciadas — tú decides."
           onClick={onAlternative}
         />
         <Alternative
-          label="New flavors in June"
-          subtitle="Hold tight — Salty Peach is coming."
+          labelEn="New flavors in June"
+          labelEs="Sabores nuevos en junio"
+          subEn="Hold tight — Salty Peach is coming."
+          subEs="Aguanta — Salty Peach está al caer."
           onClick={onAlternative}
         />
       </div>
       <div className="mt-10 flex justify-between">
         <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
-          ← Back
+          ← <T en="Back" es="Atrás" />
         </button>
         <button
           type="button"
           onClick={onContinue}
           className="text-[11px] uppercase tracking-[0.18em] underline"
         >
-          None of these. Cancel →
+          <T en="None of these. Cancel" es="Ninguna. Cancelar" /> →
         </button>
       </div>
     </>
@@ -209,12 +213,16 @@ function Step2({
 }
 
 function Alternative({
-  label,
-  subtitle,
+  labelEn,
+  labelEs,
+  subEn,
+  subEs,
   onClick,
 }: {
-  label: string;
-  subtitle: string;
+  labelEn: string;
+  labelEs: string;
+  subEn: string;
+  subEs: string;
   onClick: () => void;
 }) {
   return (
@@ -223,8 +231,12 @@ function Alternative({
       onClick={onClick}
       className="block w-full rounded-2xl border border-[color:var(--color-brisky-cream)]/15 bg-[color:var(--color-darker-indigo)] px-5 py-4 text-left"
     >
-      <div className="font-display text-lg font-black uppercase">{label}</div>
-      <div className="mt-1 text-xs opacity-60">{subtitle}</div>
+      <div className="font-display text-lg font-black uppercase">
+        <T en={labelEn} es={labelEs} />
+      </div>
+      <div className="mt-1 text-xs opacity-60">
+        <T en={subEn} es={subEs} />
+      </div>
     </button>
   );
 }
@@ -244,10 +256,22 @@ function Step3({
   onContinue: () => void;
   onBack: () => void;
 }) {
+  const t = useLang();
+  const REASONS: { value: CancellationReason; en: string; es: string }[] = [
+    { value: "too_expensive", en: "Too expensive", es: "Demasiado caro" },
+    { value: "too_much_product", en: "Too much product", es: "Demasiado producto" },
+    { value: "not_using_enough", en: "Not using enough", es: "No lo uso lo suficiente" },
+    { value: "taking_a_break", en: "Taking a break", es: "Me tomo un descanso" },
+    { value: "other", en: "Other", es: "Otro" },
+  ];
+
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none">
-        Why are you<br />leaving<span className="text-[color:var(--color-bold-yellow)]">?</span>
+      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
+        <T en="Why are you" es="¿Por qué te" />
+        <br />
+        <T en="leaving" es="vas" />
+        <span className="text-[color:var(--color-bold-yellow)]">?</span>
       </h1>
       <ul className="mt-8 space-y-2">
         {REASONS.map((r) => (
@@ -261,7 +285,7 @@ function Step3({
                   : "border-[color:var(--color-brisky-cream)]/15"
               }`}
             >
-              <span>{r.label}</span>
+              <span>{t({ en: r.en, es: r.es })}</span>
               {reason === r.value && (
                 <span className="text-[color:var(--color-bold-yellow)]">●</span>
               )}
@@ -273,14 +297,14 @@ function Step3({
         <textarea
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
-          placeholder="Tell us more (optional)"
+          placeholder={t({ en: "Tell us more (optional)", es: "Cuéntanos más (opcional)" })}
           className="mt-3 w-full rounded-sm border border-[color:var(--color-brisky-cream)]/20 bg-transparent p-3 text-sm placeholder:opacity-40"
           rows={3}
         />
       )}
       <div className="mt-10 flex items-center justify-between">
         <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
-          ← Back
+          ← <T en="Back" es="Atrás" />
         </button>
         <button
           type="button"
@@ -288,7 +312,7 @@ function Step3({
           disabled={!reason}
           className="rounded-sm bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
         >
-          Continue
+          <T en="Continue" es="Continuar" />
         </button>
       </div>
     </>
@@ -306,15 +330,19 @@ function Step4({
   onConfirm: () => void;
   onBack: () => void;
 }) {
+  const t = useLang();
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none">
-        Your last box<br />still ships<span className="text-[color:var(--color-bold-yellow)]">.</span>
+      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
+        <T en="Your last box" es="Tu última caja" />
+        <br />
+        <T en="still ships" es="aún se envía" />
+        <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <div className="mt-8 space-y-3 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5 text-sm">
         <Detail
-          label="Current box ships"
+          label={t({ en: "Current box ships", es: "Sale la caja actual" })}
           value={
             subscription?.nextShipDate
               ? new Date(subscription.nextShipDate).toLocaleDateString("en", {
@@ -324,13 +352,13 @@ function Step4({
               : "—"
           }
         />
-        <Detail label="Next billing" value="None" />
-        <Detail label="Drops held 90 days" value={stats?.drops ?? 0} />
-        <Detail label="Cards (yours to keep)" value={stats?.cards ?? 0} />
+        <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
+        <Detail label={t({ en: "Drops held 90 days", es: "Drops retenidos 90 días" })} value={stats?.drops ?? 0} />
+        <Detail label={t({ en: "Cards (yours to keep)", es: "Cartas (son tuyas)" })} value={stats?.cards ?? 0} />
       </div>
       <div className="mt-10 flex items-center justify-between">
         <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
-          ← Back
+          ← <T en="Back" es="Atrás" />
         </button>
         <button
           type="button"
@@ -345,7 +373,11 @@ function Step4({
           }}
           className="rounded-sm border border-[color:var(--color-brisky-cream)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] disabled:opacity-30"
         >
-          {busy ? "Cancelling…" : "Cancel subscription"}
+          {busy ? (
+            <T en="Cancelling…" es="Cancelando…" />
+          ) : (
+            <T en="Cancel subscription" es="Cancelar suscripción" />
+          )}
         </button>
       </div>
     </>
@@ -356,20 +388,31 @@ function DoneState({ done, onClose }: { done: CancelStep4Response; onClose: () =
   const heldUntil = done.dropsHeldUntil ? new Date(done.dropsHeldUntil) : null;
   return (
     <>
-      <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)]">
-        Your last box<br />is on the way<span className="text-[color:var(--color-brisky-cream)]">.</span>
+      <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-7xl">
+        <T en="Your last box" es="Tu última caja" />
+        <br />
+        <T en="is on the way" es="va en camino" />
+        <span className="text-[color:var(--color-brisky-cream)]">.</span>
       </h1>
       <p className="mt-8 text-sm opacity-80">
-        {heldUntil
-          ? `Your Drops are held for 90 days. ${done.cardsKept} cards are yours. The door's still open.`
-          : `Your Drops were reset. ${done.cardsKept} cards are yours.`}
+        {heldUntil ? (
+          <T
+            en={`Your ${done.cardsKept} cards are yours. Drops held 90 days. The door's still open.`}
+            es={`Tus ${done.cardsKept} cartas son tuyas. Drops retenidos 90 días. La puerta sigue abierta.`}
+          />
+        ) : (
+          <T
+            en={`Your Drops were reset. ${done.cardsKept} cards are yours.`}
+            es={`Tus Drops se resetearon. ${done.cardsKept} cartas son tuyas.`}
+          />
+        )}
       </p>
       <button
         type="button"
         onClick={onClose}
         className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
       >
-        Back to LIT
+        <T en="Back to LIT" es="Volver a LIT" />
       </button>
     </>
   );
