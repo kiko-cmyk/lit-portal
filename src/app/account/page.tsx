@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
 import { CancelTakeover } from "@/components/CancelTakeover";
+import { ExtrasOverlay } from "@/components/ExtrasOverlay";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
+import { PlanOverlay } from "@/components/PlanOverlay";
+import { SkipOverlay } from "@/components/SkipOverlay";
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangSetter } from "@/lib/i18n";
 import type {
@@ -23,6 +26,9 @@ export default function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [flavorOpen, setFlavorOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [extrasOpen, setExtrasOpen] = useState(false);
   const t = useLang();
 
   useEffect(() => {
@@ -98,15 +104,27 @@ export default function AccountPage() {
 
         {/* Quick actions */}
         <section className="mx-6 mt-4 grid grid-cols-4 gap-2 md:mx-0">
-          <QuickAction label={t({ en: "Plan", es: "Plan" })} />
-          <QuickAction label={t({ en: "Skip", es: "Saltar" })} />
+          <QuickAction
+            label={t({ en: "Plan", es: "Plan" })}
+            onClick={() => subscription && setPlanOpen(true)}
+            disabled={!subscription}
+          />
+          <QuickAction
+            label={t({ en: "Skip", es: "Saltar" })}
+            onClick={() => subscription && setSkipOpen(true)}
+            disabled={!subscription}
+          />
           <QuickAction
             label={t({ en: "Flavor", es: "Sabor" })}
             subtitle={t({ en: "Soon", es: "Pronto" })}
             comingSoon
             onClick={() => setFlavorOpen(true)}
           />
-          <QuickAction label={t({ en: "Extras", es: "Extras" })} />
+          <QuickAction
+            label={t({ en: "Extras", es: "Extras" })}
+            onClick={() => subscription && setExtrasOpen(true)}
+            disabled={!subscription}
+          />
         </section>
 
         {/* Subscription summary */}
@@ -130,6 +148,7 @@ export default function AccountPage() {
             </div>
             <button
               type="button"
+              onClick={() => setPlanOpen(true)}
               className="mt-4 text-[11px] font-bold uppercase tracking-[0.18em] underline"
             >
               <T en="Change boxes or frequency" es="Cambiar cajas o frecuencia" /> →
@@ -180,6 +199,23 @@ export default function AccountPage() {
         />
       )}
       {flavorOpen && <FlavorOverlay onClose={() => setFlavorOpen(false)} />}
+      {planOpen && subscription && (
+        <PlanOverlay
+          subscription={subscription}
+          onClose={() => setPlanOpen(false)}
+          onUpdated={(updated) => setSubscription(updated)}
+        />
+      )}
+      {skipOpen && subscription && (
+        <SkipOverlay
+          subscription={subscription}
+          onClose={() => setSkipOpen(false)}
+          onSkipped={(newDate) =>
+            setSubscription({ ...subscription, nextShipDate: newDate })
+          }
+        />
+      )}
+      {extrasOpen && <ExtrasOverlay onClose={() => setExtrasOpen(false)} />}
     </div>
   );
 }
@@ -188,15 +224,19 @@ function QuickAction({
   label,
   subtitle,
   comingSoon,
+  disabled,
   onClick,
 }: {
   label: string;
   subtitle?: string;
   comingSoon?: boolean;
+  disabled?: boolean;
   onClick?: () => void;
 }) {
   const inner = (
-    <div className="relative flex h-16 flex-col items-center justify-center rounded-xl bg-[color:var(--color-sharp-white)]">
+    <div
+      className={`relative flex h-16 flex-col items-center justify-center rounded-xl bg-[color:var(--color-sharp-white)] ${disabled ? "opacity-40" : ""}`}
+    >
       {comingSoon && (
         <span className="absolute right-1.5 top-1.5 rounded-sm bg-[color:var(--color-lit-grey)]/8 px-1 py-0.5 text-[7px] font-bold uppercase tracking-[0.15em] opacity-70">
           {subtitle ?? "Soon"}
@@ -214,7 +254,12 @@ function QuickAction({
   );
   if (onClick) {
     return (
-      <button type="button" onClick={onClick} className="block w-full text-left">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className="block w-full text-left disabled:cursor-not-allowed"
+      >
         {inner}
       </button>
     );

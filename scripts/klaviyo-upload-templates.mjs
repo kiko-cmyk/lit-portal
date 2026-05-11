@@ -1,13 +1,9 @@
 /**
- * One-shot: upload the Phase 1 Confirmation email template to Klaviyo.
+ * Phase 1 — upload TWO confirmation email templates (EN + ES) to Klaviyo.
  *
- * Adapts the Phase 1 hi-fi HTML (designs/fase-1/LIT-Post-Purchase-Mobile-EN-ES.html)
- * to a Klaviyo-friendly version:
- *   - Strips dev tooling (scenario picker, language toggle UI)
- *   - Uses Klaviyo merge tags for dynamic content
- *   - EN-only base; ES variant rendered via Klaviyo conditional content using
- *     `person.language_pref` profile property (set from /api/first-login/language
- *     and /api/customer/language)
+ * Each template is clean HTML without conditional Liquid for language.
+ * The flow uses a conditional split on `person.language_pref` to send the
+ * right one. That keeps each template easy to preview/QA in the editor.
  *
  * Run: node scripts/klaviyo-upload-templates.mjs
  */
@@ -21,89 +17,74 @@ if (!KEY) throw new Error("KLAVIYO_PRIVATE_API_KEY not set");
 const REVISION = "2024-10-15";
 const API = "https://a.klaviyo.com/api";
 
-const TEMPLATES = [
-  {
-    name: "LIT — Confirmation Email (post-checkout)",
-    html: confirmationEmailHtml(),
-  },
-];
-
-async function upsertTemplate({ name, html }) {
-  const list = await fetch(
-    `${API}/templates/?filter=equals(name,"${encodeURIComponent(name)}")`,
-    {
-      headers: {
-        Authorization: `Klaviyo-API-Key ${KEY}`,
-        revision: REVISION,
-        accept: "application/vnd.api+json",
-      },
-    },
-  ).then((r) => r.json());
-
-  const existing = list.data?.[0];
-  const body = {
-    data: {
-      type: "template",
-      attributes: { name, html, text: "Open in HTML mode for the full design." },
-    },
-  };
-
-  if (existing) {
-    body.data.id = existing.id;
-    const r = await fetch(`${API}/templates/${existing.id}/`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Klaviyo-API-Key ${KEY}`,
-        revision: REVISION,
-        accept: "application/vnd.api+json",
-        "content-type": "application/vnd.api+json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error(`PATCH ${r.status}: ${await r.text()}`);
-    console.log(`✓ Updated template "${name}" (id: ${existing.id})`);
-    return existing.id;
-  } else {
-    // POST requires editor_type; PATCH rejects it
-    const postBody = {
-      ...body,
-      data: { ...body.data, attributes: { ...body.data.attributes, editor_type: "CODE" } },
-    };
-    const r = await fetch(`${API}/templates/`, {
-      method: "POST",
-      headers: {
-        Authorization: `Klaviyo-API-Key ${KEY}`,
-        revision: REVISION,
-        accept: "application/vnd.api+json",
-        "content-type": "application/vnd.api+json",
-      },
-      body: JSON.stringify(postBody),
-    });
-    if (!r.ok) throw new Error(`POST ${r.status}: ${await r.text()}`);
-    const json = await r.json();
-    console.log(`✓ Created template "${name}" (id: ${json.data.id})`);
-    return json.data.id;
-  }
-}
-
-for (const t of TEMPLATES) {
-  await upsertTemplate(t);
-}
-
-console.log("\nDone. Use this template in your Klaviyo flows.");
-console.log("Build the flow at https://www.klaviyo.com/flows.");
-
 // ============================================================
-// Phase 1 confirmation email HTML
+// Per-language copy
 // ============================================================
 
-function confirmationEmailHtml() {
+const EN = {
+  title: "You're in.",
+  orderLabel: "Order",
+  kicker: "Confirmed",
+  heroL1: "YOU'RE",
+  heroL2: "IN",
+  welcomePrefix: "Welcome,",
+  subscriptionLabel: "Your subscription",
+  boxLabel: "BOX",
+  sachetsLabel: "SACHETS",
+  flavor: "Flavor",
+  plan: "Plan",
+  ships: "Ships",
+  lands: "Lands",
+  whatsInside: "What's in a sachet",
+  sodium: "Sodium",
+  potassium: "Potassium",
+  magnesium: "Magnesium",
+  sugar: "Sugar",
+  cta: "Open your LIT account",
+  questions: "Questions?",
+  contact: "Contact us",
+  preferences: "Preferences",
+  unsubscribe: "Unsubscribe",
+};
+
+const ES = {
+  title: "Estás dentro.",
+  orderLabel: "Pedido",
+  kicker: "Confirmado",
+  heroL1: "ESTÁS",
+  heroL2: "DENTRO",
+  welcomePrefix: "Bienvenida,",
+  subscriptionLabel: "Tu suscripción",
+  boxLabel: "CAJA",
+  sachetsLabel: "SOBRES",
+  flavor: "Sabor",
+  plan: "Plan",
+  ships: "Sale",
+  lands: "Llega",
+  whatsInside: "Qué lleva un sobre",
+  sodium: "Sodio",
+  potassium: "Potasio",
+  magnesium: "Magnesio",
+  sugar: "Azúcar",
+  cta: "Abrir tu cuenta LIT",
+  questions: "¿Preguntas?",
+  contact: "Escríbenos",
+  preferences: "Preferencias",
+  unsubscribe: "Darme de baja",
+};
+
+// ============================================================
+// HTML builder
+// ============================================================
+
+function emailHtml(lang) {
+  const t = lang === "es" ? ES : EN;
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${lang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>You're in.</title>
+<title>${t.title}</title>
 <style>
   body { margin: 0; padding: 0; background: #e6e6e4; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #323743; -webkit-font-smoothing: antialiased; }
   .frame { width: 100%; max-width: 600px; margin: 40px auto 60px; background: #E9EBDE; border-radius: 8px; overflow: hidden; }
@@ -141,78 +122,68 @@ function confirmationEmailHtml() {
 <div class="frame">
   <div class="header">
     <div class="logo">LIT</div>
-    <div class="order-num">{% if person.language_pref == "es" %}Pedido{% else %}Order{% endif %} #{{ event.order_number|default:"—" }}</div>
+    <div class="order-num">${t.orderLabel} #{{ event.order_number|default:"—" }}</div>
   </div>
 
   <div class="hero">
-    <div class="kicker">{% if person.language_pref == "es" %}Confirmado{% else %}Confirmed{% endif %}</div>
-    <h1 class="big">
-      {% if person.language_pref == "es" %}ESTÁS<br>DENTRO{% else %}YOU'RE<br>IN{% endif %}<span class="dot">.</span>
-    </h1>
-    <div class="welcome">
-      {% if person.language_pref == "es" %}Bienvenida, {{ first_name|default:"" }}.{% else %}Welcome, {{ first_name|default:"" }}.{% endif %}
-    </div>
+    <div class="kicker">${t.kicker}</div>
+    <h1 class="big">${t.heroL1}<br>${t.heroL2}<span class="dot">.</span></h1>
+    <div class="welcome">${t.welcomePrefix} {{ first_name|default:"" }}.</div>
   </div>
 
   <div class="order-card">
-    <div class="lead">{% if person.language_pref == "es" %}Tu suscripción{% else %}Your subscription{% endif %}</div>
-    <h2 class="head">
-      {{ event.box_count|default:1 }} {% if event.box_count > 1 %}{% if person.language_pref == "es" %}CAJAS{% else %}BOXES{% endif %}{% else %}{% if person.language_pref == "es" %}CAJA{% else %}BOX{% endif %}{% endif %}
-      ·
-      {{ event.sachets|default:30 }} {% if person.language_pref == "es" %}SOBRES{% else %}SACHETS{% endif %}
-    </h2>
+    <div class="lead">${t.subscriptionLabel}</div>
+    <h2 class="head">{{ event.box_count|default:1 }} ${t.boxLabel} · {{ event.sachets|default:30 }} ${t.sachetsLabel}</h2>
     <div class="meta-grid">
       <div>
-        <div class="label">{% if person.language_pref == "es" %}Sabor{% else %}Flavor{% endif %}</div>
+        <div class="label">${t.flavor}</div>
         <div class="val">{{ event.flavor|default:"Lemon Drop" }}</div>
       </div>
       <div>
-        <div class="label">{% if person.language_pref == "es" %}Plan{% else %}Plan{% endif %}</div>
+        <div class="label">${t.plan}</div>
         <div class="val">{{ event.plan_label|default:"" }}</div>
       </div>
       <div>
-        <div class="label">{% if person.language_pref == "es" %}Sale{% else %}Ships{% endif %}</div>
+        <div class="label">${t.ships}</div>
         <div class="val">{{ event.ship_date|default:"Soon" }}</div>
       </div>
       <div>
-        <div class="label">{% if person.language_pref == "es" %}Llega{% else %}Lands{% endif %}</div>
+        <div class="label">${t.lands}</div>
         <div class="val">{{ event.delivery_date|default:"Soon" }}</div>
       </div>
     </div>
   </div>
 
   <div class="section">
-    <div class="eyebrow">{% if person.language_pref == "es" %}Qué lleva un sobre{% else %}What's in a sachet{% endif %}</div>
+    <div class="eyebrow">${t.whatsInside}</div>
     <div class="nutri">
       <div class="nutri-row">
-        <span class="nutri-name">{% if person.language_pref == "es" %}Sodio{% else %}Sodium{% endif %}</span>
+        <span class="nutri-name">${t.sodium}</span>
         <span><span class="nutri-val">1,000</span><span class="nutri-unit">MG</span></span>
       </div>
       <div class="nutri-row">
-        <span class="nutri-name">{% if person.language_pref == "es" %}Potasio{% else %}Potassium{% endif %}</span>
+        <span class="nutri-name">${t.potassium}</span>
         <span><span class="nutri-val">200</span><span class="nutri-unit">MG</span></span>
       </div>
       <div class="nutri-row">
-        <span class="nutri-name">{% if person.language_pref == "es" %}Magnesio{% else %}Magnesium{% endif %}</span>
+        <span class="nutri-name">${t.magnesium}</span>
         <span><span class="nutri-val">60</span><span class="nutri-unit">MG</span></span>
       </div>
       <div class="nutri-row">
-        <span class="nutri-name">{% if person.language_pref == "es" %}Azúcar{% else %}Sugar{% endif %}</span>
+        <span class="nutri-name">${t.sugar}</span>
         <span><span class="nutri-val">0</span><span class="nutri-unit">G</span></span>
       </div>
     </div>
   </div>
 
   <div class="cta-section">
-    <a class="cta-btn" href="https://litsalt.com/apps/portal/your-lit">
-      {% if person.language_pref == "es" %}Abrir tu cuenta LIT{% else %}Open your LIT account{% endif %}
-    </a>
+    <a class="cta-btn" href="https://litsalt.com/apps/portal/your-lit">${t.cta}</a>
   </div>
 
   <div class="footer">
     <div class="mark">Stay LIT.</div>
     <div class="meta">
-      {% if person.language_pref == "es" %}¿Preguntas? <a href="mailto:hello@litsalt.com">Escríbenos</a> · <a href="https://litsalt.com/apps/portal/account">Preferencias</a> · <a href="{% unsubscribe %}">Darme de baja</a>{% else %}Questions? <a href="mailto:hello@litsalt.com">Contact us</a> · <a href="https://litsalt.com/apps/portal/account">Preferences</a> · <a href="{% unsubscribe %}">Unsubscribe</a>{% endif %}
+      ${t.questions} <a href="mailto:hello@litsalt.com">${t.contact}</a> · <a href="https://litsalt.com/apps/portal/account">${t.preferences}</a> · <a href="{% unsubscribe %}">${t.unsubscribe}</a>
     </div>
     <div style="font-size: 10px; color: #B5AE9F; margin-top: 12px;">LIT · Madrid · 2026</div>
   </div>
@@ -220,3 +191,77 @@ function confirmationEmailHtml() {
 </body>
 </html>`;
 }
+
+const TEMPLATES = [
+  { name: "LIT — Confirmation Email EN", html: emailHtml("en") },
+  { name: "LIT — Confirmation Email ES", html: emailHtml("es") },
+];
+
+// ============================================================
+// Upsert helper
+// ============================================================
+
+async function upsertTemplate({ name, html }) {
+  const list = await fetch(
+    `${API}/templates/?filter=equals(name,"${encodeURIComponent(name)}")`,
+    {
+      headers: {
+        Authorization: `Klaviyo-API-Key ${KEY}`,
+        revision: REVISION,
+        accept: "application/vnd.api+json",
+      },
+    },
+  ).then((r) => r.json());
+
+  const existing = list.data?.[0];
+  const baseAttrs = { name, html, text: "Open in HTML mode for the full design." };
+
+  if (existing) {
+    const r = await fetch(`${API}/templates/${existing.id}/`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Klaviyo-API-Key ${KEY}`,
+        revision: REVISION,
+        accept: "application/vnd.api+json",
+        "content-type": "application/vnd.api+json",
+      },
+      body: JSON.stringify({
+        data: { type: "template", id: existing.id, attributes: baseAttrs },
+      }),
+    });
+    if (!r.ok) throw new Error(`PATCH ${r.status}: ${await r.text()}`);
+    console.log(`✓ Updated "${name}" (id: ${existing.id})`);
+    return existing.id;
+  } else {
+    const r = await fetch(`${API}/templates/`, {
+      method: "POST",
+      headers: {
+        Authorization: `Klaviyo-API-Key ${KEY}`,
+        revision: REVISION,
+        accept: "application/vnd.api+json",
+        "content-type": "application/vnd.api+json",
+      },
+      body: JSON.stringify({
+        data: { type: "template", attributes: { ...baseAttrs, editor_type: "CODE" } },
+      }),
+    });
+    if (!r.ok) throw new Error(`POST ${r.status}: ${await r.text()}`);
+    const json = await r.json();
+    console.log(`✓ Created "${name}" (id: ${json.data.id})`);
+    return json.data.id;
+  }
+}
+
+for (const t of TEMPLATES) {
+  await upsertTemplate(t);
+}
+
+console.log("\nDone. Two templates uploaded — one per language.");
+console.log(`
+Next: in your Klaviyo flow, replace the single email step with a
+Conditional Split:
+  IF person.language_pref equals "es"
+     → Send "LIT — Confirmation Email ES"
+  ELSE
+     → Send "LIT — Confirmation Email EN"
+`);

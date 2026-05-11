@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
+import { ExtrasOverlay } from "@/components/ExtrasOverlay";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
+import { PlanOverlay } from "@/components/PlanOverlay";
+import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
@@ -14,6 +17,9 @@ export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showFlavor, setShowFlavor] = useState(false);
+  const [showPlan, setShowPlan] = useState(false);
+  const [showSkip, setShowSkip] = useState(false);
+  const [showExtras, setShowExtras] = useState(false);
   const t = useLang();
   const lang = useLangValue();
 
@@ -135,15 +141,24 @@ export default function HubPage() {
 
         {/* Quick Actions */}
         <section className="mx-6 mt-5 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
-          <QuickAction label={t({ en: "Change plan", es: "Cambiar plan" })} href="/account" />
-          <QuickAction label={t({ en: "Skip next box", es: "Saltar próxima" })} href="/account" />
+          <QuickAction
+            label={t({ en: "Change plan", es: "Cambiar plan" })}
+            onClick={() => setShowPlan(true)}
+          />
+          <QuickAction
+            label={t({ en: "Skip next box", es: "Saltar próxima" })}
+            onClick={() => setShowSkip(true)}
+          />
           <QuickAction
             label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
             subtitle={t({ en: "Coming Soon", es: "Pronto" })}
             comingSoon
             onClick={() => setShowFlavor(true)}
           />
-          <QuickAction label={t({ en: "Extras", es: "Extras" })} href="/account" />
+          <QuickAction
+            label={t({ en: "Extras", es: "Extras" })}
+            onClick={() => setShowExtras(true)}
+          />
         </section>
 
         {/* Collection peek (replaces Drops/World peeks — Phase 2 will surface those) */}
@@ -169,6 +184,26 @@ export default function HubPage() {
       <BottomNav />
 
       {showFlavor && <FlavorOverlay onClose={() => setShowFlavor(false)} />}
+      {showPlan && (
+        <PlanOverlay
+          subscription={subscription}
+          onClose={() => setShowPlan(false)}
+          onUpdated={(updated) => setData({ ...data, subscription: updated })}
+        />
+      )}
+      {showSkip && (
+        <SkipOverlay
+          subscription={subscription}
+          onClose={() => setShowSkip(false)}
+          onSkipped={(newDate) =>
+            setData({
+              ...data,
+              subscription: { ...subscription, nextShipDate: newDate },
+            })
+          }
+        />
+      )}
+      {showExtras && <ExtrasOverlay onClose={() => setShowExtras(false)} />}
     </div>
   );
 }
