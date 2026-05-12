@@ -7,6 +7,7 @@ import { ExtrasOverlay } from "@/components/ExtrasOverlay";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
+import { portalHref } from "@/lib/portal-link";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
@@ -164,7 +165,7 @@ export default function HubPage() {
 
         {/* Collection peek (replaces Drops/World peeks — Phase 2 will surface those) */}
         <Link
-          href="/collection"
+          href={portalHref("/collection")}
           className="group mx-6 mt-5 flex items-center justify-between rounded-2xl bg-[color:var(--color-zesty-beige)] px-6 py-5 text-[color:var(--color-lit-grey)] md:mx-0"
         >
           <div>
@@ -241,14 +242,21 @@ function QuickAction({
   );
   if (onClick) {
     return (
-      <button type="button" onClick={onClick} className="block text-left">
+      <button
+        type="button"
+        onClick={onClick}
+        className="block w-full text-left cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(50,55,67,0.08)]"
+      >
         {inner}
       </button>
     );
   }
   if (href) {
     return (
-      <Link href={href} className="block">
+      <Link
+        href={href}
+        className="block cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(50,55,67,0.08)]"
+      >
         {inner}
       </Link>
     );

@@ -30,10 +30,17 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
 
   await seal.skipBillingAttempt(next.id, sub.id);
 
-  // Re-fetch to compute the post-skip next ship date (Seal regenerates attempts;
-  // see reference_seal_api.md). Fresh GET avoids stale state.
-  const refreshed = await seal.getSubscription(sub.id);
-  const newNext = refreshed ? getNextBillingAttempt(refreshed) : null;
+  // Compute the post-skip next ship date locally instead of re-fetching.
+  // Seal has eventual consistency on billing-attempt mutations — a GET fired
+  // immediately after PUT can return stale data showing the just-skipped
+  // attempt as still pending. Local computation is exact: we know `next.id`
+  // is now skipped, so the next non-skipped attempt is the right answer.
+  const remainingAttempts = (sub.billing_attempts ?? []).map((a) =>
+    a.id === next.id ? { ...a, skipped_on: new Date().toISOString() } : a,
+  );
+  const newNext = remainingAttempts.find(
+    (a) => !a.completed_at && !a.status && !a.skipped_on,
+  ) ?? null;
 
   // Undo window: until the new cutoff (72h before the kept attempt), or until
   // the original attempt date — whichever comes first.

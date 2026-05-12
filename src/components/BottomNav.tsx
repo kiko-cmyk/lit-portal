@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { useLang } from "@/lib/i18n";
+import { portalHref } from "@/lib/portal-link";
 
 /**
  * Bottom navigation — Phase 1 MVP has 3 slots: Hub / Collection / Account.
@@ -33,8 +34,8 @@ export function BottomNav() {
         return (
           <Link
             key={it.href}
-            href={it.href}
-            className={`flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-bold uppercase tracking-[0.15em] ${
+            href={portalHref(it.href)}
+            className={`flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-bold uppercase tracking-[0.15em] cursor-pointer ${
               active
                 ? "text-[color:var(--color-lit-grey)]"
                 : "text-[color:var(--color-lit-grey)]/45"
@@ -63,7 +64,7 @@ export function TopNav() {
       aria-label="Primary"
     >
       <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-5">
-        <Link href="/your-lit" aria-label="LIT">
+        <Link href={portalHref("/your-lit")} aria-label="LIT" className="cursor-pointer">
           <Logo />
         </Link>
         <div className="flex items-center gap-8">
@@ -72,8 +73,8 @@ export function TopNav() {
             return (
               <Link
                 key={it.href}
-                href={it.href}
-                className={`text-[11px] font-bold uppercase tracking-[0.18em] ${
+                href={portalHref(it.href)}
+                className={`text-[11px] font-bold uppercase tracking-[0.18em] cursor-pointer transition-colors hover:text-[color:var(--color-lit-grey)] ${
                   active ? "text-[color:var(--color-lit-grey)] underline underline-offset-4" : "text-[color:var(--color-lit-grey)]/55"
                 }`}
               >
