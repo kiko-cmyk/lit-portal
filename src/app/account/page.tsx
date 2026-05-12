@@ -7,6 +7,7 @@ import { CancelTakeover } from "@/components/CancelTakeover";
 import { ExtrasOverlay } from "@/components/ExtrasOverlay";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
+import { Logo } from "@/components/Logo";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { api, ApiClientError } from "@/lib/api-client";
@@ -69,7 +70,7 @@ export default function AccountPage() {
     <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
-        <span className="font-display text-2xl font-black tracking-tight">LIT.</span>
+        <Logo />
         <TierPill visible={tier?.earned ?? false} />
       </header>
 

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Logo } from "@/components/Logo";
 import { useLang } from "@/lib/i18n";
 
 /**
@@ -62,8 +63,8 @@ export function TopNav() {
       aria-label="Primary"
     >
       <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-5">
-        <Link href="/your-lit" className="font-display text-2xl font-black tracking-tight">
-          LIT.
+        <Link href="/your-lit" aria-label="LIT">
+          <Logo />
         </Link>
         <div className="flex items-center gap-8">
           {ITEMS.map((it) => {

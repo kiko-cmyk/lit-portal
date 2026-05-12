@@ -6,6 +6,7 @@ import { BottomNav, TopNav } from "@/components/BottomNav";
 import { ExtrasOverlay } from "@/components/ExtrasOverlay";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
+import { Logo } from "@/components/Logo";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
@@ -35,7 +36,7 @@ export default function HubPage() {
     return (
       <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
         <header className="flex items-center justify-between px-6 pt-5 pb-3 md:px-12">
-          <span className="font-display text-2xl font-black tracking-tight">LIT.</span>
+          <Logo />
         </header>
         <main className="flex flex-1 flex-col items-center justify-center px-8 pb-24 text-center">
           <h1 className="font-display text-4xl font-black uppercase leading-none md:text-5xl">
@@ -92,7 +93,7 @@ export default function HubPage() {
     <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
-        <span className="font-display text-2xl font-black tracking-tight">LIT.</span>
+        <Logo />
         <TierPill visible={drops.tierEarned} />
       </header>
 
