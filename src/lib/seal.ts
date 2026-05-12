@@ -130,25 +130,33 @@ class SealClient {
    * TODO: when Supabase is ready, cache (shopify_customer_id, email) → seal_id
    *       in `customer_seal_mapping` and bypass scan on hits.
    */
-  async getSubscriptionsByEmail(email: string, maxPages = 6): Promise<SealSubscription[]> {
+  async getSubscriptionsByEmail(email: string): Promise<SealSubscription[]> {
     const target = email.trim().toLowerCase();
-    // Fire all pages in parallel. Trades extra requests for ~6x lower latency,
-    // which matters because Vercel function timeouts kill sequential pagination
-    // on Hobby plan (10s cap) when Seal is slow.
-    const pages = await Promise.all(
-      Array.from({ length: maxPages }, (_, i) => {
-        const params = new URLSearchParams({
-          "with-items": "true",
-          "with-billing-attempts": "true",
-          page: String(i + 1),
-        });
-        return this.req<SealListResponse<SealSubscription>>(
-          `/subscriptions?${params.toString()}`,
-        ).catch(() => null);
-      }),
-    );
+    const fetchPage = (page: number) => {
+      const params = new URLSearchParams({
+        "with-items": "true",
+        "with-billing-attempts": "true",
+        page: String(page),
+      });
+      return this.req<SealListResponse<SealSubscription>>(
+        `/subscriptions?${params.toString()}`,
+      ).catch(() => null);
+    };
+
+    // Round 1: page 1 alone, to learn how many pages there are.
+    const page1 = await fetchPage(1);
+    const totalPages = page1?.payload?.total_pages ?? 1;
+
+    // Round 2: pages 2..N in parallel. Total wall-clock ≈ 2 × single request.
+    const rest =
+      totalPages > 1
+        ? await Promise.all(
+            Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2)),
+          )
+        : [];
+
     const matches: SealSubscription[] = [];
-    for (const data of pages) {
+    for (const data of [page1, ...rest]) {
       if (!data) continue;
       for (const s of data.payload?.subscriptions ?? []) {
         if (s.email?.trim().toLowerCase() === target) matches.push(s);
