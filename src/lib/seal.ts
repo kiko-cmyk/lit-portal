@@ -467,6 +467,11 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
       countryCode: s.s_country_code ?? "",
       phone: s.s_phone ?? null,
     },
+    payment: {
+      cardExpiryMonth: s.card_expiry_month || null,
+      cardExpiryYear: s.card_expiry_year || null,
+      sealEditUrl: s.edit_url || null,
+    },
   };
 }
 

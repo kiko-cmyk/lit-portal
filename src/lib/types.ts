@@ -59,6 +59,11 @@ export interface Subscription {
   withinCutoff: boolean;
   cutoffEndsAt: string | null;
   shippingAddress: SubscriptionAddress | null;
+  payment: {
+    cardExpiryMonth: string | null;
+    cardExpiryYear: string | null;
+    sealEditUrl: string | null;
+  };
 }
 
 export interface SubscriptionAddress {

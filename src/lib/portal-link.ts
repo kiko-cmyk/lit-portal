@@ -25,14 +25,16 @@ export function portalHref(locale: Lang, route: PortalRoute): string {
 /**
  * Compute the equivalent URL in the other locale. Used by LangToggle to
  * swap language without losing the page.
+ *
+ * `currentPathname` from usePathname() reflects the user-visible URL (the
+ * slug in whichever locale they're currently on, NOT the canonical EN
+ * post-rewrite), so we look up the route in both locales' slug maps.
  */
 export function swapLocale(currentPathname: string, nextLocale: Lang): string {
-  const segments = currentPathname.split("/").filter(Boolean);
-  // Find which canonical route this pathname corresponds to
-  // (proxy.ts has already rewritten ES slug → EN canonical before usePathname)
-  const [, slug] = segments;
-  const route = (Object.keys(SLUGS.en) as PortalRoute[]).find(
-    (r) => SLUGS.en[r] === slug,
+  const [, , slug] = currentPathname.split("/");
+  const routes = Object.keys(SLUGS.en) as PortalRoute[];
+  const route = routes.find(
+    (r) => SLUGS.en[r] === slug || SLUGS.es[r] === slug,
   );
   if (!route) return `${BASE}/${nextLocale}/${SLUGS[nextLocale].home}`;
   return portalHref(nextLocale, route);

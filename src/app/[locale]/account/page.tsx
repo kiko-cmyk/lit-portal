@@ -213,9 +213,11 @@ export default function AccountPage() {
         )}
 
         {/* Payment */}
-        <Section title={t({ en: "Payment method", es: "Método de pago" })}>
-          <PaymentBlock />
-        </Section>
+        {subscription && (
+          <Section title={t({ en: "Payment method", es: "Método de pago" })}>
+            <PaymentBlock subscription={subscription} />
+          </Section>
+        )}
 
         {/* Language */}
         <Section title={t({ en: "Language", es: "Idioma" })}>
@@ -482,23 +484,38 @@ function AddressBlock({
   );
 }
 
-function PaymentBlock() {
+function PaymentBlock({ subscription }: { subscription: Subscription }) {
+  const { cardExpiryMonth, cardExpiryYear, sealEditUrl } = subscription.payment;
+  const hasCard = cardExpiryMonth && cardExpiryYear;
   return (
-    <div className="text-sm">
-      <p className="opacity-70 text-[12px] leading-relaxed">
-        <T
-          en="Your card is managed by Shopify. Open your account to update it."
-          es="Tu tarjeta la gestiona Shopify. Abre tu cuenta para actualizarla."
-        />
-      </p>
-      <a
-        href="https://litsalt.com/account"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-3 inline-block rounded-sm bg-[color:var(--color-lit-grey)] px-4 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-brisky-cream)]"
-      >
-        <T en="Manage payment" es="Gestionar pago" />
-      </a>
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex-1 min-w-0">
+        {hasCard ? (
+          <>
+            <div className="text-[11px] uppercase tracking-[0.15em] opacity-70">
+              <T en="Active card" es="Tarjeta activa" />
+            </div>
+            <div className="mt-0.5 font-display text-lg font-black uppercase">
+              <T en="Expires" es="Caduca" />{" "}
+              {cardExpiryMonth.padStart(2, "0")}/{cardExpiryYear.slice(-2)}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm opacity-70">
+            <T en="No payment method on file." es="Sin método de pago registrado." />
+          </div>
+        )}
+      </div>
+      {sealEditUrl && (
+        <a
+          href={sealEditUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="rounded-sm bg-[color:var(--color-lit-grey)] px-4 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-brisky-cream)] whitespace-nowrap"
+        >
+          <T en="Update card" es="Cambiar tarjeta" />
+        </a>
+      )}
     </div>
   );
 }
