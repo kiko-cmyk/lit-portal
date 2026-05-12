@@ -43,15 +43,15 @@ function isLocale(s: string): s is (typeof LOCALES)[number] {
   return (LOCALES as readonly string[]).includes(s);
 }
 
-function browserRelativeRedirect(pathname: string): NextResponse {
-  // Root-relative redirect so the browser resolves it against litsalt.com
-  // (the URL bar host) instead of the Vercel host that's returning this
-  // response. NextResponse.redirect would build an absolute URL with the
-  // Vercel origin and leak it.
-  return new NextResponse(null, {
-    status: 308,
-    headers: { Location: pathname },
-  });
+function browserRelativeRedirect(pathname: string, req: NextRequest): NextResponse {
+  // Use x-forwarded-host so the redirect host matches litsalt.com (the URL
+  // bar host) instead of the Vercel host. Otherwise the absolute URL in the
+  // Location header would expose lit-portal-drab.vercel.app and the browser
+  // would skip App Proxy on the follow-up request.
+  const forwardedHost = req.headers.get("x-forwarded-host") ?? req.nextUrl.host;
+  const forwardedProto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
+  const target = new URL(`${forwardedProto}://${forwardedHost}${pathname}`);
+  return NextResponse.redirect(target, 308);
 }
 
 export function proxy(req: NextRequest) {
@@ -87,7 +87,10 @@ export function proxy(req: NextRequest) {
       ? CANONICAL_TO_DEFAULT_LOCALE_SLUG[first]
       : first ?? CANONICAL_TO_DEFAULT_LOCALE_SLUG["your-lit"];
   const tail = second ? "/" + [second, ...rest].join("/") : "";
-  return browserRelativeRedirect(`${BROWSER_BASE}/${DEFAULT_LOCALE}/${translatedFirst}${tail}`);
+  return browserRelativeRedirect(
+    `${BROWSER_BASE}/${DEFAULT_LOCALE}/${translatedFirst}${tail}`,
+    req,
+  );
 }
 
 export const config = {
