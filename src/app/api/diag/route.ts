@@ -40,6 +40,22 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
   await t("shopifyAdmin_ping", () =>
     shopifyAdmin.graphql<{ shop: { name: string } }>(`{ shop { name } }`),
   );
+
+  // Hit Seal page 1 directly to inspect total_pages reporting
+  await t("seal_page1_raw", async () => {
+    const r = await fetch(
+      "https://app.sealsubscriptions.com/shopify/merchant/api/subscriptions?page=1&with-items=true&with-billing-attempts=true",
+      { headers: { "X-Seal-Token": process.env.SEAL_API_TOKEN ?? "" } },
+    );
+    const json = (await r.json()) as { success?: boolean; payload?: { total_pages?: number; subscriptions?: unknown[] } };
+    return {
+      status: r.status,
+      success: json.success,
+      total_pages: json.payload?.total_pages,
+      subs_in_page: json.payload?.subscriptions?.length,
+    };
+  });
+
   await t("seal_full_scan_juan", () => seal.getSubscriptionsByEmail("juan@litsalt.com"));
   await t("supabase_select", async () => {
     const r = await supabaseAdmin().from("drops_balances").select("customer_id").limit(1);
