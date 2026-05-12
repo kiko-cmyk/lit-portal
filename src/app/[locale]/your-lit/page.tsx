@@ -98,7 +98,7 @@ export default function HubPage() {
         <TierPill visible={drops.tierEarned} />
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pb-12">
+      <main className="flex-1 pt-6 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-12 md:pb-12">
         {/* Next-box hero card */}
         <section className="mx-6 mt-2 rounded-2xl bg-[color:var(--color-sharp-white)] p-7 shadow-[0_4px_24px_rgba(50,55,67,0.06)] md:mx-0 md:p-10">
           <div className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">

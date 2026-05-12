@@ -56,6 +56,26 @@ h1, h2, h3, .display {
 
 /* No emojis policy — use word/SVG icons. */
 
+/* Clickable affordances — applied globally so individual buttons don't
+   have to remember `cursor-pointer`. Disabled buttons keep the default
+   not-allowed cursor. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href] {
+  cursor: pointer;
+}
+
+button:not(:disabled):hover,
+a[href]:hover {
+  filter: brightness(0.96);
+  transition: filter 120ms ease-out;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
 /* Color-zone helpers (apply on page wrappers): */
 .zone-cream {
   --background: var(--color-brisky-cream);

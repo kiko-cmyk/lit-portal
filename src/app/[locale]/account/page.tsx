@@ -11,7 +11,7 @@ import { Logo } from "@/components/Logo";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { api, ApiClientError } from "@/lib/api-client";
-import { T, useLang, useLangSetter } from "@/lib/i18n";
+import { T, useLang, useLangSetter, useLangValue } from "@/lib/i18n";
 import type {
   CustomerProfile,
   OrderHistoryItem,
@@ -74,7 +74,7 @@ export default function AccountPage() {
         <TierPill visible={tier?.earned ?? false} />
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pb-12">
+      <main className="flex-1 pt-6 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-12 md:pb-12">
         <h1 className="px-6 font-display text-5xl font-black uppercase md:px-0 md:text-6xl">
           <T en="Account" es="Cuenta" />
         </h1>
@@ -165,7 +165,7 @@ export default function AccountPage() {
 
         {/* Language */}
         <Section title={t({ en: "Language", es: "Idioma" })}>
-          <LanguageToggle initial={customer.languagePref} />
+          <LanguageToggle />
         </Section>
 
         {/* Orders */}
@@ -295,21 +295,20 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function LanguageToggle({ initial }: { initial: "en" | "es" }) {
-  const [lang, setLocalLang] = useState(initial);
+function LanguageToggle() {
+  const lang = useLangValue();
   const setGlobalLang = useLangSetter();
-  const change = async (next: "en" | "es") => {
+  const change = (next: "en" | "es") => {
     if (next === lang) return;
-    setLocalLang(next);
+    // Fire-and-forget metafield sync so future logins remember the choice
+    api("/api/customer/language", {
+      method: "PATCH",
+      body: JSON.stringify({ language: next }),
+    }).catch(() => {
+      // Non-fatal — URL navigation still happens
+    });
+    // Navigate to the equivalent URL in the new locale (setter handles routing)
     setGlobalLang(next);
-    try {
-      await api("/api/customer/language", {
-        method: "PATCH",
-        body: JSON.stringify({ language: next }),
-      });
-    } catch {
-      setLocalLang(lang);
-    }
   };
   return (
     <div className="flex gap-2">

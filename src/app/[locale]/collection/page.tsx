@@ -46,7 +46,7 @@ export default function CollectionPage() {
         <TierPill visible={false} />
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:pb-12">
+      <main className="flex-1 pt-6 pb-24 md:mx-auto md:w-full md:max-w-3xl md:pt-12 md:pb-12">
         <section className="px-6 pt-2 pb-6">
           <h1 className="font-display text-6xl font-black uppercase leading-[0.85] tracking-tight">
             <T en="The" es="La" />
