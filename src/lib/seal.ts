@@ -454,6 +454,19 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
     createdAt: s.order_placed,
     withinCutoff: nextShipDate ? isWithinCutoff(nextShipDate) : false,
     cutoffEndsAt: nextShipDate ? cutoffEndsAt(nextShipDate).toISOString() : null,
+    shippingAddress: {
+      firstName: s.s_first_name ?? "",
+      lastName: s.s_last_name ?? "",
+      address1: s.s_address1 ?? "",
+      address2: s.s_address2 ?? null,
+      city: s.s_city ?? "",
+      postalCode: s.s_zip ?? "",
+      province: s.s_province ?? null,
+      provinceCode: s.s_province_code ?? null,
+      country: s.s_country ?? "",
+      countryCode: s.s_country_code ?? "",
+      phone: s.s_phone ?? null,
+    },
   };
 }
 

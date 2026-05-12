@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
+import { AddressOverlay } from "@/components/AddressOverlay";
 import { CancelTakeover } from "@/components/CancelTakeover";
 import { ExtrasOverlay } from "@/components/ExtrasOverlay";
 import { FlavorOverlay } from "@/components/FlavorOverlay";
@@ -30,6 +31,7 @@ export default function AccountPage() {
   const [planOpen, setPlanOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
   const [extrasOpen, setExtrasOpen] = useState(false);
+  const [addressOpen, setAddressOpen] = useState(false);
   const t = useLang();
 
   useEffect(() => {
@@ -159,8 +161,60 @@ export default function AccountPage() {
 
         {/* Details */}
         <Section title={t({ en: "Your details", es: "Tus datos" })}>
-          <Row label={t({ en: "Email", es: "Email" })} value={customer.email} />
-          <Row label={t({ en: "Phone", es: "Teléfono" })} value={customer.phone ?? "—"} />
+          <EditableRow
+            label={t({ en: "Name", es: "Nombre" })}
+            value={customer.name}
+            inputType="text"
+            onSave={async (v) => {
+              const [firstName, ...rest] = v.trim().split(/\s+/);
+              const lastName = rest.join(" ");
+              await api("/api/customer", {
+                method: "PATCH",
+                body: JSON.stringify({ firstName, lastName }),
+              });
+              setCustomer({ ...customer, name: v });
+            }}
+          />
+          <EditableRow
+            label={t({ en: "Email", es: "Email" })}
+            value={customer.email}
+            inputType="email"
+            onSave={async (v) => {
+              await api("/api/customer", {
+                method: "PATCH",
+                body: JSON.stringify({ email: v }),
+              });
+              setCustomer({ ...customer, email: v });
+            }}
+          />
+          <EditableRow
+            label={t({ en: "Phone", es: "Teléfono" })}
+            value={customer.phone ?? ""}
+            placeholder="—"
+            inputType="tel"
+            onSave={async (v) => {
+              await api("/api/customer", {
+                method: "PATCH",
+                body: JSON.stringify({ phone: v }),
+              });
+              setCustomer({ ...customer, phone: v });
+            }}
+          />
+        </Section>
+
+        {/* Address */}
+        {subscription && (
+          <Section title={t({ en: "Shipping address", es: "Dirección de envío" })}>
+            <AddressBlock
+              address={subscription.shippingAddress}
+              onEdit={() => setAddressOpen(true)}
+            />
+          </Section>
+        )}
+
+        {/* Payment */}
+        <Section title={t({ en: "Payment method", es: "Método de pago" })}>
+          <PaymentBlock />
         </Section>
 
         {/* Language */}
@@ -217,6 +271,13 @@ export default function AccountPage() {
         />
       )}
       {extrasOpen && <ExtrasOverlay onClose={() => setExtrasOpen(false)} />}
+      {addressOpen && subscription && (
+        <AddressOverlay
+          subscription={subscription}
+          onClose={() => setAddressOpen(false)}
+          onUpdated={(updated) => setSubscription(updated)}
+        />
+      )}
     </div>
   );
 }
@@ -286,11 +347,158 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function EditableRow({
+  label,
+  value,
+  placeholder,
+  inputType = "text",
+  onSave,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  inputType?: "text" | "email" | "tel";
+  onSave: (v: string) => Promise<void>;
+}) {
+  const t = useLang();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    if (draft === value) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(draft);
+      setEditing(false);
+    } catch {
+      setError(t({ en: "Couldn't save.", es: "No se pudo guardar." }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] uppercase tracking-[0.15em] opacity-70">{label}</div>
+          <div className="text-sm truncate">{value || placeholder || "—"}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(value);
+            setEditing(true);
+          }}
+          className="text-[10px] font-bold uppercase tracking-[0.18em] underline opacity-60 hover:opacity-100"
+        >
+          <T en="Edit" es="Editar" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex justify-between">
-      <span className="text-[11px] uppercase tracking-[0.15em] opacity-70">{label}</span>
-      <span className="text-sm">{value}</span>
+    <div>
+      <div className="text-[11px] uppercase tracking-[0.15em] opacity-70 mb-1">{label}</div>
+      <div className="flex gap-2">
+        <input
+          autoFocus
+          type={inputType}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={busy}
+          className="flex-1 rounded-sm border border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-sharp-white)] px-3 py-2 text-sm focus:border-[color:var(--color-lit-grey)] focus:outline-none disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={busy}
+          className="rounded-sm bg-[color:var(--color-bold-yellow)] px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] disabled:opacity-50"
+        >
+          {busy ? <T en="…" es="…" /> : <T en="Save" es="OK" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          disabled={busy}
+          className="rounded-sm border border-[color:var(--color-lit-grey)]/20 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] opacity-60"
+        >
+          ×
+        </button>
+      </div>
+      {error && (
+        <p className="mt-1 text-[10px] text-red-700">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function AddressBlock({
+  address,
+  onEdit,
+}: {
+  address: import("@/lib/types").SubscriptionAddress | null;
+  onEdit: () => void;
+}) {
+  if (!address || !address.address1) {
+    return (
+      <button
+        type="button"
+        onClick={onEdit}
+        className="block text-[11px] font-bold uppercase tracking-[0.18em] underline opacity-70"
+      >
+        <T en="Add shipping address" es="Añadir dirección de envío" />
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex-1 text-sm leading-relaxed">
+        <div className="font-bold">{`${address.firstName} ${address.lastName}`.trim()}</div>
+        <div>{address.address1}</div>
+        {address.address2 && <div>{address.address2}</div>}
+        <div>
+          {address.postalCode} {address.city}
+          {address.province ? `, ${address.province}` : ""}
+        </div>
+        <div>{address.country}</div>
+        {address.phone && <div className="opacity-60">{address.phone}</div>}
+      </div>
+      <button
+        type="button"
+        onClick={onEdit}
+        className="text-[10px] font-bold uppercase tracking-[0.18em] underline opacity-60 hover:opacity-100"
+      >
+        <T en="Edit" es="Editar" />
+      </button>
+    </div>
+  );
+}
+
+function PaymentBlock() {
+  return (
+    <div className="text-sm">
+      <p className="opacity-70 text-[12px] leading-relaxed">
+        <T
+          en="Your card is managed by Shopify. Open your account to update it."
+          es="Tu tarjeta la gestiona Shopify. Abre tu cuenta para actualizarla."
+        />
+      </p>
+      <a
+        href="https://litsalt.com/account"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-3 inline-block rounded-sm bg-[color:var(--color-lit-grey)] px-4 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-brisky-cream)]"
+      >
+        <T en="Manage payment" es="Gestionar pago" />
+      </a>
     </div>
   );
 }

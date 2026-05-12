@@ -58,6 +58,21 @@ export interface Subscription {
   createdAt: string;
   withinCutoff: boolean;
   cutoffEndsAt: string | null;
+  shippingAddress: SubscriptionAddress | null;
+}
+
+export interface SubscriptionAddress {
+  firstName: string;
+  lastName: string;
+  address1: string;
+  address2: string | null;
+  city: string;
+  postalCode: string;
+  province: string | null;
+  provinceCode: string | null;
+  country: string;
+  countryCode: string;
+  phone: string | null;
 }
 
 export interface PricingResponse {
