@@ -40,7 +40,7 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
   await t("shopifyAdmin_ping", () =>
     shopifyAdmin.graphql<{ shop: { name: string } }>(`{ shop { name } }`),
   );
-  await t("seal_full_scan", () => seal.getSubscriptionsByEmail("noone@example.com"));
+  await t("seal_full_scan_juan", () => seal.getSubscriptionsByEmail("juan@litsalt.com"));
   await t("supabase_select", async () => {
     const r = await supabaseAdmin().from("drops_balances").select("customer_id").limit(1);
     return r;
