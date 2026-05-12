@@ -49,8 +49,12 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
         return NextResponse.json({ error: err.code, message: err.message }, { status: err.status });
       }
       const message = err instanceof Error ? err.message : "Unknown error";
+      const stack = err instanceof Error ? err.stack : undefined;
       console.error("[api-error]", err);
-      return NextResponse.json({ error: "internal_error", message }, { status: 500 });
+      return NextResponse.json(
+        { error: "internal_error", message, stack: stack?.split("\n").slice(0, 8) },
+        { status: 500 },
+      );
     }
   };
 }

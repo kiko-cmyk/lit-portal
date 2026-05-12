@@ -132,23 +132,27 @@ class SealClient {
    */
   async getSubscriptionsByEmail(email: string, maxPages = 6): Promise<SealSubscription[]> {
     const target = email.trim().toLowerCase();
+    // Fire all pages in parallel. Trades extra requests for ~6x lower latency,
+    // which matters because Vercel function timeouts kill sequential pagination
+    // on Hobby plan (10s cap) when Seal is slow.
+    const pages = await Promise.all(
+      Array.from({ length: maxPages }, (_, i) => {
+        const params = new URLSearchParams({
+          "with-items": "true",
+          "with-billing-attempts": "true",
+          page: String(i + 1),
+        });
+        return this.req<SealListResponse<SealSubscription>>(
+          `/subscriptions?${params.toString()}`,
+        ).catch(() => null);
+      }),
+    );
     const matches: SealSubscription[] = [];
-    for (let page = 1; page <= maxPages; page++) {
-      const params = new URLSearchParams({
-        "with-items": "true",
-        "with-billing-attempts": "true",
-        page: String(page),
-      });
-      const data = await this.req<SealListResponse<SealSubscription>>(
-        `/subscriptions?${params.toString()}`,
-      );
-      const subs = data.payload?.subscriptions ?? [];
-      if (subs.length === 0) break;
-      for (const s of subs) {
+    for (const data of pages) {
+      if (!data) continue;
+      for (const s of data.payload?.subscriptions ?? []) {
         if (s.email?.trim().toLowerCase() === target) matches.push(s);
       }
-      const totalPages = data.payload?.total_pages ?? page;
-      if (page >= totalPages) break;
     }
     return matches;
   }
