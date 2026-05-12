@@ -68,8 +68,19 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
 function summarize(v: unknown): unknown {
   if (Array.isArray(v)) return { type: "array", length: v.length };
   if (v && typeof v === "object") {
-    const keys = Object.keys(v as Record<string, unknown>).slice(0, 5);
-    return { type: "object", keys };
+    // Inline small object values (primitives) so the diag is actually useful
+    const entries = Object.entries(v as Record<string, unknown>).slice(0, 10);
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of entries) {
+      if (val === null || typeof val !== "object") {
+        out[k] = val;
+      } else if (Array.isArray(val)) {
+        out[k] = `array[${val.length}]`;
+      } else {
+        out[k] = "object";
+      }
+    }
+    return out;
   }
   return v;
 }
