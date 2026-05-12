@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
-// Root → Hub. The portal anchor is /your-lit per Master Spec § 3.3.
+// Root → default-locale Hub. `src/proxy.ts` handles bare-path redirects in
+// production; this is the build-time fallback so Next.js doesn't 404 on /.
 export default function Root() {
-  redirect("/your-lit");
+  redirect("/es/tu-lit");
 }

@@ -165,7 +165,7 @@ export default function HubPage() {
 
         {/* Collection peek (replaces Drops/World peeks — Phase 2 will surface those) */}
         <Link
-          href={portalHref("/collection")}
+          href={portalHref(lang, "collection")}
           className="group mx-6 mt-5 flex items-center justify-between rounded-2xl bg-[color:var(--color-zesty-beige)] px-6 py-5 text-[color:var(--color-lit-grey)] md:mx-0"
         >
           <div>

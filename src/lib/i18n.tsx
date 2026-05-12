@@ -1,24 +1,17 @@
 "use client";
 
 /**
- * Bilingual EN/ES support.
- *
- * Mirror of the `data-en` / `data-es` pattern Diane uses in the hi-fi HTMLs.
- * Locale comes from:
- *   1. localStorage `lit_lang` (user toggle)
- *   2. /api/customer.languagePref (Shopify metafield) — default
- *   3. Browser language fallback to "en"
- *
- * Usage:
- *   import { T, useLang } from "@/lib/i18n";
- *   <T en="Open your LIT account" es="Abrir tu cuenta LIT" />
- *   const t = useLang();
- *   t({ en: "Hello", es: "Hola" })
+ * Bilingual EN/ES support. Locale is driven by the URL — the `[locale]`
+ * segment in the App Router is the single source of truth. The LangToggle
+ * navigates to the equivalent URL in the other locale instead of mutating
+ * local state.
  */
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { createContext, useContext, type ReactNode } from "react";
+import { swapLocale, type Lang } from "@/lib/portal-link";
 
-export type Lang = "en" | "es";
+export type { Lang };
 
 interface LangContext {
   lang: Lang;
@@ -27,37 +20,22 @@ interface LangContext {
 
 const LangCtx = createContext<LangContext | null>(null);
 
-const STORAGE_KEY = "lit_lang";
-
 export function LangProvider({
   children,
-  initial = "en",
+  locale,
 }: {
   children: ReactNode;
-  initial?: Lang;
+  locale: Lang;
 }) {
-  const [lang, setLangState] = useState<Lang>(initial);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem(STORAGE_KEY) as Lang | null;
-    if (saved === "en" || saved === "es") {
-      setLangState(saved);
-      return;
-    }
-    // Fall back to browser language
-    if (typeof navigator !== "undefined") {
-      const nav = navigator.language?.toLowerCase() ?? "";
-      if (nav.startsWith("es")) setLangState("es");
-    }
-  }, []);
+  const router = useRouter();
+  const pathname = usePathname();
 
   const setLang = (l: Lang) => {
-    setLangState(l);
-    if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, l);
+    if (l === locale) return;
+    router.push(swapLocale(pathname, l));
   };
 
-  return <LangCtx.Provider value={{ lang, setLang }}>{children}</LangCtx.Provider>;
+  return <LangCtx.Provider value={{ lang: locale, setLang }}>{children}</LangCtx.Provider>;
 }
 
 export function useLang(): (opts: { en: string; es: string }) => string {
@@ -78,7 +56,6 @@ export function useLangSetter(): (l: Lang) => void {
 
 /**
  * Inline bilingual text element. Renders the active language.
- * Use for short strings; for HTML-rich strings use `dangerouslySetInnerHTML`.
  */
 export function T({ en, es }: { en: string; es: string }) {
   const t = useLang();
@@ -86,7 +63,8 @@ export function T({ en, es }: { en: string; es: string }) {
 }
 
 /**
- * Toggle button — `EN | ES`.
+ * Toggle button — `EN | ES`. Click navigates to the equivalent page in the
+ * other locale.
  */
 export function LangToggle({ className }: { className?: string }) {
   const lang = useLangValue();
@@ -100,10 +78,10 @@ export function LangToggle({ className }: { className?: string }) {
           key={l}
           type="button"
           onClick={() => setLang(l)}
-          className={`px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] rounded-sm ${
+          className={`px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] rounded-sm cursor-pointer ${
             lang === l
               ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-brisky-cream)]"
-              : "opacity-50"
+              : "opacity-50 hover:opacity-80"
           }`}
         >
           {l}

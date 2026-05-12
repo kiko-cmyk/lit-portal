@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
-import { useLang } from "@/lib/i18n";
-import { portalHref } from "@/lib/portal-link";
+import { useLang, useLangValue } from "@/lib/i18n";
+import { portalHref, type PortalRoute } from "@/lib/portal-link";
 
 /**
  * Bottom navigation — Phase 1 MVP has 3 slots: Hub / Collection / Account.
@@ -15,14 +15,24 @@ import { portalHref } from "@/lib/portal-link";
  *
  * Per locked decision 2026-05-06.
  */
-const ITEMS = [
-  { href: "/your-lit", en: "Your LIT", es: "Tu LIT" },
-  { href: "/collection", en: "Collection", es: "Colección" },
-  { href: "/account", en: "Account", es: "Cuenta" },
-] as const;
+const ITEMS: { route: PortalRoute; canonical: string; en: string; es: string }[] = [
+  { route: "home", canonical: "your-lit", en: "Your LIT", es: "Tu LIT" },
+  { route: "collection", canonical: "collection", en: "Collection", es: "Colección" },
+  { route: "account", canonical: "account", en: "Account", es: "Cuenta" },
+];
+
+function isActive(pathname: string | null, canonical: string): boolean {
+  // pathname comes from usePathname, which reflects post-proxy.ts rewrite
+  // (always the canonical EN slug). Match `/[locale]/<canonical>` and
+  // `/[locale]/<canonical>/...`.
+  if (!pathname) return false;
+  const re = new RegExp(`^/(en|es)/${canonical}(/|$)`);
+  return re.test(pathname);
+}
 
 export function BottomNav() {
   const pathname = usePathname();
+  const lang = useLangValue();
   const t = useLang();
   return (
     <nav
@@ -30,11 +40,11 @@ export function BottomNav() {
       aria-label="Primary"
     >
       {ITEMS.map((it) => {
-        const active = pathname === it.href || pathname?.startsWith(it.href + "/");
+        const active = isActive(pathname, it.canonical);
         return (
           <Link
-            key={it.href}
-            href={portalHref(it.href)}
+            key={it.canonical}
+            href={portalHref(lang, it.route)}
             className={`flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-bold uppercase tracking-[0.15em] cursor-pointer ${
               active
                 ? "text-[color:var(--color-lit-grey)]"
@@ -57,6 +67,7 @@ export function BottomNav() {
  */
 export function TopNav() {
   const pathname = usePathname();
+  const lang = useLangValue();
   const t = useLang();
   return (
     <nav
@@ -64,16 +75,16 @@ export function TopNav() {
       aria-label="Primary"
     >
       <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-5">
-        <Link href={portalHref("/your-lit")} aria-label="LIT" className="cursor-pointer">
+        <Link href={portalHref(lang, "home")} aria-label="LIT" className="cursor-pointer">
           <Logo />
         </Link>
         <div className="flex items-center gap-8">
           {ITEMS.map((it) => {
-            const active = pathname === it.href || pathname?.startsWith(it.href + "/");
+            const active = isActive(pathname, it.canonical);
             return (
               <Link
-                key={it.href}
-                href={portalHref(it.href)}
+                key={it.canonical}
+                href={portalHref(lang, it.route)}
                 className={`text-[11px] font-bold uppercase tracking-[0.18em] cursor-pointer transition-colors hover:text-[color:var(--color-lit-grey)] ${
                   active ? "text-[color:var(--color-lit-grey)] underline underline-offset-4" : "text-[color:var(--color-lit-grey)]/55"
                 }`}

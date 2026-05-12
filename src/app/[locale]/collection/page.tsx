@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
-import { T, useLang } from "@/lib/i18n";
+import { T, useLang, useLangValue } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 
 /**
@@ -22,6 +22,7 @@ const EDITION_LABEL_ES = "Edición 01 · 2026";
 
 export default function CollectionPage() {
   const t = useLang();
+  const lang = useLangValue();
 
   return (
     <div
@@ -34,7 +35,7 @@ export default function CollectionPage() {
       <TopNav />
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
         <Link
-          href={portalHref("/your-lit")}
+          href={portalHref(lang, "home")}
           className="text-xs font-bold uppercase tracking-[0.2em] opacity-70 cursor-pointer hover:opacity-100"
         >
           ← <T en="Your LIT" es="Tu LIT" />
