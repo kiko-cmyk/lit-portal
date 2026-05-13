@@ -196,14 +196,27 @@ class SealClient {
     subscriptionId: number,
     edits: Record<string, unknown>,
   ): Promise<void> {
-    await this.req("/subscription", {
-      method: "PUT",
-      body: JSON.stringify({
-        action: "edit",
-        id: subscriptionId,
-        edit: edits,
-      }),
-    });
+    // Seal accepts the PUT but signals failure via `success: false` + an
+    // error message in the response body. Treat that as an error so the
+    // portal surfaces it instead of silently lying about the change.
+    const res = await this.req<{ success?: boolean; message?: string; payload?: unknown }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          action: "edit",
+          id: subscriptionId,
+          edit: edits,
+        }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(
+        200,
+        `Seal edit rejected: ${res.message ?? JSON.stringify(res)}`,
+      );
+    }
+    console.log("[seal-edit] response:", JSON.stringify(res));
   }
 
   /**
