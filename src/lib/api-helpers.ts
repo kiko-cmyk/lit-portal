@@ -39,6 +39,12 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
   return async (req: NextRequest, routeCtx?: RouteContext<P>): Promise<NextResponse> => {
     try {
       const proxyCtx = requireCustomer(req);
+      // Trace App-Proxy-injected identity on every request. If the auth ever
+      // hands us the wrong customer (the 2026-05-13 cross-customer incident),
+      // this is the first place we'll see it.
+      console.log(
+        `[withCustomer] path=${req.nextUrl.pathname} customerId=${proxyCtx.customerId} shop=${proxyCtx.shop}`,
+      );
       const result = await handler(req, proxyCtx, routeCtx);
       return NextResponse.json(result);
     } catch (err) {

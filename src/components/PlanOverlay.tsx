@@ -59,6 +59,7 @@ export function PlanOverlay({
 
   const hasChange =
     boxCount !== subscription.boxCount || frequency !== subscription.frequency;
+  const isEnabled = process.env.NEXT_PUBLIC_PLAN_CHANGE_ENABLED === "true";
 
   const handleConfirm = async () => {
     if (!hasChange) return;
@@ -213,14 +214,25 @@ export function PlanOverlay({
               </div>
             )}
 
+            {!isEnabled && (
+              <div className="mt-6 rounded-2xl bg-[color:var(--color-bold-yellow)]/30 px-5 py-4 text-xs leading-relaxed">
+                <T
+                  en="Plan changes are temporarily disabled while we wire them up against Shopify directly. You'll be able to confirm here once the new flow is live."
+                  es="El cambio de plan está temporalmente desactivado mientras lo conectamos directamente con Shopify. Podrás confirmar aquí en cuanto el nuevo flujo esté en producción."
+                />
+              </div>
+            )}
+
             <button
               type="button"
-              disabled={!hasChange || busy}
+              disabled={!isEnabled || !hasChange || busy}
               onClick={handleConfirm}
-              className="mt-6 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-30"
+              className="mt-6 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-30 disabled:cursor-not-allowed"
             >
               {busy ? (
                 <T en="Updating…" es="Actualizando…" />
+              ) : !isEnabled ? (
+                <T en="Coming soon" es="Próximamente" />
               ) : (
                 <T en="Confirm change" es="Confirmar cambio" />
               )}

@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import type { Subscription } from "@/lib/types";
 
 // GET /apps/portal/api/subscription
@@ -36,6 +37,7 @@ export const GET = withCustomer<Subscription>(async (_req, ctx) => {
   if (!pick) {
     throw new ApiHttpError(404, "subscription_not_found", `No subscription for ${email}`);
   }
+  assertSubscriptionBelongsToCustomer(pick, email, "subscription:GET");
 
   return mapToSubscription(pick, ctx.customerId);
 });

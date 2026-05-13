@@ -3,6 +3,7 @@ import { REWARD_THRESHOLDS, awardDrops } from "@/lib/drops";
 import { klaviyo } from "@/lib/klaviyo";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { ClaimResponse, MerchOption, RewardId } from "@/lib/types";
 
@@ -73,6 +74,7 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     const subs = await seal.getSubscriptionsByEmail(email);
     const sub = subs.find((s) => s.status === "ACTIVE");
     if (!sub) throw new ApiHttpError(409, "no_active_subscription", "Need active subscription to receive bottle");
+    assertSubscriptionBelongsToCustomer(sub, email, "rewards/claim:bottle");
     await seal.addOneTimeProduct(sub.id, variantId, 1);
     fulfillmentMetadata = { sealSubscriptionId: sub.id, variantId };
   } else if (body.rewardId === "merch_1000") {
@@ -89,6 +91,7 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     const subs = await seal.getSubscriptionsByEmail(email);
     const sub = subs.find((s) => s.status === "ACTIVE");
     if (!sub) throw new ApiHttpError(409, "no_active_subscription", "Need active subscription to receive merch");
+    assertSubscriptionBelongsToCustomer(sub, email, "rewards/claim:merch");
     await seal.addOneTimeProduct(sub.id, variantId, 1);
     fulfillmentMetadata = { sealSubscriptionId: sub.id, variantId, option: body.merchOption };
   } else {

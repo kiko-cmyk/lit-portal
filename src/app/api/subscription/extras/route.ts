@@ -2,6 +2,7 @@ import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 
 interface ExtrasBody {
   shopifyVariantId: string;
@@ -40,6 +41,7 @@ export const POST = withCustomer(async (req, ctx) => {
   const subs = await seal.getSubscriptionsByEmail(email);
   const sub = subs.find((s) => s.status === "ACTIVE");
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active sub for ${email}`);
+  assertSubscriptionBelongsToCustomer(sub, email, "subscription/extras");
 
   const next = getNextBillingAttempt(sub);
   if (next && isWithinCutoff(next.date)) {

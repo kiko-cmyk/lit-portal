@@ -2,6 +2,7 @@ import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { klaviyo } from "@/lib/klaviyo";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const HOLD_DAYS = 90;
@@ -48,6 +49,7 @@ export const POST = withCustomer(async (req, ctx) => {
   // Find the most recent subscription (cancelled or otherwise) for this customer
   const sub = subs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
+  assertSubscriptionBelongsToCustomer(sub, email, "subscription/reactivate");
 
   // Reactivate in Seal — Seal asynchronously regenerates billing_attempts
   await seal.reactivateSubscription(sub.id);

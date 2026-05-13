@@ -3,6 +3,7 @@ import { isWithinCutoff } from "@/lib/cutoff";
 import { mapToSubscription, seal, getNextBillingAttempt } from "@/lib/seal";
 import { SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import type { Frequency, Subscription } from "@/lib/types";
 
 const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo", "6mo"];
@@ -55,6 +56,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const subs = await seal.getSubscriptionsByEmail(email);
   const sub = subs.find((s) => s.status === "ACTIVE");
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active sub for ${email}`);
+  assertSubscriptionBelongsToCustomer(sub, email, "subscription/plan");
 
   const next = getNextBillingAttempt(sub);
   if (next && isWithinCutoff(next.date)) {

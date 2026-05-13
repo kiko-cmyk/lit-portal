@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 
 // POST /apps/portal/api/subscription/skip/undo
 // Reverts the most recent skip on the customer's active subscription.
@@ -17,6 +18,7 @@ export const POST = withCustomer(async (req, ctx) => {
   const subs = await seal.getSubscriptionsByEmail(email);
   const sub = subs.find((s) => s.status === "ACTIVE");
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active subscription for ${email}`);
+  assertSubscriptionBelongsToCustomer(sub, email, "subscription/skip/undo");
 
   // Find the most recent skipped attempt
   const skipped = (sub.billing_attempts ?? [])

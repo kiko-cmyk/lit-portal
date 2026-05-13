@@ -3,6 +3,7 @@ import { awardDrops } from "@/lib/drops";
 import { klaviyo } from "@/lib/klaviyo";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CancelStep1Response, CancelStep4Response, CancellationReason } from "@/lib/types";
 
@@ -47,6 +48,7 @@ export const POST = withCustomer(async (req, ctx) => {
       const subs = await seal.getSubscriptionsByEmail(email);
       const sub = subs.find((s) => s.status === "ACTIVE") ?? subs[0];
       if (sub) {
+        assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step1");
         boxes = (sub.billing_attempts ?? []).filter((a) => a.completed_at).length;
       }
     }
@@ -134,6 +136,7 @@ export const POST = withCustomer(async (req, ctx) => {
     const subs = await seal.getSubscriptionsByEmail(email);
     const sub = subs.find((s) => s.status === "ACTIVE");
     if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
+    assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step4");
 
     // 1. Read current state
     const { data: prefs } = await sb

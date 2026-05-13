@@ -3,6 +3,7 @@ import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import type { SkipResponse } from "@/lib/types";
 
 // POST /apps/portal/api/subscription/skip
@@ -20,6 +21,7 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   const subs = await seal.getSubscriptionsByEmail(email);
   const sub = subs.find((s) => s.status === "ACTIVE");
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active subscription for ${email}`);
+  assertSubscriptionBelongsToCustomer(sub, email, "subscription/skip");
 
   const next = getNextBillingAttempt(sub);
   if (!next) throw new ApiHttpError(400, "no_pending_attempt", "Subscription has no upcoming billing attempt");

@@ -2,6 +2,7 @@ import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { EventListItem, HubDashboard, PuzzleState } from "@/lib/types";
 
@@ -36,6 +37,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   if (!sub) {
     throw new ApiHttpError(404, "subscription_not_found", "No active subscription");
   }
+  assertSubscriptionBelongsToCustomer(sub, email, "hub/dashboard");
   const subscription = mapToSubscription(sub, ctx.customerId);
 
   const balance = balanceRes?.balance ?? 0;
