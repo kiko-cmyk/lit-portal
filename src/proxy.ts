@@ -67,7 +67,19 @@ export function proxy(req: NextRequest) {
     return;
   }
 
-  const segments = pathname.split("/").filter(Boolean);
+  // Direct Vercel access (e.g. install/OAuth flow, dev browsing): when the
+  // App Proxy hasn't stripped its prefix, the path arrives with `/apps/portal/`
+  // intact. Strip it so the locale logic below sees the same shape regardless
+  // of entry point. Otherwise the redirect loop prepends the prefix on every
+  // hop until the URL exceeds the browser limit.
+  let workPath = pathname;
+  if (workPath.startsWith("/apps/portal/")) {
+    workPath = workPath.slice("/apps/portal".length) || "/";
+  } else if (workPath === "/apps/portal") {
+    workPath = "/";
+  }
+
+  const segments = workPath.split("/").filter(Boolean);
   const [first, second, ...rest] = segments;
 
   // Already locale-prefixed
