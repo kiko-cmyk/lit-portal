@@ -21,7 +21,11 @@ export function AddressOverlay({
   onUpdated: (updated: Subscription) => void;
 }) {
   const t = useLang();
-  const isEnabled = process.env.NEXT_PUBLIC_ADDRESS_CHANGE_ENABLED === "true";
+  // Shopify scope restrictions block direct contract mutations from our
+  // backend (write_own_subscription_contracts only sees app-owned contracts;
+  // Seal-owned ones are invisible). Until the Subscription Apps Program
+  // approves us, address changes redirect to Seal's hosted portal.
+  const sealPortalUrl = subscription.payment?.sealEditUrl ?? null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<SubscriptionAddress>(
@@ -136,29 +140,24 @@ export function AddressOverlay({
           <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>
         )}
 
-        {!isEnabled && (
-          <div className="mt-6 rounded-2xl bg-[color:var(--color-bold-yellow)]/30 px-5 py-4 text-xs leading-relaxed">
-            <T
-              en="Address changes are temporarily disabled while we wire them up against Shopify directly. You'll be able to confirm here once the new flow is live."
-              es="El cambio de dirección está temporalmente desactivado mientras lo conectamos directamente con Shopify. Podrás confirmar aquí en cuanto el nuevo flujo esté en producción."
-            />
-          </div>
-        )}
-
-        <button
-          type="button"
-          disabled={!isEnabled || busy || !form.address1 || !form.city || !form.postalCode}
-          onClick={handleSave}
-          className="mt-6 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30 disabled:cursor-not-allowed"
+        <a
+          href={sealPortalUrl ?? "#"}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => {
+            if (!sealPortalUrl) e.preventDefault();
+          }}
+          className={`mt-6 block w-full rounded-sm py-4 text-center text-xs font-black uppercase tracking-[0.2em] ${
+            sealPortalUrl
+              ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
+              : "bg-[color:var(--color-bold-yellow)]/30 text-[color:var(--color-lit-grey)]/40 cursor-not-allowed"
+          }`}
         >
-          {busy ? (
-            <T en="Saving…" es="Guardando…" />
-          ) : !isEnabled ? (
-            <T en="Coming soon" es="Próximamente" />
-          ) : (
-            <T en="Save changes" es="Guardar cambios" />
-          )}
-        </button>
+          <T en="Manage address" es="Gestionar dirección" />
+        </a>
+        <p className="mt-2 text-[10px] uppercase tracking-[0.18em] opacity-50 text-center">
+          <T en="Opens secure subscription portal" es="Abre el portal seguro de suscripción" />
+        </p>
       </div>
     </div>
   );
