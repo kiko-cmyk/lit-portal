@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
+import { resolveSubIds } from "@/lib/seal-mapping";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 
@@ -22,10 +23,14 @@ interface AddressBody {
  * PATCH /apps/portal/api/subscription/address
  *
  * Updates BOTH:
- *   - Seal subscription's s_* fields (used for upcoming sub orders)
- *   - Shopify customer's default address (used for any new orders / catalog)
+ *   - Shopify SubscriptionContract deliveryMethod (drives the next sub order)
+ *   - Shopify customer default address (drives any new orders from the storefront)
  *
- * Enforces 72h cutoff on the next sub shipment. NOT yet tested against prod.
+ * Rewrite 2026-05-13: stops calling Seal Merchant API's `edit` action because
+ * it silently no-ops on every field we've tested. Shopify is the source of
+ * truth; Seal projects state via webhooks.
+ *
+ * Enforces 72h cutoff against Shopify's nextBillingDate.
  */
 export const PATCH = withCustomer(async (req, ctx) => {
   const url = new URL(req.url);
@@ -35,26 +40,40 @@ export const PATCH = withCustomer(async (req, ctx) => {
 
   const body = (await req.json().catch(() => ({}))) as AddressBody;
   if (!body.address1 || !body.city || !body.postalCode || !body.country || !body.countryCode) {
-    throw new ApiHttpError(400, "invalid_address", "address1, city, postalCode, country, countryCode are required");
+    throw new ApiHttpError(
+      400,
+      "invalid_address",
+      "address1, city, postalCode, country, countryCode are required",
+    );
   }
 
-  const subs = await seal.getSubscriptionsByEmail(email);
-  const sub = subs.find((s) => s.status === "ACTIVE");
-  if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active sub for ${email}`);
-  assertSubscriptionBelongsToCustomer(sub, email, "subscription/address");
+  const ids = await resolveSubIds(ctx.customerId, email);
+  if (!ids) {
+    throw new ApiHttpError(404, "subscription_not_found", `No active sub for ${email}`);
+  }
 
-  const next = getNextBillingAttempt(sub);
-  if (next && isWithinCutoff(next.date)) {
+  const [contract, sealSub] = await Promise.all([
+    shopifyAdmin.getSubscriptionContract(ids.shopifyContractId),
+    seal.getSubscription(ids.sealSubscriptionId),
+  ]);
+  if (!contract) {
+    throw new ApiHttpError(404, "contract_not_found", `Shopify contract ${ids.shopifyContractId} not found`);
+  }
+  if (!sealSub) {
+    throw new ApiHttpError(404, "seal_sub_not_found", `Seal sub ${ids.sealSubscriptionId} not found`);
+  }
+  assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/address");
+
+  if (contract.nextBillingDate && isWithinCutoff(contract.nextBillingDate)) {
     throw new ApiHttpError(400, "cutoff_passed", "Cannot change address within 72h of next ship");
   }
 
-  // Update Seal first (the more critical of the two — drives the next box)
-  await seal.updateShippingAddress(sub.id, {
+  // 1. Update Shopify SubscriptionContract delivery method (drives sub orders)
+  await shopifyAdmin.updateSubscriptionDeliveryAddress(contract.id, {
     address1: body.address1,
     address2: body.address2,
     city: body.city,
-    postalCode: body.postalCode,
-    country: body.country,
+    zip: body.postalCode,
     countryCode: body.countryCode,
     province: body.province,
     provinceCode: body.provinceCode,
@@ -63,8 +82,8 @@ export const PATCH = withCustomer(async (req, ctx) => {
     phone: body.phone,
   });
 
-  // Then sync Shopify default address (best-effort — log but don't fail
-  // the request if Shopify-side is rejected, since Seal already has it).
+  // 2. Sync Shopify default address (drives one-off storefront orders).
+  //    Best-effort — log but don't fail if it 4xxs.
   try {
     await shopifyAdmin.updateCustomerDefaultAddress(ctx.customerId, {
       address1: body.address1,
@@ -83,8 +102,9 @@ export const PATCH = withCustomer(async (req, ctx) => {
     console.warn("[address-sync] Shopify default address update failed:", err);
   }
 
-  // Return the updated subscription
-  const refreshed = await seal.getSubscription(sub.id);
+  // 3. Re-fetch Seal for the response (eventual consistency — may still
+  //    show old address until Seal's Shopify webhook catches up).
+  const refreshed = await seal.getSubscription(ids.sealSubscriptionId);
   return {
     updated: true,
     appliesFrom: refreshed ? getNextBillingAttempt(refreshed)?.date ?? null : null,

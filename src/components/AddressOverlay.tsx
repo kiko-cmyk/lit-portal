@@ -21,6 +21,7 @@ export function AddressOverlay({
   onUpdated: (updated: Subscription) => void;
 }) {
   const t = useLang();
+  const isEnabled = process.env.NEXT_PUBLIC_ADDRESS_CHANGE_ENABLED === "true";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<SubscriptionAddress>(
@@ -135,13 +136,28 @@ export function AddressOverlay({
           <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>
         )}
 
+        {!isEnabled && (
+          <div className="mt-6 rounded-2xl bg-[color:var(--color-bold-yellow)]/30 px-5 py-4 text-xs leading-relaxed">
+            <T
+              en="Address changes are temporarily disabled while we wire them up against Shopify directly. You'll be able to confirm here once the new flow is live."
+              es="El cambio de dirección está temporalmente desactivado mientras lo conectamos directamente con Shopify. Podrás confirmar aquí en cuanto el nuevo flujo esté en producción."
+            />
+          </div>
+        )}
+
         <button
           type="button"
-          disabled={busy || !form.address1 || !form.city || !form.postalCode}
+          disabled={!isEnabled || busy || !form.address1 || !form.city || !form.postalCode}
           onClick={handleSave}
-          className="mt-6 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
+          className="mt-6 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30 disabled:cursor-not-allowed"
         >
-          {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Save changes" es="Guardar cambios" />}
+          {busy ? (
+            <T en="Saving…" es="Guardando…" />
+          ) : !isEnabled ? (
+            <T en="Coming soon" es="Próximamente" />
+          ) : (
+            <T en="Save changes" es="Guardar cambios" />
+          )}
         </button>
       </div>
     </div>

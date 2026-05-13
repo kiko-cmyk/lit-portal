@@ -6,10 +6,17 @@ import type { CustomerProfile } from "@/lib/types";
 // MVP: pulls from Shopify customer record. When Supabase lands, will also
 // merge in customer_preferences (language, whatsapp_opt_in, tier, etc).
 export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
-  const c = await shopifyAdmin.getCustomer(ctx.customerId);
+  const [c, languagePref] = await Promise.all([
+    shopifyAdmin.getCustomer(ctx.customerId),
+    shopifyAdmin
+      .getCustomerMetafield(ctx.customerId, "lit_portal", "language_pref")
+      .catch(() => null),
+  ]);
   if (!c) {
     throw new ApiHttpError(404, "customer_not_found", `No Shopify customer ${ctx.customerId}`);
   }
+
+  const lang: "en" | "es" = languagePref === "es" || languagePref === "en" ? languagePref : "en";
 
   return {
     name: [c.firstName, c.lastName].filter(Boolean).join(" ").trim() || c.email,
@@ -17,7 +24,7 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
     phone: c.phone,
     memberSince: c.createdAt,
     boxesReceived: parseInt(c.numberOfOrders, 10) || 0,
-    languagePref: "en", // TODO when Supabase: read customer_preferences.language
+    languagePref: lang,
     tierEarned: false, // TODO when Supabase: read drops_balances.tier_earned_at
   };
 });

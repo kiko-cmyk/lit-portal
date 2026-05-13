@@ -604,6 +604,112 @@ class ShopifyAdminClient {
   }
 
   /**
+   * Update the shipping address on a subscription contract. Same draft/commit
+   * pattern as updateSubscriptionLine, only the middle mutation differs
+   * (subscriptionDraftDeliveryMethodUpdate instead of line update).
+   *
+   * The Shipping/Local input shapes are documented at:
+   *   https://shopify.dev/docs/api/admin-graphql/latest/input-objects/SubscriptionShippingDeliveryMethodInput
+   */
+  async updateSubscriptionDeliveryAddress(
+    contractId: string,
+    address: {
+      address1: string;
+      address2?: string;
+      city: string;
+      zip: string;
+      countryCode: string;
+      provinceCode?: string;
+      province?: string;
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+    },
+  ): Promise<void> {
+    // 1. Open draft
+    const draftData = await this.graphql<{
+      subscriptionContractUpdate: {
+        draft: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string; code?: string }>;
+      };
+    }>(
+      `mutation contractUpdate($contractId: ID!) {
+         subscriptionContractUpdate(contractId: $contractId) {
+           draft { id }
+           userErrors { field message code }
+         }
+       }`,
+      { contractId },
+    );
+    if (draftData.subscriptionContractUpdate.userErrors.length > 0) {
+      throw new Error(
+        `Shopify subscriptionContractUpdate(address): ${JSON.stringify(draftData.subscriptionContractUpdate.userErrors)}`,
+      );
+    }
+    const draftId = draftData.subscriptionContractUpdate.draft?.id;
+    if (!draftId) throw new Error("subscriptionContractUpdate(address) returned no draft");
+
+    // 2. Update delivery method (shipping address)
+    const deliveryData = await this.graphql<{
+      subscriptionDraftDeliveryMethodUpdate: {
+        draft: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string; code?: string }>;
+      };
+    }>(
+      `mutation methodUpdate($draftId: ID!, $input: SubscriptionDeliveryMethodInput!) {
+         subscriptionDraftDeliveryMethodUpdate(draftId: $draftId, deliveryMethod: $input) {
+           draft { id }
+           userErrors { field message code }
+         }
+       }`,
+      {
+        draftId,
+        input: {
+          shipping: {
+            address: {
+              address1: address.address1,
+              address2: address.address2,
+              city: address.city,
+              zip: address.zip,
+              countryCode: address.countryCode,
+              provinceCode: address.provinceCode,
+              firstName: address.firstName,
+              lastName: address.lastName,
+              phone: address.phone,
+            },
+          },
+        },
+      },
+    );
+    if (deliveryData.subscriptionDraftDeliveryMethodUpdate.userErrors.length > 0) {
+      throw new Error(
+        `Shopify subscriptionDraftDeliveryMethodUpdate: ${JSON.stringify(deliveryData.subscriptionDraftDeliveryMethodUpdate.userErrors)}`,
+      );
+    }
+
+    // 3. Commit
+    const commitData = await this.graphql<{
+      subscriptionDraftCommit: {
+        contract: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string; code?: string }>;
+      };
+    }>(
+      `mutation commit($draftId: ID!) {
+         subscriptionDraftCommit(draftId: $draftId) {
+           contract { id }
+           userErrors { field message code }
+         }
+       }`,
+      { draftId },
+    );
+    if (commitData.subscriptionDraftCommit.userErrors.length > 0) {
+      throw new Error(
+        `Shopify subscriptionDraftCommit(address): ${JSON.stringify(commitData.subscriptionDraftCommit.userErrors)}`,
+      );
+    }
+  }
+
+  /**
    * Swap the variant / selling plan / quantity on a single subscription line.
    * Three-step Shopify flow: open draft, update line in draft, commit.
    *
