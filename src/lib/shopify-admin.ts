@@ -457,6 +457,261 @@ class ShopifyAdminClient {
       { customerId: gid, addressId: newAddrId },
     );
   }
+
+  // ───────────────────────────────────────────────────────────────
+  // Subscription contracts (Shopify Admin GraphQL)
+  //
+  // Shopify is the source of truth for variant_id / selling_plan_id /
+  // quantity. Seal projects this state and syncs via webhooks. Mutating
+  // via Seal Merchant API silently no-ops (verified 2026-05-13), so we
+  // mutate Shopify directly and let Seal catch up.
+  //
+  // Requires the app scopes:
+  //   - read_own_subscription_contracts
+  //   - write_own_subscription_contracts
+  // (added 2026-05-13 — token refreshed via the OAuth callback flow).
+  // ───────────────────────────────────────────────────────────────
+
+  /**
+   * List subscription contracts for a customer. Filters out cancelled by default.
+   */
+  async listSubscriptionContractsByCustomer(
+    customerId: string,
+    opts: { includeCancelled?: boolean; first?: number } = {},
+  ): Promise<SubscriptionContractSummary[]> {
+    const gid = customerId.startsWith("gid://")
+      ? customerId
+      : `gid://shopify/Customer/${customerId}`;
+    const first = opts.first ?? 10;
+    const data = await this.graphql<{
+      customer: {
+        subscriptionContracts: {
+          edges: Array<{
+            node: {
+              id: string;
+              status: string;
+              nextBillingDate: string | null;
+              originOrder: { id: string; name: string } | null;
+              lines: {
+                edges: Array<{
+                  node: {
+                    id: string;
+                    variantId: string | null;
+                    sellingPlanId: string | null;
+                    sellingPlanName: string | null;
+                    quantity: number;
+                    title: string;
+                  };
+                }>;
+              };
+            };
+          }>;
+        };
+      } | null;
+    }>(
+      `query custContracts($id: ID!, $first: Int!) {
+         customer(id: $id) {
+           subscriptionContracts(first: $first) {
+             edges { node {
+               id status nextBillingDate
+               originOrder { id name }
+               lines(first: 10) { edges { node {
+                 id variantId sellingPlanId sellingPlanName quantity title
+               } } }
+             } }
+           }
+         }
+       }`,
+      { id: gid, first },
+    );
+    const edges = data.customer?.subscriptionContracts.edges ?? [];
+    return edges
+      .map((e) => ({
+        id: e.node.id,
+        status: e.node.status,
+        nextBillingDate: e.node.nextBillingDate,
+        originOrderId: e.node.originOrder?.id ?? null,
+        originOrderName: e.node.originOrder?.name ?? null,
+        lines: e.node.lines.edges.map((l) => ({
+          id: l.node.id,
+          variantId: l.node.variantId,
+          sellingPlanId: l.node.sellingPlanId,
+          sellingPlanName: l.node.sellingPlanName,
+          quantity: l.node.quantity,
+          title: l.node.title,
+        })),
+      }))
+      .filter((c) => opts.includeCancelled || c.status !== "CANCELLED");
+  }
+
+  /**
+   * Get a single subscription contract by GID.
+   */
+  async getSubscriptionContract(
+    contractId: string,
+  ): Promise<SubscriptionContractSummary | null> {
+    const gid = contractId.startsWith("gid://")
+      ? contractId
+      : `gid://shopify/SubscriptionContract/${contractId}`;
+    const data = await this.graphql<{
+      subscriptionContract: {
+        id: string;
+        status: string;
+        nextBillingDate: string | null;
+        originOrder: { id: string; name: string } | null;
+        lines: {
+          edges: Array<{
+            node: {
+              id: string;
+              variantId: string | null;
+              sellingPlanId: string | null;
+              sellingPlanName: string | null;
+              quantity: number;
+              title: string;
+            };
+          }>;
+        };
+      } | null;
+    }>(
+      `query contract($id: ID!) {
+         subscriptionContract(id: $id) {
+           id status nextBillingDate
+           originOrder { id name }
+           lines(first: 10) { edges { node {
+             id variantId sellingPlanId sellingPlanName quantity title
+           } } }
+         }
+       }`,
+      { id: gid },
+    );
+    const c = data.subscriptionContract;
+    if (!c) return null;
+    return {
+      id: c.id,
+      status: c.status,
+      nextBillingDate: c.nextBillingDate,
+      originOrderId: c.originOrder?.id ?? null,
+      originOrderName: c.originOrder?.name ?? null,
+      lines: c.lines.edges.map((l) => ({
+        id: l.node.id,
+        variantId: l.node.variantId,
+        sellingPlanId: l.node.sellingPlanId,
+        sellingPlanName: l.node.sellingPlanName,
+        quantity: l.node.quantity,
+        title: l.node.title,
+      })),
+    };
+  }
+
+  /**
+   * Swap the variant / selling plan / quantity on a single subscription line.
+   * Three-step Shopify flow: open draft, update line in draft, commit.
+   *
+   * `lineId` and `contractId` must both be Shopify GIDs.
+   */
+  async updateSubscriptionLine(
+    contractId: string,
+    lineId: string,
+    patch: { variantId?: string; sellingPlanId?: string; quantity?: number },
+  ): Promise<void> {
+    // 1. Open draft
+    const draftData = await this.graphql<{
+      subscriptionContractUpdate: {
+        draft: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string; code?: string }>;
+      };
+    }>(
+      `mutation contractUpdate($contractId: ID!) {
+         subscriptionContractUpdate(contractId: $contractId) {
+           draft { id }
+           userErrors { field message code }
+         }
+       }`,
+      { contractId },
+    );
+    if (draftData.subscriptionContractUpdate.userErrors.length > 0) {
+      throw new Error(
+        `Shopify subscriptionContractUpdate: ${JSON.stringify(draftData.subscriptionContractUpdate.userErrors)}`,
+      );
+    }
+    const draftId = draftData.subscriptionContractUpdate.draft?.id;
+    if (!draftId) throw new Error("subscriptionContractUpdate returned no draft");
+
+    // 2. Update line in draft
+    const lineInput: Record<string, unknown> = {};
+    if (patch.variantId !== undefined) {
+      lineInput.productVariantId = patch.variantId.startsWith("gid://")
+        ? patch.variantId
+        : `gid://shopify/ProductVariant/${patch.variantId}`;
+    }
+    if (patch.sellingPlanId !== undefined) {
+      lineInput.sellingPlanId = patch.sellingPlanId.startsWith("gid://")
+        ? patch.sellingPlanId
+        : `gid://shopify/SellingPlan/${patch.sellingPlanId}`;
+    }
+    if (patch.quantity !== undefined) {
+      lineInput.quantity = patch.quantity;
+    }
+
+    const updateData = await this.graphql<{
+      subscriptionDraftLineUpdate: {
+        lineUpdated: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string; code?: string }>;
+      };
+    }>(
+      `mutation lineUpdate($draftId: ID!, $lineId: ID!, $input: SubscriptionLineUpdateInput!) {
+         subscriptionDraftLineUpdate(draftId: $draftId, lineId: $lineId, input: $input) {
+           lineUpdated { id }
+           userErrors { field message code }
+         }
+       }`,
+      { draftId, lineId, input: lineInput },
+    );
+    if (updateData.subscriptionDraftLineUpdate.userErrors.length > 0) {
+      throw new Error(
+        `Shopify subscriptionDraftLineUpdate: ${JSON.stringify(updateData.subscriptionDraftLineUpdate.userErrors)}`,
+      );
+    }
+
+    // 3. Commit
+    const commitData = await this.graphql<{
+      subscriptionDraftCommit: {
+        contract: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string; code?: string }>;
+      };
+    }>(
+      `mutation commit($draftId: ID!) {
+         subscriptionDraftCommit(draftId: $draftId) {
+           contract { id }
+           userErrors { field message code }
+         }
+       }`,
+      { draftId },
+    );
+    if (commitData.subscriptionDraftCommit.userErrors.length > 0) {
+      throw new Error(
+        `Shopify subscriptionDraftCommit: ${JSON.stringify(commitData.subscriptionDraftCommit.userErrors)}`,
+      );
+    }
+  }
+}
+
+export interface SubscriptionContractLine {
+  id: string;
+  variantId: string | null;
+  sellingPlanId: string | null;
+  sellingPlanName: string | null;
+  quantity: number;
+  title: string;
+}
+
+export interface SubscriptionContractSummary {
+  id: string;
+  status: string;
+  nextBillingDate: string | null;
+  originOrderId: string | null;
+  originOrderName: string | null;
+  lines: SubscriptionContractLine[];
 }
 
 export const shopifyAdmin = new ShopifyAdminClient();
