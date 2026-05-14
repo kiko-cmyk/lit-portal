@@ -1,33 +1,52 @@
 @import "tailwindcss";
 
 /*
- * LIT brand tokens — 6 colors only (per Master Spec § 10).
- * Three color zones map pages to background/accent combos:
- *   - Board 1 (warm cream)        → Hub, Account
- *   - Board 2 (vintage retro)     → Drops, Collection (Phase 2)
- *   - Board 3 (dark indigo night) → The World, Cancel takeover, First-login
+ * LIT brand tokens — based on the hi-fi designs in
+ * portal-cliente-web/designs/mobile/*.html. Three color zones map
+ * pages to background/accent combos:
  *
- * Fonts: Clash Display for display, Barlow for body. Loaded via next/font.
+ *   - zone-cream   → Hub, Account, Confirmation
+ *   - zone-retro   → Drops, Collection
+ *   - zone-indigo  → The World, Cancel takeover, First-login
+ *
+ * Fonts: Clash Display for display, Barlow for body — loaded via
+ * next/font in src/app/layout.tsx.
  */
 
 @theme {
+  /* ─── Core palette (Master Spec § 10) ─── */
   --color-brisky-cream: #E9EBDE;
+  --color-brisky-warm: #E3DFC9;
   --color-sharp-white: #F8F9F2;
   --color-zesty-beige: #CFBFAD;
   --color-bold-yellow: #EBEE62;
+  --color-bold-yellow-dark: #C8CB42;
   --color-lit-grey: #323743;
   --color-dark-indigo: #373554;
+  --color-darker-indigo: #1F1D30;
+  --color-deepest-indigo: #0F0E1A;
 
-  /* Aliases used in HTML hi-fi (matching Diane's CSS variables) */
-  --color-cream: #E9EBDE;
+  /* ─── Warm neutrals from hi-fi ─── */
+  --color-cream: #F5F0DD;
+  --color-warm-gray: #7A746A;
+  --color-warm-gray-lt: #B5AE9F;
+
+  /* ─── Retro zone accents ─── */
+  --color-retro-ochre: #C89B5F;
+  --color-retro-rust: #8B4A3A;
+
+  /* ─── Semantic states ─── */
+  --color-danger: #9B3D3D;
+  --color-success: #547862;
+
+  /* ─── Aliases for parity with raw hi-fi CSS variables ─── */
   --color-yellow: #EBEE62;
   --color-grey: #323743;
   --color-indigo: #373554;
-  --color-deepest-indigo: #0F0E1A;
-  --color-darker-indigo: #1B1A2E;
 
+  /* ─── Typography ─── */
   --font-display: var(--font-clash-display, "Clash Display"), "Helvetica Neue", Arial, sans-serif;
-  --font-body: var(--font-barlow, "Barlow"), system-ui, -apple-system, sans-serif;
+  --font-body: var(--font-barlow, "Barlow"), -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
 }
 
 :root {
@@ -45,7 +64,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Display headlines use Clash */
+/* Display headlines use Clash Display, uppercase, tight tracking. */
 h1, h2, h3, .display {
   font-family: var(--font-display);
   font-weight: 900;
@@ -54,11 +73,8 @@ h1, h2, h3, .display {
   text-transform: uppercase;
 }
 
-/* No emojis policy — use word/SVG icons. */
-
 /* Clickable affordances — applied globally so individual buttons don't
-   have to remember `cursor-pointer`. Disabled buttons keep the default
-   not-allowed cursor. */
+   have to remember `cursor-pointer`. Disabled stays not-allowed. */
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]),
 a[href] {
@@ -76,16 +92,115 @@ button:disabled,
   cursor: not-allowed;
 }
 
-/* Color-zone helpers (apply on page wrappers): */
+/* ─── Color-zone helpers (apply on page wrappers) ─── */
 .zone-cream {
   --background: var(--color-brisky-cream);
   --foreground: var(--color-lit-grey);
 }
 .zone-retro {
-  --background: #E2C9A0; /* warm retro placeholder; refine when Drops port lands */
+  --background: var(--color-cream);
   --foreground: var(--color-lit-grey);
 }
 .zone-indigo {
   --background: var(--color-deepest-indigo);
   --foreground: var(--color-brisky-cream);
+}
+
+/* ─── Eyebrow / lead labels (10px uppercase, wide tracking) ─── */
+.lead-label {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--color-warm-gray);
+}
+
+/* ─── Section labels (slightly tighter than lead-label) ─── */
+.section-label {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--color-warm-gray);
+}
+
+/* ─── Yellow pill (used by tier badge, status chips) ─── */
+.pill {
+  display: inline-block;
+  font-family: var(--font-body);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-weight: 800;
+  padding: 6px 12px;
+  border-radius: 2px;
+}
+.pill-yellow {
+  background: var(--color-bold-yellow);
+  color: var(--color-lit-grey);
+}
+.pill-grey {
+  background: rgba(50, 55, 67, 0.08);
+  color: var(--color-warm-gray);
+}
+
+/* ─── Bottom sheet (used in overlays) ─── */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes tier-appear {
+  0%   { transform: scale(0.5); opacity: 0; }
+  60%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes pulse-slot {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(40, 35, 28, 0.7);
+  z-index: 350;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.sheet {
+  background: var(--color-brisky-cream);
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-width: 480px;
+  padding: 22px 24px 30px;
+  animation: sheet-up 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  max-height: 92%;
+  overflow-y: auto;
+}
+.sheet-handle {
+  width: 40px;
+  height: 4px;
+  background: var(--color-warm-gray-lt);
+  border-radius: 2px;
+  margin: 0 auto 16px;
+}
+
+/* ─── Toast (bottom-positioned ephemeral notification) ─── */
+.toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-lit-grey);
+  color: var(--color-bold-yellow);
+  padding: 12px 20px;
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  z-index: 400;
+  white-space: nowrap;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
 }
