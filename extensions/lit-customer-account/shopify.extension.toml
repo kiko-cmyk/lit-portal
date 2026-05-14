@@ -7,7 +7,8 @@
 # variants / selling plans / address — the operations Seal's Merchant
 # API doesn't expose.
 
-api_version = "2025-04"
+api_version = "2025-07"
+uid = "d135eba3-06b7-8042-0f4b-3f0b3b6de71e9db0887d"
 
 [[extensions]]
 name = "LIT Hub"
@@ -17,7 +18,3 @@ type = "ui_extension"
   [[extensions.targeting]]
   module = "./src/CustomerAccountPage.tsx"
   target = "customer-account.page.render"
-
-  [[extensions.targeting]]
-  module = "./src/CustomerAccountMenuItem.tsx"
-  target = "customer-account.order-index.menu-item.render"

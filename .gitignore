@@ -2,7 +2,11 @@
 
 # dependencies
 /node_modules
-/.pnp
+/extensions/*/node_modules
+/extensions/*/package-lock.json
+/extensions/*/dist
+/.shopify
+.pnp
 .pnp.*
 .yarn/*
 !.yarn/patches
