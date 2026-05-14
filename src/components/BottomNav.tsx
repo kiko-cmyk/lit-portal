@@ -36,7 +36,7 @@ export function BottomNav() {
   const t = useLang();
   return (
     <nav
-      className="sticky bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)] md:hidden"
+      className="sticky bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3.5 pt-2.5 pb-6 md:hidden"
       aria-label="Primary"
     >
       {ITEMS.map((it) => {
@@ -45,15 +45,15 @@ export function BottomNav() {
           <Link
             key={it.canonical}
             href={portalHref(lang, it.route)}
-            className={`flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-bold uppercase tracking-[0.15em] cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 py-2 text-[9px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
               active
-                ? "text-[color:var(--color-lit-grey)]"
-                : "text-[color:var(--color-lit-grey)]/45"
+                ? "font-black text-[color:var(--color-lit-grey)]"
+                : "text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
             }`}
           >
             <span>{t({ en: it.en, es: it.es })}</span>
             <span
-              className={`h-[2px] w-6 ${active ? "bg-[color:var(--color-bold-yellow)]" : "bg-transparent"}`}
+              className={`h-1 w-1 rounded-full ${active ? "bg-[color:var(--color-bold-yellow)]" : "bg-transparent"}`}
             />
           </Link>
         );
