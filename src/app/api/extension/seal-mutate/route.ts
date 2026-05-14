@@ -23,12 +23,26 @@ import { NextResponse, type NextRequest } from "next/server";
 const SEAL_ENDPOINT =
   "https://app.sealsubscriptions.com/shopify/public/proxy/extension/api/edit-subscription-v04.php";
 
+// Customer Account UI Extensions run in a Web Worker with origin `null`,
+// so the response must allow any origin and we need an OPTIONS preflight
+// handler for the custom Authorization header.
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Max-Age": "86400",
+} as const;
+
+export function OPTIONS(): NextResponse {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const auth = req.headers.get("authorization") ?? "";
   if (!auth.startsWith("Bearer ")) {
     return NextResponse.json(
       { success: false, error: "missing_jwt", message: "Authorization: Bearer <jwt> required" },
-      { status: 401 },
+      { status: 401, headers: CORS_HEADERS },
     );
   }
   const jwt = auth.slice("Bearer ".length);
@@ -51,13 +65,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch {
     return NextResponse.json(
       { success: false, error: "invalid_body", message: "JSON body required" },
-      { status: 400 },
+      { status: 400, headers: CORS_HEADERS },
     );
   }
   if (!body.action || !body.payload) {
     return NextResponse.json(
       { success: false, error: "missing_fields", message: "action + payload required" },
-      { status: 400 },
+      { status: 400, headers: CORS_HEADERS },
     );
   }
 
@@ -105,6 +119,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       jwtClaims: claims,
     },
     // Pass through Seal's success status so the popup's caller can branch
-    { status: sealSuccess ? 200 : sealRes.status >= 400 ? sealRes.status : 502 },
+    {
+      status: sealSuccess ? 200 : sealRes.status >= 400 ? sealRes.status : 502,
+      headers: CORS_HEADERS,
+    },
   );
 }
