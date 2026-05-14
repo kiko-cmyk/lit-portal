@@ -42,6 +42,11 @@ export const BOX_COUNT_BY_VARIANT: Record<string, 1 | 2 | 3 | 4 | 5 | 6> =
 /**
  * Seal selling plan ID by frequency. The selling plan determines cadence only;
  * NO discount config (discount is on the variant, not the plan).
+ *
+ * These are the *canonical* IDs we write on plan changes. Legacy IDs (see
+ * LEGACY_SELLING_PLAN_ALIASES) are read-only — subs on those IDs still
+ * resolve to a known Frequency, but a plan change migrates them to the
+ * canonical IDs.
  */
 export const SELLING_PLAN_BY_FREQUENCY: Record<Frequency, string> = {
   "15d": "691259801949", // Envío 15 días
@@ -55,14 +60,27 @@ export const SELLING_PLAN_BY_FREQUENCY: Record<Frequency, string> = {
 };
 
 /**
- * Reverse lookup — selling plan ID back to our Frequency enum.
+ * Read-only aliases for legacy selling plan IDs that pre-date the uniform
+ * "Envío X días/mes/meses" naming. Subs on these still exist (e.g., Juan's
+ * `12635109` uses `690752356701`), so reads must resolve them to a Frequency.
  */
-export const FREQUENCY_BY_SELLING_PLAN: Record<string, Frequency> =
-  Object.fromEntries(
+export const LEGACY_SELLING_PLAN_ALIASES: Record<string, Frequency> = {
+  "690752356701": "1mo", // "Envío mensual." (legacy, with trailing period)
+  "690752389469": "3mo", // "Envío trimestral." (legacy)
+};
+
+/**
+ * Reverse lookup — selling plan ID back to our Frequency enum. Includes
+ * legacy aliases so existing subs render correctly in the UI.
+ */
+export const FREQUENCY_BY_SELLING_PLAN: Record<string, Frequency> = {
+  ...Object.fromEntries(
     (Object.entries(SELLING_PLAN_BY_FREQUENCY) as [Frequency, string][]).map(
       ([freq, id]) => [id, freq],
     ),
-  );
+  ),
+  ...LEGACY_SELLING_PLAN_ALIASES,
+};
 
 /**
  * The 6 box-count discount tiers — for UI display.

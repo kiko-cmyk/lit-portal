@@ -285,6 +285,55 @@ class ShopifyAdminClient {
   }
 
   /**
+   * Fetch the fields Seal's `add_items` action needs to construct a new
+   * subscription line: product/variant gids, title, sku, price, taxability,
+   * shipping flag. Used by the plan-change flow.
+   */
+  async getVariantForSealAddItems(variantId: string): Promise<{
+    productId: string;
+    variantId: string;
+    title: string;
+    sku: string;
+    price: string;
+    taxable: boolean;
+    requiresShipping: boolean;
+  } | null> {
+    const gid = variantId.startsWith("gid://")
+      ? variantId
+      : `gid://shopify/ProductVariant/${variantId}`;
+    const data = await this.graphql<{
+      productVariant: {
+        id: string;
+        title: string;
+        sku: string | null;
+        price: string;
+        taxable: boolean;
+        requiresShipping: boolean;
+        product: { id: string; title: string };
+      } | null;
+    }>(
+      `query variantForSeal($id: ID!) {
+         productVariant(id: $id) {
+           id title sku price taxable requiresShipping
+           product { id title }
+         }
+       }`,
+      { id: gid },
+    );
+    const v = data.productVariant;
+    if (!v) return null;
+    return {
+      productId: v.product.id.replace(/^gid:\/\/shopify\/Product\//, ""),
+      variantId: v.id.replace(/^gid:\/\/shopify\/ProductVariant\//, ""),
+      title: v.product.title,
+      sku: v.sku ?? "",
+      price: v.price,
+      taxable: v.taxable,
+      requiresShipping: v.requiresShipping,
+    };
+  }
+
+  /**
    * Validate that a variant ID belongs to a product tagged `add-to-box`.
    * Used by POST /subscription/extras to prevent customers from adding
    * arbitrary products to their next charge.

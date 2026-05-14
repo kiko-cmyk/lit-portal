@@ -261,6 +261,88 @@ class SealClient {
   }
 
   /**
+   * Add one or more items to a subscription. Used together with `removeItems`
+   * to swap a variant — Seal has no direct swap endpoint, confirmed by
+   * Seal support 2026-05-14: "the only way to swap products in a subscription
+   * via the API is to add the new product, and then remove the old product."
+   *
+   * GOTCHA: `price` is per-unit, not total. With quantity=2 and price=10,
+   * Seal charges 20. To preserve a desired total, divide first. We omit
+   * `price` here when caller doesn't pass it — Seal then defaults to the
+   * variant's current Shopify price (safer for routine plan changes).
+   *
+   * GOTCHA: any discount_codes active on a REMOVED item carry over to the
+   * newly-added item. Caller that wants to drop a discount on swap must
+   * call DELETE /subscription-discount-code afterwards.
+   *
+   * `selling_plan_id` — undocumented but appears to be accepted per Seal's
+   * own portal mutations. We pass it when caller wants a per-line cadence
+   * (variant + plan combined change). Seal may also need a separate
+   * `edit { delivery_interval }` call to make the subscription-level
+   * cadence match — to be confirmed when this code runs against prod.
+   */
+  async addItems(
+    subscriptionId: number,
+    items: Array<{
+      productId: string;
+      variantId: string;
+      quantity: number;
+      title: string;
+      sku: string;
+      taxable?: boolean;
+      requiresShipping?: boolean;
+      price?: string;       // per-unit; omit to let Seal use Shopify default
+      sellingPlanId?: string;
+      properties?: Record<string, unknown>;
+    }>,
+  ): Promise<void> {
+    const body = {
+      action: "add_items",
+      id: subscriptionId,
+      add_items: items.map((it) => ({
+        product_id: it.productId,
+        variant_id: it.variantId,
+        quantity: it.quantity,
+        title: it.title,
+        sku: it.sku,
+        taxable: it.taxable === false ? 0 : 1,
+        requires_shipping: it.requiresShipping === false ? 0 : 1,
+        one_time: 0,
+        ...(it.price !== undefined ? { price: it.price } : {}),
+        ...(it.sellingPlanId !== undefined ? { selling_plan_id: it.sellingPlanId } : {}),
+        ...(it.properties !== undefined ? { properties: it.properties } : {}),
+      })),
+    };
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal add_items rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
+   * Remove items by their Seal item ID (`SealItem.id`, NOT variant_id).
+   */
+  async removeItems(subscriptionId: number, itemIds: number[]): Promise<void> {
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          action: "remove_items",
+          id: subscriptionId,
+          remove_items: itemIds,
+        }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal remove_items rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
    * Skip a specific billing attempt.
    * Per reference_seal_api.md: action="skip" needs id + subscription_id.
    */
