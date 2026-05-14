@@ -166,15 +166,35 @@ class SealClient {
   }
 
   async getSubscription(id: number): Promise<SealSubscription | null> {
-    const params = new URLSearchParams({
-      "with-items": "true",
-      "with-billing-attempts": "true",
-      id: String(id),
-    });
-    const data = await this.req<SealListResponse<SealSubscription>>(
-      `/subscriptions?${params.toString()}`,
+    // Seal silently ignores `?id=` (verified 2026-04-27, re-confirmed
+    // 2026-05-14 — passing id=12635109 returned the first sub of page 1
+    // unfiltered). We have to paginate and match client-side, same pattern
+    // as getSubscriptionsByEmail.
+    const fetchPage = (page: number) => {
+      const params = new URLSearchParams({
+        "with-items": "true",
+        "with-billing-attempts": "true",
+        page: String(page),
+      });
+      return this.req<SealListResponse<SealSubscription>>(
+        `/subscriptions?${params.toString()}`,
+      ).catch(() => null);
+    };
+
+    const page1 = await fetchPage(1);
+    const hit1 = page1?.payload?.subscriptions?.find((s) => s.id === id);
+    if (hit1) return hit1;
+    const totalPages = page1?.payload?.total_pages ?? 1;
+    if (totalPages <= 1) return null;
+
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2)),
     );
-    return data.payload?.subscriptions?.[0] ?? null;
+    for (const data of rest) {
+      const hit = data?.payload?.subscriptions?.find((s) => s.id === id);
+      if (hit) return hit;
+    }
+    return null;
   }
 
   // ────── Subscription-level mutations (PUT /subscription) ──────

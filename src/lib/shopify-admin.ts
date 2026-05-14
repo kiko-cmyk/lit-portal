@@ -301,6 +301,8 @@ class ShopifyAdminClient {
     const gid = variantId.startsWith("gid://")
       ? variantId
       : `gid://shopify/ProductVariant/${variantId}`;
+    // Note: `requiresShipping` moved from ProductVariant to inventoryItem
+    // in Admin API 2024-01+ — fetching it via inventoryItem.requiresShipping.
     const data = await this.graphql<{
       productVariant: {
         id: string;
@@ -308,13 +310,14 @@ class ShopifyAdminClient {
         sku: string | null;
         price: string;
         taxable: boolean;
-        requiresShipping: boolean;
+        inventoryItem: { requiresShipping: boolean };
         product: { id: string; title: string };
       } | null;
     }>(
       `query variantForSeal($id: ID!) {
          productVariant(id: $id) {
-           id title sku price taxable requiresShipping
+           id title sku price taxable
+           inventoryItem { requiresShipping }
            product { id title }
          }
        }`,
@@ -329,7 +332,7 @@ class ShopifyAdminClient {
       sku: v.sku ?? "",
       price: v.price,
       taxable: v.taxable,
-      requiresShipping: v.requiresShipping,
+      requiresShipping: v.inventoryItem.requiresShipping,
     };
   }
 
