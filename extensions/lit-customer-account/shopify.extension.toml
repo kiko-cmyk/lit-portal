@@ -1,0 +1,23 @@
+# Customer Account UI Extension — LIT
+#
+# Renders a full page inside Shopify's customer accounts at
+# tracking.litsalt.com/account/pages/lit-hub. From inside, we have access
+# to a customer-scoped JWT (via Shopify's session token API) which we
+# forward to Seal's hidden `edit-subscription-v04.php` endpoint to mutate
+# variants / selling plans / address — the operations Seal's Merchant
+# API doesn't expose.
+
+api_version = "2025-04"
+
+[[extensions]]
+name = "LIT Hub"
+handle = "lit-customer-account"
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/CustomerAccountPage.tsx"
+  target = "customer-account.page.render"
+
+  [[extensions.targeting]]
+  module = "./src/CustomerAccountMenuItem.tsx"
+  target = "customer-account.order-index.menu-item.render"
