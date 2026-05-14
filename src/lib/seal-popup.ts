@@ -7,7 +7,10 @@
  * and the customer is back on the LIT portal within <2 s on the happy path.
  */
 
-const EXTENSION_BASE = "https://tracking.litsalt.com/account/pages/lit-customer-account";
+// URL assigned by Shopify when the merchant adds the LIT Hub extension as a
+// customer account page (Settings → Customer accounts → Customize → Apps).
+// The slug is a Shopify-generated UUID, not our extension handle.
+const EXTENSION_BASE = "https://tracking.litsalt.com/pages/019e25bb-3d78-795e-b473-cb0576e8d20e";
 const POPUP_WIDTH = 420;
 const POPUP_HEIGHT = 360;
 const TIMEOUT_MS = 30_000;
