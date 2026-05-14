@@ -15,6 +15,11 @@ name = "LIT Hub"
 handle = "lit-customer-account"
 type = "ui_extension"
 
+  [extensions.capabilities]
+  # Required so the extension can fetch() our backend bridge that forwards
+  # the customer JWT to Seal.
+  network_access = true
+
   [[extensions.targeting]]
   module = "./src/CustomerAccountPage.tsx"
   target = "customer-account.page.render"
