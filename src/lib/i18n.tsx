@@ -63,25 +63,27 @@ export function T({ en, es }: { en: string; es: string }) {
 }
 
 /**
- * Toggle button — `EN | ES`. Click navigates to the equivalent page in the
- * other locale.
+ * EN/ES toggle matching the hi-fi `.lang-toggle`. Renders 2 tiny buttons inside
+ * a faint grey pill. Active button gets dark bg + yellow text. Navigates to
+ * the equivalent URL in the other locale — the slug changes per language so
+ * `/en/your-lit` ↔ `/es/tu-lit` is a real URL swap, not just a state toggle.
  */
 export function LangToggle({ className }: { className?: string }) {
   const lang = useLangValue();
   const setLang = useLangSetter();
   return (
     <div
-      className={`flex gap-1 rounded-sm bg-[color:var(--color-sharp-white)] p-0.5 ${className ?? ""}`}
+      className={`flex gap-[1px] rounded-sm bg-[color:var(--color-lit-grey)]/8 p-0.5 ${className ?? ""}`}
     >
       {(["en", "es"] as const).map((l) => (
         <button
           key={l}
           type="button"
           onClick={() => setLang(l)}
-          className={`px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] rounded-sm cursor-pointer ${
+          className={`rounded-[1px] px-2 py-[3px] text-[10px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
             lang === l
-              ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-brisky-cream)]"
-              : "opacity-50 hover:opacity-80"
+              ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
+              : "text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
           }`}
         >
           {l}

@@ -9,7 +9,6 @@ import { Logo } from "@/components/Logo";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import {
   CollectionPeekVisual,
-  DropsPeekVisual,
   PeekCard,
 } from "@/components/PeekCard";
 import { PlanOverlay } from "@/components/PlanOverlay";
@@ -22,9 +21,11 @@ import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { Timeline } from "@/components/Timeline";
 import { api, ApiClientError } from "@/lib/api-client";
-import { T, useLang, useLangValue } from "@/lib/i18n";
+import { LangToggle, T, useLang, useLangValue } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 import type { HubDashboard, TimelineEntry } from "@/lib/types";
+
+const JUST_SKIPPED_KEY = "lit:just-skipped";
 
 export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
@@ -34,7 +35,11 @@ export default function HubPage() {
   const [showPlan, setShowPlan] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [showExtras, setShowExtras] = useState(false);
-  const [justSkipped, setJustSkipped] = useState(false);
+  const [justSkipped, setJustSkipped] = useState<boolean>(
+    () =>
+      typeof window !== "undefined" &&
+      window.sessionStorage.getItem(JUST_SKIPPED_KEY) === "1",
+  );
   const t = useLang();
   const lang = useLangValue();
 
@@ -47,6 +52,14 @@ export default function HubPage() {
       .catch(() => setTimeline([]));
   }, []);
 
+  const markSkipped = (next: boolean) => {
+    setJustSkipped(next);
+    if (typeof window !== "undefined") {
+      if (next) window.sessionStorage.setItem(JUST_SKIPPED_KEY, "1");
+      else window.sessionStorage.removeItem(JUST_SKIPPED_KEY);
+    }
+  };
+
   if (error === "unauthorized") return <LoginScreen />;
   if (error === "subscription_not_found") return <EmptyState />;
   if (error) return <ErrorState code={error} />;
@@ -57,7 +70,7 @@ export default function HubPage() {
   const cutoffEndsAt = sub.cutoffEndsAt ? new Date(sub.cutoffEndsAt) : null;
   const nextShipDate = sub.nextShipDate ? new Date(sub.nextShipDate) : null;
   const isPostCancel = sub.status === "post_cancel" || sub.status === "expired";
-  const isNew = sub.nextBoxNumber === 1 && (timeline.length === 0);
+  const isNew = sub.nextBoxNumber === 1 && timeline.length === 0;
 
   const variant: NextBoxHeroVariant = justSkipped
     ? "skipped"
@@ -67,8 +80,6 @@ export default function HubPage() {
         ? "new"
         : "default";
 
-  const dropsCount = drops.balance;
-  const puzzlePercent = drops.activeReward?.percentComplete ?? 0;
   const collectionEarned = Math.min(4, Math.floor(timeline.length));
 
   return (
@@ -77,7 +88,10 @@ export default function HubPage() {
 
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
         <Logo />
-        <TierPill visible={drops.tierEarned} />
+        <div className="flex items-center gap-2">
+          <LangToggle />
+          <TierPill visible={drops.tierEarned} tierEarnedAt={drops.activeReward ? null : null} />
+        </div>
       </header>
 
       <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
@@ -97,7 +111,7 @@ export default function HubPage() {
               boxNumber={sub.nextBoxNumber}
               variant={variant}
               cutoffEndsAt={cutoffEndsAt}
-              onUndoSkip={justSkipped ? () => setJustSkipped(false) : undefined}
+              onUndoSkip={justSkipped ? () => markSkipped(false) : undefined}
             />
 
             <section className="mx-6 mt-5 grid grid-cols-2 gap-2 md:mx-0 md:grid-cols-4">
@@ -145,38 +159,6 @@ export default function HubPage() {
 
             <div className="mt-5">
               <PeekCard
-                variant="drops"
-                lead={t({ en: "Drops", es: "Drops" })}
-                title={
-                  isNew
-                    ? t({ en: "Nothing yet.", es: "Nada aún." })
-                    : t({
-                        en: "Stack rewards.",
-                        es: "Acumula recompensas.",
-                      })
-                }
-                sub={
-                  isNew
-                    ? t({
-                        en: "Your first box adds drops. Stack starts there.",
-                        es: "Tu primera caja suma drops. Ahí empieza.",
-                      })
-                    : t({
-                        en: `${dropsCount} drops · referrals, reviews, streaks.`,
-                        es: `${dropsCount} drops · referidos, reseñas, rachas.`,
-                      })
-                }
-                cta={t({ en: "Soon", es: "Pronto" })}
-                comingSoon
-                visual={
-                  <DropsPeekVisual
-                    count={dropsCount}
-                    percentComplete={puzzlePercent}
-                  />
-                }
-              />
-
-              <PeekCard
                 variant="collection"
                 lead={t({
                   en: "Collection · Edition 01",
@@ -208,20 +190,6 @@ export default function HubPage() {
                 href={portalHref(lang, "collection")}
                 visual={<CollectionPeekVisual earned={collectionEarned} />}
               />
-
-              {data.nextEvent && (
-                <PeekCard
-                  variant="world"
-                  lead={t({
-                    en: `The World · ${capitalize(data.nextEvent.city)}`,
-                    es: `El Mundo · ${capitalize(data.nextEvent.city)}`,
-                  })}
-                  title={data.nextEvent.title}
-                  sub={formatEventDate(data.nextEvent.datetime, lang)}
-                  cta={t({ en: "Soon", es: "Pronto" })}
-                  comingSoon
-                />
-              )}
             </div>
 
             <div className="mt-1">
@@ -243,9 +211,7 @@ export default function HubPage() {
         <PlanOverlay
           subscription={sub}
           onClose={() => setShowPlan(false)}
-          onUpdated={(updated) =>
-            setData({ ...data, subscription: updated })
-          }
+          onUpdated={(updated) => setData({ ...data, subscription: updated })}
         />
       )}
       {showSkip && (
@@ -253,7 +219,7 @@ export default function HubPage() {
           subscription={sub}
           onClose={() => setShowSkip(false)}
           onSkipped={(newDate) => {
-            setJustSkipped(true);
+            markSkipped(true);
             setData({
               ...data,
               subscription: { ...sub, nextShipDate: newDate },
@@ -271,6 +237,7 @@ function EmptyState() {
     <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:px-12">
         <Logo />
+        <LangToggle />
       </header>
       <main className="flex flex-1 flex-col items-center justify-center px-8 pb-24 text-center">
         <h1 className="font-display text-4xl font-black uppercase leading-none md:text-5xl">
@@ -314,19 +281,4 @@ function LoadingState() {
       </p>
     </main>
   );
-}
-
-function capitalize(s: string): string {
-  return s.length ? s[0]!.toUpperCase() + s.slice(1) : s;
-}
-
-function formatEventDate(iso: string, lang: "en" | "es"): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString(lang === "es" ? "es-ES" : "en-US", {
-    month: "short",
-    day: "numeric",
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

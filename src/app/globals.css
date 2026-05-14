@@ -158,6 +158,10 @@ button:disabled,
   0%, 100% { opacity: 0.6; }
   50%      { opacity: 1; }
 }
+@keyframes pop-in {
+  from { transform: scale(0.9); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
 
 .sheet-overlay {
   position: fixed;
