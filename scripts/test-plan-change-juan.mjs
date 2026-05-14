@@ -5,6 +5,8 @@
 //   node scripts/test-plan-change-juan.mjs state    → just read current state
 //   node scripts/test-plan-change-juan.mjs variant  → 1 box (SL30) → 2 boxes (SL60), keep selling plan
 //   node scripts/test-plan-change-juan.mjs revert   → back to 1 box SL30
+//   node scripts/test-plan-change-juan.mjs to45d    → change cadence to 45 days (keeps current variant)
+//   node scripts/test-plan-change-juan.mjs to1mo    → change cadence to 1 month (keeps current variant)
 
 const SEAL_TOKEN = process.env.SEAL_API_TOKEN;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
@@ -18,10 +20,11 @@ const SUB_ID = 12635109;
 const SL30_VARIANT = "63887092154717";
 const SL60_VARIANT = "64629025341789";
 const CANONICAL_1MO = "691259834717"; // "Envío 1 mes" — universally available on all variants
+const CANONICAL_45D = "691259867485"; // "Envío 45 días"
 
 const action = process.argv[2];
-if (!["state", "variant", "revert"].includes(action)) {
-  console.error("Usage: node scripts/test-plan-change-juan.mjs {state|variant|revert}");
+if (!["state", "variant", "revert", "to45d", "to1mo"].includes(action)) {
+  console.error("Usage: node scripts/test-plan-change-juan.mjs {state|variant|revert|to45d|to1mo}");
   process.exit(1);
 }
 
@@ -143,11 +146,12 @@ if (action === "state") {
 
 const mainItem = sub.items.find((it) => !it.is_one_time_item) ?? sub.items[0];
 const oldItemId = mainItem.id;
-// Always write the canonical 1mo plan — legacy IDs are not associated
-// with every variant; passing them triggers Seal to silently substitute.
-const targetSellingPlan = CANONICAL_1MO;
 
-let targetVariantId;
+// Default target plan = canonical 1mo. Frequency tests override below.
+let targetSellingPlan = CANONICAL_1MO;
+let targetVariantId = mainItem.variant_id; // default: keep current variant
+let targetIntervalLabel = null; // for the `edit` fallback after add+remove
+
 if (action === "variant") {
   if (mainItem.variant_id === SL60_VARIANT) {
     console.log("\nAlready on SL60 — nothing to do.");
@@ -160,9 +164,15 @@ if (action === "variant") {
     process.exit(0);
   }
   targetVariantId = SL30_VARIANT;
+} else if (action === "to45d") {
+  targetSellingPlan = CANONICAL_45D;
+  targetIntervalLabel = "45 day"; // Seal requires singular ("day", not "days")
+} else if (action === "to1mo") {
+  targetSellingPlan = CANONICAL_1MO;
+  targetIntervalLabel = "1 month";
 }
 
-console.log(`\n>>> Swapping ${mainItem.variant_id} → ${targetVariantId} (qty=${mainItem.quantity}, selling_plan ${targetSellingPlan} canonical 1mo)`);
+console.log(`\n>>> Swapping ${mainItem.variant_id} → ${targetVariantId} (qty=${mainItem.quantity}, selling_plan ${targetSellingPlan})`);
 
 const v = await shopifyVariant(targetVariantId);
 console.log(`Shopify variant resolved: title="${v.title}" sku="${v.sku}" price=${v.price}`);
@@ -170,11 +180,31 @@ console.log(`Shopify variant resolved: title="${v.title}" sku="${v.sku}" price=$
 await sealAddItems(SUB_ID, [{
   ...v,
   quantity: mainItem.quantity,
-  // price comes from `v` (Shopify variant price), per-unit
   selling_plan_id: targetSellingPlan,
 }]);
 
 await sealRemoveItems(SUB_ID, [oldItemId]);
+
+// For frequency changes, also try Seal's `edit { delivery_interval }`
+// since add_items appears to ignore selling_plan_id (Seal substitutes its
+// own managed plan based on current sub-level cadence).
+if (targetIntervalLabel) {
+  console.log(`\n→ edit subscription interval to "${targetIntervalLabel}"`);
+  const r = await fetch(`${SEAL_BASE}/subscription`, {
+    method: "PUT",
+    headers: { "X-Seal-Token": SEAL_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "edit",
+      id: SUB_ID,
+      edit: {
+        delivery_interval: targetIntervalLabel,
+        billing_interval: targetIntervalLabel,
+      },
+    }),
+  });
+  const j = await r.json();
+  console.log("← edit response:", JSON.stringify(j));
+}
 
 console.log("\nWaiting 2s for Seal to settle…");
 await new Promise((r) => setTimeout(r, 2000));

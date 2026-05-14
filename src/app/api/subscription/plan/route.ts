@@ -147,15 +147,19 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // Seal seems to store it both per-item AND on the sub. We don't know for
   // certain if this lands, but the call is harmless if it no-ops.
   if (planChanged) {
+    // Seal requires singular interval units ("1 month", "45 day", "3 month")
+    // — plurals are rejected with "interval format is invalid" (verified
+    // 2026-05-14). Sending these in tandem with add+remove also realigns
+    // each item's selling_plan_id to match the new cadence.
     const intervalLabelByFrequency: Record<Frequency, string> = {
-      "15d": "15 days",
+      "15d": "15 day",
       "1mo": "1 month",
-      "45d": "45 days",
-      "2mo": "2 months",
-      "3mo": "3 months",
-      "4mo": "4 months",
-      "5mo": "5 months",
-      "6mo": "6 months",
+      "45d": "45 day",
+      "2mo": "2 month",
+      "3mo": "3 month",
+      "4mo": "4 month",
+      "5mo": "5 month",
+      "6mo": "6 month",
     };
     try {
       await seal.editSubscription(ids.sealSubscriptionId, {
@@ -164,7 +168,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       });
     } catch (e) {
       console.warn(
-        `[plan] interval edit failed (non-fatal — item-level plan may still apply): ${e instanceof Error ? e.message : String(e)}`,
+        `[plan] interval edit failed: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
   }
