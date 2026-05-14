@@ -6,22 +6,20 @@ import {
   Text,
   Banner,
   Spinner,
+  Heading,
 } from "@shopify/ui-extensions-react/customer-account";
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Invisible bridge popup used by the App-Proxy portal at
- * litsalt.com/apps/portal/* to perform Seal subscription mutations.
+ * SPIKE E.3 — validates that Seal's hidden edit-subscription-v04.php endpoint
+ * accepts JWTs minted for our app's audience (vs the Seal-only audience their
+ * own portal uses).
  *
- * Flow:
- *   1. Portal opens this page in a popup with action + payload in URL params.
- *   2. Page gets a Shopify-signed customer JWT via the session-token API.
- *   3. POSTs { jwt, action, payload } to our backend /api/extension/seal-mutate.
- *   4. Backend forwards to Seal's hidden edit-subscription-v04.php endpoint.
- *   5. On result, we postMessage back to window.opener and close.
- *
- * The page renders a brief status banner so the customer sees something
- * happening if the popup hangs, but the happy path closes within ~1 s.
+ * Customer Account UI Extensions run in a Web Worker, so we CANNOT use
+ * window.location, window.opener, or window.close. The mutation params are
+ * hardcoded for the spike (no-op deletion of a non-existent item). Once we
+ * confirm Seal accepts our JWT, we'll wire up real params via Shopify's
+ * navigation API.
  */
 
 export default reactExtension("customer-account.page.render", () => <App />);
@@ -29,10 +27,19 @@ export default reactExtension("customer-account.page.render", () => <App />);
 const BACKEND_ENDPOINT =
   "https://lit-portal-drab.vercel.app/api/extension/seal-mutate";
 
+// Hardcoded harmless test: try to delete item 999999999 (doesn't exist) on
+// juan's sub 12635109. Seal should respond with success=false but at least
+// it'll PROVE whether our JWT is being accepted as auth.
+const SPIKE_ACTION = "add_remove_products";
+const SPIKE_PAYLOAD = {
+  subscriptionId: 12635109,
+  deleted_items: "999999999",
+};
+
 type State =
   | { phase: "init" }
   | { phase: "running" }
-  | { phase: "done"; ok: boolean; detail?: string };
+  | { phase: "done"; status: number; sealResponse: unknown; rawBody?: string };
 
 function App() {
   const { sessionToken } = useApi();
@@ -40,33 +47,11 @@ function App() {
   const [state, setState] = useState<State>({ phase: "init" });
 
   useEffect(() => {
-    // useEffect re-runs in dev; guard against double-firing the mutation.
     if (ranRef.current) return;
     ranRef.current = true;
 
-    const params = new URLSearchParams(window.location.search);
-    const action = params.get("action");
-    const payloadRaw = params.get("payload");
-    if (!action || !payloadRaw) {
-      setState({
-        phase: "done",
-        ok: false,
-        detail: "Missing ?action= or ?payload= query params",
-      });
-      return;
-    }
-
-    let payload: unknown;
-    try {
-      payload = JSON.parse(payloadRaw);
-    } catch {
-      setState({ phase: "done", ok: false, detail: "Invalid JSON in payload" });
-      return;
-    }
-
-    setState({ phase: "running" });
-
     (async () => {
+      setState({ phase: "running" });
       try {
         const jwt = await sessionToken.get();
         const res = await fetch(BACKEND_ENDPOINT, {
@@ -75,57 +60,62 @@ function App() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${jwt}`,
           },
-          body: JSON.stringify({ action, payload }),
+          body: JSON.stringify({ action: SPIKE_ACTION, payload: SPIKE_PAYLOAD }),
         });
-        const body = await res.json().catch(() => ({}));
-        const ok = res.ok && body?.success === true;
-
-        // postMessage back to the opener and close. Using "*" target is
-        // safe-ish here because we send no secrets in the body; receiver
-        // verifies action match.
-        window.opener?.postMessage(
-          {
-            source: "lit-customer-account-extension",
-            ok,
-            action,
-            response: body,
-          },
-          "*",
-        );
-        setState({ phase: "done", ok, detail: ok ? "Applied" : JSON.stringify(body) });
-        // Auto-close after a short pause so user can see the success banner
-        // in case they're watching, then control returns to the portal.
-        setTimeout(() => window.close(), ok ? 600 : 4000);
+        let parsed: unknown = null;
+        const raw = await res.text();
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          parsed = null;
+        }
+        setState({
+          phase: "done",
+          status: res.status,
+          sealResponse: parsed,
+          rawBody: parsed === null ? raw : undefined,
+        });
       } catch (e) {
-        const detail = e instanceof Error ? e.message : String(e);
-        window.opener?.postMessage(
-          {
-            source: "lit-customer-account-extension",
-            ok: false,
-            action,
-            error: detail,
-          },
-          "*",
-        );
-        setState({ phase: "done", ok: false, detail });
+        setState({
+          phase: "done",
+          status: 0,
+          sealResponse: { fetchError: e instanceof Error ? e.message : String(e) },
+        });
       }
     })();
   }, [sessionToken]);
 
   return (
-    <Page title="LIT">
+    <Page title="LIT — JWT spike">
       <BlockStack spacing="loose">
-        {state.phase === "init" || state.phase === "running" ? (
-          <>
+        <Heading>Probing Seal's hidden API</Heading>
+        <Text>
+          Fires a no-op mutation through our backend bridge to see whether
+          Seal accepts a JWT minted for our app instead of theirs. Result
+          appears below within a couple seconds.
+        </Text>
+
+        {state.phase === "running" || state.phase === "init" ? (
+          <BlockStack inlineAlignment="center" spacing="tight">
             <Spinner size="large" />
-            <Text>Updating your subscription…</Text>
-          </>
-        ) : state.ok ? (
-          <Banner status="success">Done. Returning to your portal…</Banner>
+            <Text>Calling backend…</Text>
+          </BlockStack>
         ) : (
-          <Banner status="critical">
-            We couldn't update your subscription. {state.detail ?? ""}
-          </Banner>
+          <>
+            <Banner status={state.status >= 200 && state.status < 300 ? "success" : "critical"}>
+              HTTP {state.status}
+            </Banner>
+            <Text>Seal response (parsed JSON):</Text>
+            <Text>
+              {JSON.stringify(state.sealResponse, null, 2)}
+            </Text>
+            {state.rawBody && (
+              <>
+                <Text>Raw body (unparseable):</Text>
+                <Text>{state.rawBody}</Text>
+              </>
+            )}
+          </>
         )}
       </BlockStack>
     </Page>
