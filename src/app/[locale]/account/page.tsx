@@ -13,6 +13,7 @@ import { QAIcons } from "@/components/QuickActionButton";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
+import { frequencyLabel } from "@/lib/frequency-label";
 import {
   LangToggle,
   T,
@@ -178,7 +179,7 @@ export default function AccountPage() {
               />
               <SubsummCell
                 label={t({ en: "Every", es: "Cada" })}
-                value={subscription.frequencyLabel.toUpperCase()}
+                value={frequencyLabel(subscription.frequency, lang, { format: "compact" })}
                 sub={t({ en: "frequency", es: "frecuencia" })}
                 showRightBorder
               />

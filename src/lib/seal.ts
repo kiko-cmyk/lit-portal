@@ -473,6 +473,7 @@ export class SealApiError extends Error {
 
 import type { Frequency, Subscription, SubscriptionStatus } from "./types";
 import { CUTOFF_HOURS, cutoffEndsAt, isWithinCutoff } from "./cutoff";
+import { BOX_COUNT_BY_VARIANT } from "./seal-plans";
 
 /**
  * Normalize Seal's free-text interval ("1 month", "15 days", "3 months") to
@@ -509,12 +510,18 @@ export function mapStatus(s: SealSubscription): SubscriptionStatus {
 }
 
 /**
- * "Box count" per LIT model = quantity of the main subscription item.
- * Extras (one-time products) are excluded.
+ * "Box count" per LIT model = which SL30/SL60/SL90/SL120/SL150/SL180 variant
+ * is on the subscription. Quantity stays at 1 — plan changes swap the variant
+ * (add_items + remove_items), they don't bump the line quantity. Falls back
+ * to `quantity` only if the variant_id isn't in our mapping (legacy/manual
+ * subs), which lets the UI keep working while we surface the missing map.
  */
 export function getBoxCount(s: SealSubscription): number {
   const main = s.items.find((it) => !it.is_one_time_item) ?? s.items[0];
-  return main?.quantity ?? 1;
+  if (!main) return 1;
+  const fromVariant = BOX_COUNT_BY_VARIANT[String(main.variant_id)];
+  if (fromVariant) return fromVariant;
+  return main.quantity ?? 1;
 }
 
 /**
@@ -538,15 +545,16 @@ export function getNextBoxNumber(s: SealSubscription): number {
 }
 
 /**
- * Best-effort flavor extraction. Today LIT has a single flavor (Lemon Salt),
- * so the variant title doesn't differentiate. When new flavors launch, this
- * needs to either (a) parse variant title, or (b) read a metafield.
+ * Phase 1 reality: LIT ships a single flavor (Lemon Drop). Variant SKUs
+ * (SL30/SL60/SL90/...) encode box count, not flavor, so returning the SKU
+ * here surfaces the wrong string in the Hub hero. Hardcode for now; when
+ * new flavors launch, read from a Shopify metafield on the variant.
  *
- * For now: returns variant_sku as a stable placeholder.
+ * The `_s` arg is kept so callers don't need to change when we wire real
+ * flavor lookup.
  */
-export function extractFlavor(s: SealSubscription): string {
-  const main = s.items.find((it) => !it.is_one_time_item) ?? s.items[0];
-  return main?.variant_sku ?? main?.title ?? "LEMON";
+export function extractFlavor(_s: SealSubscription): string {
+  return "Lemon Drop";
 }
 
 /**

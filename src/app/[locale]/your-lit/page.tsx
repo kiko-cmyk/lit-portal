@@ -21,6 +21,7 @@ import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { Timeline } from "@/components/Timeline";
 import { api, ApiClientError } from "@/lib/api-client";
+import { frequencyLabel } from "@/lib/frequency-label";
 import { LangToggle, T, useLang, useLangValue } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 import type { HubDashboard, TimelineEntry } from "@/lib/types";
@@ -120,9 +121,9 @@ export default function HubPage() {
                 label={t({ en: "Change plan", es: "Cambiar plan" })}
                 sub={`${sub.boxCount} ${
                   sub.boxCount === 1
-                    ? t({ en: "box · every", es: "caja · cada" })
-                    : t({ en: "boxes · every", es: "cajas · cada" })
-                } ${sub.frequencyLabel}`}
+                    ? t({ en: "box", es: "caja" })
+                    : t({ en: "boxes", es: "cajas" })
+                } · ${frequencyLabel(sub.frequency, lang, { format: "short" })}`}
                 onClick={() => setShowPlan(true)}
                 disabled={sub.withinCutoff}
               />
