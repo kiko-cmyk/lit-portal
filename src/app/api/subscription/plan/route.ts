@@ -34,17 +34,26 @@ const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo"
  *     the same silent no-op we saw on item edits?
  */
 export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
+  const t0 = Date.now();
+  const log = (step: string, extra?: Record<string, unknown>) =>
+    console.log(
+      `[plan-change] ${step} t+${Date.now() - t0}ms customer=${ctx.customerId}`,
+      extra ?? {},
+    );
+
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
   if (!email) {
     throw new ApiHttpError(404, "customer_not_found", `No email for ${ctx.customerId}`);
   }
+  log("resolved-email", { email });
 
   const body = (await req.json().catch(() => ({}))) as {
     boxCount?: number;
     frequency?: Frequency;
   };
+  log("body", body);
 
   if (
     body.boxCount !== undefined &&
@@ -78,12 +87,14 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
   assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/plan");
   const sealSubscriptionId = sealSub.id;
+  log("seal-sub-fetched", { sealSubscriptionId, items: sealSub.items.length });
 
   // Pick the main subscription line (non-one-time item)
   const mainItem = sealSub.items.find((it) => !it.is_one_time_item) ?? sealSub.items[0];
   if (!mainItem) {
     throw new ApiHttpError(500, "no_main_line", "Seal subscription has no items");
   }
+  log("main-item", { id: mainItem.id, variant: mainItem.variant_id, qty: mainItem.quantity });
 
   // Cutoff against next billing attempt date
   const nextAttempt = (sealSub.billing_attempts ?? []).find(
@@ -115,7 +126,9 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const variantChanged = newVariantNumeric !== null && newVariantNumeric !== mainItem.variant_id;
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
 
+  log("change-detected", { variantChanged, planChanged, targetFrequency, targetBoxCount });
   if (!variantChanged && !planChanged) {
+    log("no-op");
     return mapToSubscription(sealSub, ctx.customerId);
   }
 
@@ -126,6 +139,12 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   if (!variantDetails) {
     throw new ApiHttpError(500, "variant_lookup_failed", `Shopify has no variant ${effectiveVariantNumeric}`);
   }
+  log("variant-resolved", {
+    productId: variantDetails.productId,
+    variantId: variantDetails.variantId,
+    sku: variantDetails.sku,
+    price: variantDetails.price,
+  });
 
   // Always write the canonical selling_plan_id for the target frequency.
   // The customer's cadence is preserved (no change requested) or set to
@@ -136,20 +155,34 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // `price` is REQUIRED by Seal — verified 2026-05-14, returns
   // "Item is missing price value." otherwise. We pass Shopify's variant
   // price as the per-unit value (memory: `price` × `quantity` = total).
-  await seal.addItems(sealSubscriptionId, [{
-    productId: variantDetails.productId,
-    variantId: variantDetails.variantId,
-    quantity: mainItem.quantity,
-    title: variantDetails.title,
-    sku: variantDetails.sku,
-    taxable: variantDetails.taxable,
-    requiresShipping: variantDetails.requiresShipping,
-    price: variantDetails.price,
-    sellingPlanId: effectiveSellingPlan,
-  }]);
+  try {
+    await seal.addItems(sealSubscriptionId, [{
+      productId: variantDetails.productId,
+      variantId: variantDetails.variantId,
+      quantity: mainItem.quantity,
+      title: variantDetails.title,
+      sku: variantDetails.sku,
+      taxable: variantDetails.taxable,
+      requiresShipping: variantDetails.requiresShipping,
+      price: variantDetails.price,
+      sellingPlanId: effectiveSellingPlan,
+    }]);
+    log("seal-add-items-ok");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log("seal-add-items-failed", { msg });
+    throw new ApiHttpError(502, "seal_add_items_failed", msg);
+  }
 
   // 2) Remove the original item by its Seal item ID.
-  await seal.removeItems(sealSubscriptionId, [mainItem.id]);
+  try {
+    await seal.removeItems(sealSubscriptionId, [mainItem.id]);
+    log("seal-remove-items-ok");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log("seal-remove-items-failed", { msg });
+    throw new ApiHttpError(502, "seal_remove_items_failed", msg);
+  }
 
   // 3) If the cadence changed, also bump the subscription-level interval —
   // Seal seems to store it both per-item AND on the sub. We don't know for
@@ -191,6 +224,12 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   if (!refreshed) {
     throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
   }
+  log("done", {
+    items: refreshed.items.length,
+    pendingAttempts: (refreshed.billing_attempts ?? []).filter(
+      (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
+    ).length,
+  });
   return mapToSubscription(refreshed, ctx.customerId);
 });
 

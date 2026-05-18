@@ -29,8 +29,22 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: "unknown" }));
-    throw new ApiClientError(res.status, body.error ?? "error", body.message);
+    // Read as text first so we can surface the raw body when Vercel or the
+    // runtime returns an HTML / plain-text error page (504, function crash,
+    // edge errors) — otherwise the UI degrades to "(unknown)" and we lose
+    // the diagnostic entirely.
+    const text = await res.text().catch(() => "");
+    let parsed: { error?: string; message?: string } | null = null;
+    try {
+      parsed = text ? (JSON.parse(text) as { error?: string; message?: string }) : null;
+    } catch {
+      parsed = null;
+    }
+    const code = parsed?.error ?? `http_${res.status}`;
+    const message =
+      parsed?.message ?? (text ? text.slice(0, 240) : `HTTP ${res.status}`);
+    console.warn(`[api] ${path} → ${res.status}`, parsed ?? text);
+    throw new ApiClientError(res.status, code, message);
   }
   return res.json() as Promise<T>;
 }
