@@ -22,7 +22,8 @@ const ITEMS: {
   es: string;
   inactive?: boolean;
 }[] = [
-  { route: "home", canonical: "your-lit", en: "Your LIT", es: "Tu LIT" },
+  { route: "home", canonical: "your-lit", en: "My LIT", es: "Mi LIT" },
+  { route: "account", canonical: "account", en: "My Account", es: "Mi Cuenta" },
   {
     route: "collection",
     canonical: "collection",
@@ -30,7 +31,6 @@ const ITEMS: {
     es: "Colección",
     inactive: true,
   },
-  { route: "account", canonical: "account", en: "Account", es: "Cuenta" },
 ];
 
 function isActive(pathname: string | null, canonical: string): boolean {

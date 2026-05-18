@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { TierPill } from "@/components/TierPill";
 import { api } from "@/lib/api-client";
-import { LangToggle, T, useLang, useLangValue } from "@/lib/i18n";
+import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 import type { TierResponse, TimelineEntry } from "@/lib/types";
 
@@ -147,6 +147,7 @@ type Scenario = "new" | "early" | "default" | "near" | "complete" | "post-cancel
 export default function CollectionPage() {
   const lang = useLangValue();
   const t = useLang();
+  usePageTitle({ en: "Collection · LIT", es: "Colección · LIT" });
   const [tier, setTier] = useState<TierResponse | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -186,7 +187,7 @@ export default function CollectionPage() {
           href={portalHref(lang, "home")}
           className="text-[13px] font-medium text-[color:var(--color-lit-grey)] hover:opacity-60"
         >
-          ← <T en="Your LIT" es="Tu LIT" />
+          ← <T en="My LIT" es="Mi LIT" />
         </Link>
         <div className="flex items-center gap-2">
           <span className="rounded-sm bg-[color:var(--color-lit-grey)] px-3 py-[5px] text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">

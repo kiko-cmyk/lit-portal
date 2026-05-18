@@ -21,7 +21,7 @@ import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
-import { LangToggle, T, useLang, useLangValue } from "@/lib/i18n";
+import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import type { HubDashboard, Subscription, TimelineEntry } from "@/lib/types";
 
 const JUST_SKIPPED_KEY = "lit:just-skipped";
@@ -47,6 +47,7 @@ export default function HubPage() {
   const [syncingUntil, setSyncingUntil] = useState<number | null>(null);
   const t = useLang();
   const lang = useLangValue();
+  usePageTitle({ en: "My LIT", es: "Mi LIT" }); // browser tab title
 
   useEffect(() => {
     api<HubDashboard>("/api/hub/dashboard")

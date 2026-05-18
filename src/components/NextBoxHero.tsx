@@ -82,7 +82,7 @@ export function NextBoxHero({
 
       <div className="relative">
         <div className="lead-label">
-          <T en="Your next box" es="Tu próxima caja" />
+          <T en="My next box" es="Mi próxima caja" />
         </div>
 
         <div

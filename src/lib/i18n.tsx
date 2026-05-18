@@ -8,7 +8,7 @@
  */
 
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { swapLocale, type Lang } from "@/lib/portal-link";
 
 export type { Lang };
@@ -60,6 +60,23 @@ export function useLangSetter(): (l: Lang) => void {
 export function T({ en, es }: { en: string; es: string }) {
   const t = useLang();
   return <>{t({ en, es })}</>;
+}
+
+/**
+ * Sets `document.title` to a locale-aware string for the current page.
+ *
+ * The root layout pre-renders "LIT" as a fallback (SSR). Client pages call
+ * this hook with the page-specific title so the browser tab updates as soon
+ * as the locale or page changes. Since the portal is authenticated and
+ * not indexed, missing SSR for titles is acceptable.
+ */
+export function usePageTitle(title: { en: string; es: string }) {
+  const lang = useLangValue();
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title = lang === "es" ? title.es : title.en;
+    }
+  }, [lang, title.en, title.es]);
 }
 
 /**

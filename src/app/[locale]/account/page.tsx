@@ -18,6 +18,7 @@ import {
   useLang,
   useLangSetter,
   useLangValue,
+  usePageTitle,
 } from "@/lib/i18n";
 import type {
   CustomerProfile,
@@ -39,6 +40,7 @@ export default function AccountPage() {
   const [addressOpen, setAddressOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
+  usePageTitle({ en: "My account · LIT", es: "Mi cuenta · LIT" });
 
   useEffect(() => {
     Promise.all([
@@ -52,6 +54,10 @@ export default function AccountPage() {
         setTier(ti);
       })
       .catch((e: ApiClientError) => setError(e.code));
+    // Order history is shown expanded by default → load it eagerly.
+    api<OrderHistoryItem[]>("/api/orders?limit=10")
+      .then(setOrders)
+      .catch(() => setOrders([]));
   }, []);
 
   if (error === "unauthorized") return <LoginScreen />;
@@ -101,7 +107,7 @@ export default function AccountPage() {
       <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
           <h1 className="font-display text-[48px] font-black uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]">
-            <T en="Account" es="Cuenta" />
+            <T en="My Account" es="Mi Cuenta" />
           </h1>
           <div className="mt-3 h-[3px] w-9 bg-[color:var(--color-lit-grey)]" />
         </div>
@@ -161,7 +167,7 @@ export default function AccountPage() {
         </section>
 
         {subscription && (
-          <Section title={t({ en: "Your subscription", es: "Tu suscripción" })}>
+          <Section title={t({ en: "My subscription", es: "Mi suscripción" })}>
             <div className="grid grid-cols-4 border-t border-[color:var(--color-lit-grey)]/6">
               <SubsummCell
                 label={t({ en: "Boxes", es: "Cajas" })}
@@ -215,7 +221,7 @@ export default function AccountPage() {
           </Section>
         )}
 
-        <Section title={t({ en: "Your details", es: "Tus datos" })}>
+        <Section title={t({ en: "My details", es: "Mis datos" })}>
           <EditableRow
             label={t({ en: "Name", es: "Nombre" })}
             value={customer.name}
@@ -274,14 +280,7 @@ export default function AccountPage() {
           <LanguagePicker />
         </Section>
 
-        <OrdersSection
-          orders={orders}
-          loadOrders={() =>
-            api<OrderHistoryItem[]>("/api/orders?limit=10")
-              .then(setOrders)
-              .catch(() => setOrders([]))
-          }
-        />
+        <OrdersSection orders={orders} />
 
         <div className="mx-6 mt-8 pb-4 text-center md:mx-0">
           <button
@@ -593,6 +592,9 @@ function PaymentBlock() {
   const t = useLang();
   const [data, setData] = useState<PaymentMethodResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api<PaymentMethodResponse>("/api/payment-method")
@@ -600,6 +602,47 @@ function PaymentBlock() {
       .catch(() => setData({ instrument: null, updateUrl: null }))
       .finally(() => setLoading(false));
   }, []);
+
+  const handleChange = async () => {
+    if (!data?.instrument) return;
+    if (data.updateUrl) {
+      window.open(data.updateUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    // Fallback for PayPal / Shop Pay / etc. — Shopify can't render an inline
+    // update form for these, so trigger the secure email flow instead.
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await api<{ sent: boolean; email: string | null }>(
+        "/api/payment-method/send-update-email",
+        { method: "POST" },
+      );
+      if (res.sent) {
+        setMessage(
+          res.email
+            ? t({
+                en: `We sent a secure link to ${res.email}. Open it to update your payment method.`,
+                es: `Te enviamos un enlace seguro a ${res.email}. Ábrelo para cambiar tu método de pago.`,
+              })
+            : t({
+                en: "We sent you a secure link by email.",
+                es: "Te enviamos un enlace seguro por email.",
+              }),
+        );
+      }
+    } catch {
+      setError(
+        t({
+          en: "Couldn't send the update email. Try again or contact us.",
+          es: "No se pudo enviar el email. Inténtalo de nuevo o escríbenos.",
+        }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -633,29 +676,36 @@ function PaymentBlock() {
           : t({ en: "Method", es: "Método" });
 
   return (
-    <div className="flex items-center gap-3 py-1">
-      <div className="min-w-[84px] text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
-        {typeLabel}
-      </div>
-      <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
-        {inst.label}
-      </div>
-      {data.updateUrl ? (
-        <a
-          href={data.updateUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)]"
+    <div>
+      <div className="flex items-center gap-3 py-1">
+        <div className="min-w-[84px] text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+          {typeLabel}
+        </div>
+        <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
+          {inst.label}
+        </div>
+        <button
+          type="button"
+          onClick={handleChange}
+          disabled={busy}
+          className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <T en="Change" es="Cambiar" />
-        </a>
-      ) : (
-        <span
-          aria-disabled
-          className="cursor-not-allowed text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]/40"
-        >
-          <T en="Change" es="Cambiar" />
-        </span>
+          {busy ? (
+            <T en="Sending…" es="Enviando…" />
+          ) : (
+            <T en="Change" es="Cambiar" />
+          )}
+        </button>
+      </div>
+      {message && (
+        <p className="mt-2 rounded-sm bg-[color:var(--color-bold-yellow)]/15 px-3 py-2 text-[11px] leading-[1.4] text-[color:var(--color-lit-grey)]">
+          {message}
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 rounded-sm bg-[color:var(--color-danger)]/10 px-3 py-2 text-[11px] text-[color:var(--color-danger)]">
+          {error}
+        </p>
       )}
     </div>
   );
@@ -692,32 +742,21 @@ function LanguagePicker() {
   );
 }
 
-function OrdersSection({
-  orders,
-  loadOrders,
-}: {
-  orders: OrderHistoryItem[] | null;
-  loadOrders: () => void;
-}) {
-  const [open, setOpen] = useState(false);
+function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
+  const [open, setOpen] = useState(true);
   const t = useLang();
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
-
-  const toggle = () => {
-    setOpen((o) => !o);
-    if (!orders) loadOrders();
-  };
 
   return (
     <section className="mx-6 mb-3 rounded-xl border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
       <button
         type="button"
-        onClick={toggle}
+        onClick={() => setOpen((o) => !o)}
         className="flex w-full cursor-pointer items-center justify-between"
       >
         <span className="font-display text-[15px] font-black uppercase tracking-[-0.005em] text-[color:var(--color-lit-grey)]">
-          <T en="Your orders" es="Tus pedidos" />
+          <T en="My orders" es="Mis pedidos" />
         </span>
         <span
           className={`text-[12px] text-[color:var(--color-warm-gray)] transition-transform ${open ? "rotate-180" : ""}`}

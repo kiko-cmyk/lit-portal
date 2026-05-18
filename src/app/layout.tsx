@@ -14,8 +14,21 @@ const barlow = Barlow({
 });
 
 export const metadata: Metadata = {
-  title: "Your LIT",
+  // Per-page titles override this via each route's generateMetadata().
+  title: { default: "LIT", template: "%s — LIT" },
   description: "Post-purchase portal for LIT Hydration subscribers.",
+  icons: {
+    icon: [
+      {
+        url: "https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png",
+        type: "image/png",
+      },
+    ],
+    shortcut:
+      "https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png",
+    apple:
+      "https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png",
+  },
 };
 
 export default function RootLayout({

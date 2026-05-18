@@ -1028,6 +1028,10 @@ async function getCustomerPaymentMethodImpl(
  * Generate a single-use Shopify-hosted URL where the customer can replace
  * their stored payment method. Shopify renders the PCI-compliant form and
  * redirects to the storefront on success.
+ *
+ * Shopify limitation: this mutation rejects non-card instruments with
+ * INVALID_INSTRUMENT_TYPE — for PayPal / Shop Pay we have to fall back to
+ * `customerPaymentMethodSendUpdateEmail` (see below).
  */
 async function getPaymentMethodUpdateUrlImpl(
   client: ShopifyAdminClient,
@@ -1055,6 +1059,38 @@ async function getPaymentMethodUpdateUrlImpl(
   return data.customerPaymentMethodGetUpdateUrl.updatePaymentMethodUrl;
 }
 
+/**
+ * Fallback path for non-card payment methods (PayPal, Shop Pay, etc.):
+ * Shopify emails the customer a one-time link they can follow to add or
+ * replace a payment method. Returns true if the email was queued, false if
+ * Shopify returned userErrors.
+ */
+async function sendPaymentMethodUpdateEmailImpl(
+  client: ShopifyAdminClient,
+  paymentMethodId: string,
+): Promise<boolean> {
+  const data = await client.graphql<{
+    customerPaymentMethodSendUpdateEmail: {
+      customer: { id: string } | null;
+      userErrors: Array<{ field: string[]; message: string }>;
+    };
+  }>(
+    `mutation sendUpd($id: ID!) {
+       customerPaymentMethodSendUpdateEmail(customerPaymentMethodId: $id) {
+         customer { id }
+         userErrors { field message }
+       }
+     }`,
+    { id: paymentMethodId },
+  );
+  const errs = data.customerPaymentMethodSendUpdateEmail.userErrors;
+  if (errs.length > 0) {
+    console.warn("[payment-method] sendUpdateEmail userErrors:", errs);
+    return false;
+  }
+  return !!data.customerPaymentMethodSendUpdateEmail.customer;
+}
+
 const _shopifyAdminClient = new ShopifyAdminClient();
 
 export const shopifyAdmin = Object.assign(_shopifyAdminClient, {
@@ -1062,4 +1098,6 @@ export const shopifyAdmin = Object.assign(_shopifyAdminClient, {
     getCustomerPaymentMethodImpl(_shopifyAdminClient, customerId),
   getPaymentMethodUpdateUrl: (paymentMethodId: string) =>
     getPaymentMethodUpdateUrlImpl(_shopifyAdminClient, paymentMethodId),
+  sendPaymentMethodUpdateEmail: (paymentMethodId: string) =>
+    sendPaymentMethodUpdateEmailImpl(_shopifyAdminClient, paymentMethodId),
 });
