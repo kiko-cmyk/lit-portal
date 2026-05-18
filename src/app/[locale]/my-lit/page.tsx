@@ -51,7 +51,20 @@ export default function HubPage() {
 
   useEffect(() => {
     api<HubDashboard>("/api/hub/dashboard")
-      .then(setData)
+      .then((fresh) => {
+        setData(fresh);
+        // Cold-load arrived with no scheduled date → kick off the silent
+        // re-poll just like after a plan change. Covers the case where the
+        // customer comes back to the Hub while Seal is still rebuilding.
+        if (
+          fresh.subscription &&
+          !fresh.subscription.nextShipDate &&
+          fresh.subscription.status !== "post_cancel" &&
+          fresh.subscription.status !== "expired"
+        ) {
+          setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
+        }
+      })
       .catch((e: ApiClientError) => setError(e.code));
     api<TimelineEntry[]>("/api/timeline?limit=4")
       .then(setTimeline)
@@ -135,6 +148,11 @@ export default function HubPage() {
   const nextShipDate = sub.nextShipDate ? new Date(sub.nextShipDate) : null;
   const isPostCancel = sub.status === "post_cancel" || sub.status === "expired";
   const isNew = sub.nextBoxNumber === 1 && timeline.length === 0;
+  // Whenever the sub exists but Seal hasn't reattached a next ship date —
+  // either right after a plan change or on cold reloads while Seal rebuilds —
+  // show the syncing banner so the customer never sees a blank date hero.
+  const showSyncingBanner =
+    syncingUntil !== null || (!isPostCancel && !nextShipDate);
 
   const variant: NextBoxHeroVariant = justSkipped
     ? "skipped"
@@ -159,9 +177,7 @@ export default function HubPage() {
       </header>
 
       <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
-        {syncingUntil !== null && (
-          <SyncingBanner />
-        )}
+        {showSyncingBanner && <SyncingBanner />}
         {isPostCancel ? (
           <ReactivateCard
             dropsHeld={drops.balance}

@@ -185,8 +185,8 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   // 3) If the cadence changed, also bump the subscription-level interval —
-  // Seal seems to store it both per-item AND on the sub. We don't know for
-  // certain if this lands, but the call is harmless if it no-ops.
+  // Seal stores it both per-item AND on the sub.
+  let intervalEditFailed: string | null = null;
   if (planChanged) {
     // Seal requires singular interval units ("1 month", "45 day", "3 month")
     // — plurals are rejected with "interval format is invalid" (verified
@@ -207,20 +207,29 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
         delivery_interval: intervalLabelByFrequency[targetFrequency],
         billing_interval: intervalLabelByFrequency[targetFrequency],
       });
+      log("seal-edit-interval-ok", { interval: intervalLabelByFrequency[targetFrequency] });
     } catch (e) {
-      console.warn(
-        `[plan] interval edit failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      // Non-throwing. The add_items + remove_items already changed the active
+      // item's selling_plan_id (Seal applies cadence per-item too), so a
+      // failed sub-level edit means the new item ships at the right cadence
+      // but the sub field still reads the previous interval. We log and
+      // surface via the response so the FE can warn the customer instead of
+      // crashing the whole mutation — losing the variant swap that did land
+      // would be worse than a misaligned label.
+      intervalEditFailed = e instanceof Error ? e.message : String(e);
+      log("seal-edit-interval-failed", {
+        msg: intervalEditFailed,
+        interval: intervalLabelByFrequency[targetFrequency],
+      });
     }
   }
 
   // Re-fetch the updated subscription. Seal regenerates `billing_attempts`
   // async after `add_items + remove_items + edit interval` — usually within
-  // 1–3 s, occasionally up to a minute. We poll for up to ~8 s so the PATCH
-  // response carries a fresh nextShipDate the vast majority of the time.
-  // If Seal still hasn't rebuilt by then, we return what we have and the FE
-  // falls back to its own silent retry loop.
-  const refreshed = await waitForSealBillingAttempts(sealSubscriptionId, 8_000, 500);
+  // 1–3 s. We poll for up to ~4 s so we leave plenty of headroom inside
+  // Shopify App Proxy's 30 s upstream timeout. The Hub front-end picks up
+  // any slower-than-4-s case with its own silent retry loop.
+  const refreshed = await waitForSealBillingAttempts(sealSubscriptionId, 4_000, 500);
   if (!refreshed) {
     throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
   }
