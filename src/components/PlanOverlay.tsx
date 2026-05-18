@@ -72,18 +72,24 @@ export function PlanOverlay({
       onUpdated(updated);
       setDone(true);
     } catch (e) {
-      const code = (e as { code?: string }).code;
-      setError(
-        code === "cutoff_passed"
-          ? t({
-              en: "Too late — your next box ships within 72h.",
-              es: "Demasiado tarde — tu próxima caja se envía en 72h.",
-            })
-          : t({
-              en: "Couldn't update plan. Try again or contact us.",
-              es: "No se pudo cambiar el plan. Inténtalo de nuevo.",
-            }),
-      );
+      const err = e as { code?: string; message?: string; status?: number };
+      console.error("[plan] PATCH /api/subscription/plan failed", err);
+      if (err.code === "cutoff_passed") {
+        setError(
+          t({
+            en: "Too late — your next box ships within 72h.",
+            es: "Demasiado tarde — tu próxima caja se envía en 72h.",
+          }),
+        );
+      } else {
+        const detail = err.message ?? err.code ?? "unknown_error";
+        setError(
+          t({
+            en: `Couldn't update plan (${detail}). Try again or contact us.`,
+            es: `No se pudo cambiar el plan (${detail}). Inténtalo de nuevo.`,
+          }),
+        );
+      }
     } finally {
       setBusy(false);
     }
