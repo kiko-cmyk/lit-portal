@@ -24,9 +24,16 @@ import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
 import { LangToggle, T, useLang, useLangValue } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
-import type { HubDashboard, TimelineEntry } from "@/lib/types";
+import type { HubDashboard, Subscription, TimelineEntry } from "@/lib/types";
 
 const JUST_SKIPPED_KEY = "lit:just-skipped";
+
+// Window during which the Hub silently re-polls /api/hub/dashboard after a
+// plan change, waiting for Seal to finish regenerating billing_attempts.
+// Backend already polls for 8 s; the FE picks up the slack for the rare
+// cases where Seal takes longer (memory: regenerate can take minutes).
+const POST_PLAN_RESYNC_MS = 60_000;
+const POST_PLAN_RESYNC_INTERVAL_MS = 5_000;
 
 export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
@@ -41,6 +48,7 @@ export default function HubPage() {
       typeof window !== "undefined" &&
       window.sessionStorage.getItem(JUST_SKIPPED_KEY) === "1",
   );
+  const [syncingUntil, setSyncingUntil] = useState<number | null>(null);
   const t = useLang();
   const lang = useLangValue();
 
@@ -52,6 +60,64 @@ export default function HubPage() {
       .then(setTimeline)
       .catch(() => setTimeline([]));
   }, []);
+
+  // Silent re-poll loop after a plan change. Stops as soon as the dashboard
+  // returns a non-null nextShipDate (Seal finished rebuilding), or after the
+  // window closes.
+  useEffect(() => {
+    if (syncingUntil === null) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const fresh = await api<HubDashboard>("/api/hub/dashboard");
+        if (cancelled) return;
+        setData(fresh);
+        if (fresh.subscription.nextShipDate) {
+          setSyncingUntil(null);
+          return;
+        }
+      } catch {
+        // Swallow transient errors; we'll retry on the next tick.
+      }
+      if (Date.now() < syncingUntil) {
+        setTimeout(tick, POST_PLAN_RESYNC_INTERVAL_MS);
+      } else {
+        setSyncingUntil(null);
+      }
+    };
+    const id = setTimeout(tick, POST_PLAN_RESYNC_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [syncingUntil]);
+
+  const handlePlanUpdated = (updated: Subscription) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      // Preserve the previous nextShipDate when Seal hasn't finished
+      // rebuilding billing_attempts yet — the date itself shouldn't move on
+      // a plan change (variant/cadence change only).
+      return {
+        ...prev,
+        subscription: {
+          ...updated,
+          nextShipDate: updated.nextShipDate ?? prev.subscription.nextShipDate,
+          cutoffEndsAt: updated.cutoffEndsAt ?? prev.subscription.cutoffEndsAt,
+          withinCutoff:
+            updated.nextShipDate !== null
+              ? updated.withinCutoff
+              : prev.subscription.withinCutoff,
+        },
+      };
+    });
+    // Kick off the silent re-poll window. The backend already waited ~8 s; if
+    // we still don't have a fresh date here it means Seal is slow today.
+    if (!updated.nextShipDate) {
+      setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
+    }
+  };
 
   const markSkipped = (next: boolean) => {
     setJustSkipped(next);
@@ -96,6 +162,9 @@ export default function HubPage() {
       </header>
 
       <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
+        {syncingUntil !== null && (
+          <SyncingBanner />
+        )}
         {isPostCancel ? (
           <ReactivateCard
             dropsHeld={drops.balance}
@@ -212,7 +281,7 @@ export default function HubPage() {
         <PlanOverlay
           subscription={sub}
           onClose={() => setShowPlan(false)}
-          onUpdated={(updated) => setData({ ...data, subscription: updated })}
+          onUpdated={handlePlanUpdated}
         />
       )}
       {showSkip && (
@@ -229,6 +298,35 @@ export default function HubPage() {
         />
       )}
       {showExtras && <ExtrasOverlay onClose={() => setShowExtras(false)} />}
+    </div>
+  );
+}
+
+function SyncingBanner() {
+  const lang = useLangValue();
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mx-6 mt-2 flex items-center gap-3 rounded-xl border border-[color:var(--color-bold-yellow)]/40 bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 md:mx-0"
+    >
+      <span
+        className="inline-block h-3 w-3 flex-shrink-0 rounded-full bg-[color:var(--color-bold-yellow)]"
+        style={{ animation: "pulse-slot 1.4s ease-in-out infinite" }}
+      />
+      <div className="text-[11px] leading-[1.4] text-[color:var(--color-lit-grey)]">
+        {lang === "es" ? (
+          <>
+            <strong className="font-extrabold">Aplicando el cambio de plan.</strong>{" "}
+            Tu nueva fecha de envío aparecerá en un momento — mantén esta página abierta.
+          </>
+        ) : (
+          <>
+            <strong className="font-extrabold">Applying your plan change.</strong>{" "}
+            Your new ship date will appear in a moment — keep this page open.
+          </>
+        )}
+      </div>
     </div>
   );
 }

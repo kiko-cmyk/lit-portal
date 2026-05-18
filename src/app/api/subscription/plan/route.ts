@@ -181,10 +181,40 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   }
 
-  // Re-fetch and return the updated subscription
-  const refreshed = await seal.getSubscription(sealSubscriptionId);
+  // Re-fetch the updated subscription. Seal regenerates `billing_attempts`
+  // async after `add_items + remove_items + edit interval` — usually within
+  // 1–3 s, occasionally up to a minute. We poll for up to ~8 s so the PATCH
+  // response carries a fresh nextShipDate the vast majority of the time.
+  // If Seal still hasn't rebuilt by then, we return what we have and the FE
+  // falls back to its own silent retry loop.
+  const refreshed = await waitForSealBillingAttempts(sealSubscriptionId, 8_000, 500);
   if (!refreshed) {
     throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
   }
   return mapToSubscription(refreshed, ctx.customerId);
 });
+
+/**
+ * Poll Seal for the updated subscription until it has a pending
+ * `billing_attempts` entry, or until `timeoutMs` elapses. Returns the most
+ * recent fetch regardless — caller decides what to do with a stale response.
+ */
+async function waitForSealBillingAttempts(
+  sealSubId: number,
+  timeoutMs: number,
+  intervalMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await seal.getSubscription(sealSubId);
+  while (Date.now() < deadline) {
+    if (latest) {
+      const pending = (latest.billing_attempts ?? []).find(
+        (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
+      );
+      if (pending?.date) return latest;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+    latest = await seal.getSubscription(sealSubId);
+  }
+  return latest;
+}
