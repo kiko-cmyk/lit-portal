@@ -59,11 +59,6 @@ export function PlanOverlay({
 
   const hasChange =
     boxCount !== subscription.boxCount || frequency !== subscription.frequency;
-  // Shopify scope restrictions (subscription_contracts requires program
-  // approval) mean we can't mutate Seal-owned contracts from our backend.
-  // Until/unless approved, plan changes redirect to Seal's hosted portal
-  // (still on litsalt.com via /a/subscriptions/... — same domain UX).
-  const sealPortalUrl = subscription.payment?.sealEditUrl ?? null;
 
   const handleConfirm = async () => {
     if (!hasChange) return;
@@ -218,24 +213,18 @@ export function PlanOverlay({
               </div>
             )}
 
-            <a
-              href={sealPortalUrl ?? "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => {
-                if (!sealPortalUrl) e.preventDefault();
-              }}
-              className={`mt-6 block w-full rounded-sm py-4 text-center text-xs font-black uppercase tracking-[0.2em] ${
-                sealPortalUrl
-                  ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-brisky-cream)]"
-                  : "bg-[color:var(--color-lit-grey)]/30 text-[color:var(--color-lit-grey)]/40 cursor-not-allowed"
-              }`}
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={!hasChange || busy}
+              className="mt-6 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <T en="Manage plan" es="Gestionar plan" />
-            </a>
-            <p className="mt-2 text-[10px] uppercase tracking-[0.18em] opacity-50 text-center">
-              <T en="Opens secure subscription portal" es="Abre el portal seguro de suscripción" />
-            </p>
+              {busy ? (
+                <T en="Saving…" es="Guardando…" />
+              ) : (
+                <T en="Save plan" es="Guardar plan" />
+              )}
+            </button>
             <button
               type="button"
               onClick={onClose}
