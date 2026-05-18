@@ -83,7 +83,7 @@ export function usePageTitle(title: { en: string; es: string }) {
  * EN/ES toggle matching the hi-fi `.lang-toggle`. Renders 2 tiny buttons inside
  * a faint grey pill. Active button gets dark bg + yellow text. Navigates to
  * the equivalent URL in the other locale — the slug changes per language so
- * `/en/your-lit` ↔ `/es/tu-lit` is a real URL swap, not just a state toggle.
+ * `/en/my-lit` ↔ `/es/mi-lit` is a real URL swap, not just a state toggle.
  */
 export function LangToggle({ className }: { className?: string }) {
   const lang = useLangValue();

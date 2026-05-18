@@ -3,22 +3,28 @@ import { NextResponse, type NextRequest } from "next/server";
 /**
  * Locale + slug routing for the portal.
  *
- * URLs in the wild:
- *   /apps/portal/en/your-lit, /apps/portal/es/tu-lit
+ * Current URLs:
+ *   /apps/portal/en/my-lit, /apps/portal/es/mi-lit
  *   /apps/portal/en/collection, /apps/portal/es/coleccion
  *   /apps/portal/en/account, /apps/portal/es/cuenta
  *
+ * Legacy URLs still in customer emails (Klaviyo confirmation flows) that we
+ * need to keep redirecting:
+ *   /apps/portal/en/your-lit  → /apps/portal/en/my-lit
+ *   /apps/portal/es/tu-lit    → /apps/portal/es/mi-lit
+ *
  * Shopify App Proxy strips `/apps/portal/` before forwarding to Vercel, so
- * what this proxy sees is `/es/tu-lit`, `/en/your-lit`, etc.
+ * what this proxy sees is `/es/mi-lit`, `/en/my-lit`, etc.
  *
  * Responsibilities:
  * - Redirect bare paths (no locale) to the default locale, with translated slug.
  *   Redirects use a root-relative `Location` header that includes the App Proxy
  *   prefix (`/apps/portal/...`) so the browser stays on litsalt.com instead of
  *   following the Location straight to the Vercel host.
- * - Rewrite translated ES slugs (tu-lit, coleccion, cuenta) to the EN canonical
- *   used in the file system (your-lit, collection, account). The browser URL
+ * - Rewrite translated ES slugs (mi-lit, coleccion, cuenta) to the EN canonical
+ *   used in the file system (my-lit, collection, account). The browser URL
  *   doesn't change because rewrites are internal.
+ * - Redirect legacy slugs to the new ones so old email links keep working.
  * - Skip /api/*, /_next/*, and static assets.
  */
 const LOCALES = ["en", "es"] as const;
@@ -27,16 +33,27 @@ const BROWSER_BASE = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH ?? "";
 
 // ES slug → canonical EN slug (the file system uses EN names)
 const ES_TO_CANONICAL: Record<string, string> = {
-  "tu-lit": "your-lit",
+  "mi-lit": "my-lit",
   coleccion: "collection",
   cuenta: "account",
 };
 
 // Bare canonical slug (no locale) → translated slug for the default locale
 const CANONICAL_TO_DEFAULT_LOCALE_SLUG: Record<string, string> = {
-  "your-lit": "tu-lit",
+  "my-lit": "mi-lit",
   collection: "coleccion",
   account: "cuenta",
+};
+
+// Legacy → current slug, applied with a 308 so old links in emails still land.
+// Keyed by `<locale>/<slug>` to avoid cross-locale ambiguity.
+const LEGACY_REDIRECTS: Record<string, string> = {
+  "en/your-lit": "en/my-lit",
+  "es/tu-lit": "es/mi-lit",
+  // Bare (no locale) — handled by the bare-path branch but listed here for
+  // intent. The bare-path branch translates the slug into the default locale.
+  "your-lit": "my-lit",
+  "tu-lit": "mi-lit",
 };
 
 function isLocale(s: string): s is (typeof LOCALES)[number] {
@@ -84,6 +101,18 @@ export function proxy(req: NextRequest) {
 
   // Already locale-prefixed
   if (first && isLocale(first)) {
+    // Legacy slug (e.g. your-lit / tu-lit) → 308 to current slug.
+    if (second) {
+      const legacyKey = `${first}/${second}`;
+      const replacement = LEGACY_REDIRECTS[legacyKey];
+      if (replacement) {
+        const tail = rest.length ? "/" + rest.join("/") : "";
+        return browserRelativeRedirect(
+          `${BROWSER_BASE}/${replacement}${tail}`,
+          req,
+        );
+      }
+    }
     // ES translated slug → rewrite to canonical EN slug (browser URL unchanged)
     if (first === "es" && second && ES_TO_CANONICAL[second]) {
       const url = req.nextUrl.clone();
@@ -93,11 +122,15 @@ export function proxy(req: NextRequest) {
     return;
   }
 
-  // No locale prefix → redirect to the default locale
+  // No locale prefix → redirect to the default locale.
+  // Resolve legacy first (your-lit / tu-lit are still valid landings); then
+  // translate canonical → default-locale slug.
+  const resolvedFirst =
+    (first && LEGACY_REDIRECTS[first]) || first;
   const translatedFirst =
-    first && CANONICAL_TO_DEFAULT_LOCALE_SLUG[first]
-      ? CANONICAL_TO_DEFAULT_LOCALE_SLUG[first]
-      : first ?? CANONICAL_TO_DEFAULT_LOCALE_SLUG["your-lit"];
+    resolvedFirst && CANONICAL_TO_DEFAULT_LOCALE_SLUG[resolvedFirst]
+      ? CANONICAL_TO_DEFAULT_LOCALE_SLUG[resolvedFirst]
+      : resolvedFirst ?? CANONICAL_TO_DEFAULT_LOCALE_SLUG["my-lit"];
   const tail = second ? "/" + [second, ...rest].join("/") : "";
   return browserRelativeRedirect(
     `${BROWSER_BASE}/${DEFAULT_LOCALE}/${translatedFirst}${tail}`,

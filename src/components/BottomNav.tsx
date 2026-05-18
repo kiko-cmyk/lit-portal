@@ -22,8 +22,8 @@ const ITEMS: {
   es: string;
   inactive?: boolean;
 }[] = [
-  { route: "home", canonical: "your-lit", en: "My LIT", es: "Mi LIT" },
-  { route: "account", canonical: "account", en: "My Account", es: "Mi Cuenta" },
+  { route: "home", canonical: "my-lit", en: "My LIT", es: "Mi LIT" },
+  { route: "account", canonical: "account", en: "Account", es: "Cuenta" },
   {
     route: "collection",
     canonical: "collection",

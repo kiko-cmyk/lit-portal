@@ -261,7 +261,6 @@ export default function HubPage() {
 
             <DeliveryCalendar
               nextShipDate={nextShipDate}
-              nextBoxNumber={sub.nextBoxNumber}
               upcoming={data.upcomingShipments}
             />
 

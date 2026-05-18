@@ -12,8 +12,8 @@ export type Lang = "en" | "es";
 export type PortalRoute = "home" | "collection" | "account";
 
 const SLUGS: Record<Lang, Record<PortalRoute, string>> = {
-  en: { home: "your-lit", collection: "collection", account: "account" },
-  es: { home: "tu-lit", collection: "coleccion", account: "cuenta" },
+  en: { home: "my-lit", collection: "collection", account: "account" },
+  es: { home: "mi-lit", collection: "coleccion", account: "cuenta" },
 };
 
 const BASE = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH ?? "";

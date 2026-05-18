@@ -40,7 +40,7 @@ export default function AccountPage() {
   const [addressOpen, setAddressOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
-  usePageTitle({ en: "My account · LIT", es: "Mi cuenta · LIT" });
+  usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
 
   useEffect(() => {
     Promise.all([
@@ -107,7 +107,7 @@ export default function AccountPage() {
       <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
           <h1 className="font-display text-[48px] font-black uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]">
-            <T en="My Account" es="Mi Cuenta" />
+            <T en="Account" es="Cuenta" />
           </h1>
           <div className="mt-3 h-[3px] w-9 bg-[color:var(--color-lit-grey)]" />
         </div>

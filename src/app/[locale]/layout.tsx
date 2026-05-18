@@ -4,7 +4,7 @@ import { LangProvider, type Lang } from "@/lib/i18n";
 /**
  * Per-locale layout. Reads the locale from the URL segment and wires the
  * LangProvider so all descendant pages render in the right language without
- * needing localStorage handshakes. Translated ES slugs (tu-lit, coleccion,
+ * needing localStorage handshakes. Translated ES slugs (mi-lit, coleccion,
  * cuenta) are rewritten to canonical EN slugs by `src/proxy.ts` before
  * they hit this layout.
  */
