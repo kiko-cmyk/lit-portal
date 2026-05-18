@@ -1,7 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mapToSubscription, normalizeFrequency, seal } from "@/lib/seal";
-import { resolveSubIds } from "@/lib/seal-mapping";
 import { SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -60,16 +59,25 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     throw new ApiHttpError(400, "no_changes", "Provide boxCount and/or frequency");
   }
 
-  const ids = await resolveSubIds(ctx.customerId, email);
-  if (!ids) {
-    throw new ApiHttpError(404, "subscription_not_found", `No active subscription for ${email}`);
+  // Resolve the active Seal subscription directly. We deliberately do NOT
+  // call resolveSubIds() here: that helper also requires a Shopify
+  // SubscriptionContract, which only exists for Shopify-owned (Skio-style)
+  // subs. The plan-change pipeline below only mutates Seal (add_items +
+  // remove_items + edit interval), so requiring the Shopify contract would
+  // 404 every Seal-owned sub unnecessarily.
+  const sealSubs = await seal.getSubscriptionsByEmail(email);
+  const sealSubMatch =
+    sealSubs.find((s) => s.status === "ACTIVE") ??
+    sealSubs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
+  if (!sealSubMatch) {
+    throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
   }
-
-  const sealSub = await seal.getSubscription(ids.sealSubscriptionId);
+  const sealSub = await seal.getSubscription(sealSubMatch.id);
   if (!sealSub) {
-    throw new ApiHttpError(404, "seal_sub_not_found", `Seal sub ${ids.sealSubscriptionId} not found`);
+    throw new ApiHttpError(404, "seal_sub_not_found", `Seal sub ${sealSubMatch.id} not found`);
   }
   assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/plan");
+  const sealSubscriptionId = sealSub.id;
 
   // Pick the main subscription line (non-one-time item)
   const mainItem = sealSub.items.find((it) => !it.is_one_time_item) ?? sealSub.items[0];
@@ -128,7 +136,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // `price` is REQUIRED by Seal — verified 2026-05-14, returns
   // "Item is missing price value." otherwise. We pass Shopify's variant
   // price as the per-unit value (memory: `price` × `quantity` = total).
-  await seal.addItems(ids.sealSubscriptionId, [{
+  await seal.addItems(sealSubscriptionId, [{
     productId: variantDetails.productId,
     variantId: variantDetails.variantId,
     quantity: mainItem.quantity,
@@ -141,7 +149,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }]);
 
   // 2) Remove the original item by its Seal item ID.
-  await seal.removeItems(ids.sealSubscriptionId, [mainItem.id]);
+  await seal.removeItems(sealSubscriptionId, [mainItem.id]);
 
   // 3) If the cadence changed, also bump the subscription-level interval —
   // Seal seems to store it both per-item AND on the sub. We don't know for
@@ -162,7 +170,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       "6mo": "6 month",
     };
     try {
-      await seal.editSubscription(ids.sealSubscriptionId, {
+      await seal.editSubscription(sealSubscriptionId, {
         delivery_interval: intervalLabelByFrequency[targetFrequency],
         billing_interval: intervalLabelByFrequency[targetFrequency],
       });
@@ -174,7 +182,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   // Re-fetch and return the updated subscription
-  const refreshed = await seal.getSubscription(ids.sealSubscriptionId);
+  const refreshed = await seal.getSubscription(sealSubscriptionId);
   if (!refreshed) {
     throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
   }
