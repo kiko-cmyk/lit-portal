@@ -4,8 +4,6 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { AddressOverlay } from "@/components/AddressOverlay";
 import { CancelTakeover } from "@/components/CancelTakeover";
-import { ExtrasOverlay } from "@/components/ExtrasOverlay";
-import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { PlanOverlay } from "@/components/PlanOverlay";
@@ -36,10 +34,8 @@ export default function AccountPage() {
   const [orders, setOrders] = useState<OrderHistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [flavorOpen, setFlavorOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
-  const [extrasOpen, setExtrasOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
@@ -155,13 +151,12 @@ export default function AccountPage() {
           <CompactAction
             icon={QAIcons.Flavor}
             label={t({ en: "Flavor", es: "Sabor" })}
-            onClick={() => setFlavorOpen(true)}
+            comingSoon
           />
           <CompactAction
             icon={QAIcons.Extras}
             label={t({ en: "Extras", es: "Extras" })}
-            onClick={() => subscription && setExtrasOpen(true)}
-            disabled={!subscription}
+            comingSoon
           />
         </section>
 
@@ -271,11 +266,9 @@ export default function AccountPage() {
           </Section>
         )}
 
-        {subscription && (
-          <Section title={t({ en: "How you pay", es: "Cómo pagas" })}>
-            <PaymentBlock subscription={subscription} />
-          </Section>
-        )}
+        <Section title={t({ en: "How you pay", es: "Cómo pagas" })}>
+          <PaymentBlock />
+        </Section>
 
         <Section title={t({ en: "Language", es: "Idioma" })}>
           <LanguagePicker />
@@ -310,7 +303,6 @@ export default function AccountPage() {
           onClose={() => setCancelOpen(false)}
         />
       )}
-      {flavorOpen && <FlavorOverlay onClose={() => setFlavorOpen(false)} />}
       {planOpen && subscription && (
         <PlanOverlay
           subscription={subscription}
@@ -327,7 +319,6 @@ export default function AccountPage() {
           }
         />
       )}
-      {extrasOpen && <ExtrasOverlay onClose={() => setExtrasOpen(false)} />}
       {addressOpen && subscription && (
         <AddressOverlay
           subscription={subscription}
@@ -344,23 +335,40 @@ function CompactAction({
   label,
   onClick,
   disabled,
+  comingSoon,
 }: {
   icon: ReactNode;
   label: string;
   onClick?: () => void;
   disabled?: boolean;
+  comingSoon?: boolean;
 }) {
+  const inert = comingSoon || disabled;
   return (
     <button
       type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex flex-col items-center gap-1.5 rounded-lg border border-[color:var(--color-lit-grey)]/6 bg-[color:var(--color-sharp-white)] px-1.5 py-3 transition-all hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[color:var(--color-lit-grey)]/6 disabled:hover:bg-[color:var(--color-sharp-white)]"
+      onClick={comingSoon ? undefined : onClick}
+      disabled={inert}
+      aria-disabled={inert}
+      className={
+        comingSoon
+          ? "relative flex flex-col items-center gap-1.5 rounded-lg border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-1.5 py-3 cursor-not-allowed"
+          : "flex flex-col items-center gap-1.5 rounded-lg border border-[color:var(--color-lit-grey)]/6 bg-[color:var(--color-sharp-white)] px-1.5 py-3 transition-all hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[color:var(--color-lit-grey)]/6 disabled:hover:bg-[color:var(--color-sharp-white)]"
+      }
     >
-      <span className="h-[18px] w-[18px] text-[color:var(--color-lit-grey)]">
+      {comingSoon && (
+        <span className="absolute right-1 top-1 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1 py-0.5 text-[7px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
+          Soon
+        </span>
+      )}
+      <span
+        className={`h-[18px] w-[18px] ${comingSoon ? "text-[color:var(--color-warm-gray)]/60" : "text-[color:var(--color-lit-grey)]"}`}
+      >
         {icon}
       </span>
-      <span className="text-[9px] font-extrabold uppercase leading-[1.15] tracking-[0.06em] text-[color:var(--color-lit-grey)]">
+      <span
+        className={`text-[9px] font-extrabold uppercase leading-[1.15] tracking-[0.06em] ${comingSoon ? "text-[color:var(--color-warm-gray)]" : "text-[color:var(--color-lit-grey)]"}`}
+      >
         {label}
       </span>
     </button>
@@ -567,33 +575,87 @@ function AddressBlock({
   );
 }
 
-function PaymentBlock({ subscription }: { subscription: Subscription }) {
-  const { cardExpiryMonth, cardExpiryYear, sealEditUrl } = subscription.payment;
-  const hasCard = cardExpiryMonth && cardExpiryYear;
+interface PaymentMethodResponse {
+  instrument: {
+    id: string;
+    type: "card" | "paypal" | "shop_pay" | "other" | "unknown";
+    label: string;
+    brand: string | null;
+    lastDigits: string | null;
+    expiryMonth: string | null;
+    expiryYear: string | null;
+    paypalEmail: string | null;
+  } | null;
+  updateUrl: string | null;
+}
+
+function PaymentBlock() {
+  const t = useLang();
+  const [data, setData] = useState<PaymentMethodResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api<PaymentMethodResponse>("/api/payment-method")
+      .then(setData)
+      .catch(() => setData({ instrument: null, updateUrl: null }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="text-[12px] text-[color:var(--color-warm-gray)]">
+        <T en="Loading…" es="Cargando…" />
+      </div>
+    );
+  }
+
+  if (!data?.instrument) {
+    return (
+      <div className="flex items-center gap-3 py-1">
+        <div className="min-w-[84px] text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+          <T en="Method" es="Método" />
+        </div>
+        <div className="flex-1 text-[13px] text-[color:var(--color-warm-gray)]">
+          <T en="No payment method on file." es="Sin método de pago registrado." />
+        </div>
+      </div>
+    );
+  }
+
+  const inst = data.instrument;
+  const typeLabel =
+    inst.type === "paypal"
+      ? "PayPal"
+      : inst.type === "shop_pay"
+        ? "Shop Pay"
+        : inst.type === "card"
+          ? t({ en: "Card", es: "Tarjeta" })
+          : t({ en: "Method", es: "Método" });
+
   return (
     <div className="flex items-center gap-3 py-1">
       <div className="min-w-[84px] text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
-        <T en="Card" es="Tarjeta" />
+        {typeLabel}
       </div>
       <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
-        {hasCard ? (
-          <>
-            <T en="Card on file" es="Tarjeta registrada" /> · <T en="exp" es="cad" />{" "}
-            {cardExpiryMonth.padStart(2, "0")}/{cardExpiryYear.slice(-2)}
-          </>
-        ) : (
-          <T en="No card on file." es="Sin tarjeta." />
-        )}
+        {inst.label}
       </div>
-      {sealEditUrl && (
+      {data.updateUrl ? (
         <a
-          href={sealEditUrl}
+          href={data.updateUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)]"
         >
-          <T en="Update" es="Cambiar" />
+          <T en="Change" es="Cambiar" />
         </a>
+      ) : (
+        <span
+          aria-disabled
+          className="cursor-not-allowed text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]/40"
+        >
+          <T en="Change" es="Cambiar" />
+        </span>
       )}
     </div>
   );

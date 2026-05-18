@@ -222,10 +222,23 @@ export interface OrderHistoryItem {
 
 // ============ Hub ============
 
+export interface UpcomingShipment {
+  /** ISO date of the scheduled shipment (from Seal billing_attempts). */
+  date: string;
+  /** Box # the customer will receive when this attempt completes. */
+  boxNumber: number;
+}
+
 export interface HubDashboard {
   subscription: Subscription;
   drops: { balance: number; tierEarned: boolean; activeReward: PuzzleState | null };
   nextEvent: EventListItem | null;
+  /**
+   * All upcoming shipments Seal has scheduled (pending billing attempts).
+   * Excludes the next one already surfaced via `subscription.nextShipDate`.
+   * Sorted by date ascending. Seal typically pre-schedules 5–6 in advance.
+   */
+  upcomingShipments: UpcomingShipment[];
 }
 
 export interface TimelineEntry {

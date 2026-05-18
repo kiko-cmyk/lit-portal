@@ -9,15 +9,27 @@ import { portalHref, type PortalRoute } from "@/lib/portal-link";
 /**
  * Bottom navigation — Phase 1 MVP has 3 slots: Hub / Collection / Account.
  *
- * Collection is shown BLURRED in Phase 1 (cards locked, no real progression yet
- * — physical cards not in production). Drops + The World are NOT in Phase 1
- * navigation but their code is preserved for Phase 2 reactivation.
+ * Collection is shown BLURRED in Phase 1 and is `inactive: true` — visible in
+ * the nav so customers know it's coming but rendered as a muted, non-clickable
+ * label with a "SOON" suffix. Drops + The World are NOT in Phase 1 nav.
  *
- * Per locked decision 2026-05-06.
+ * Per locked decision 2026-05-06 and refresh 2026-05-18.
  */
-const ITEMS: { route: PortalRoute; canonical: string; en: string; es: string }[] = [
+const ITEMS: {
+  route: PortalRoute;
+  canonical: string;
+  en: string;
+  es: string;
+  inactive?: boolean;
+}[] = [
   { route: "home", canonical: "your-lit", en: "Your LIT", es: "Tu LIT" },
-  { route: "collection", canonical: "collection", en: "Collection", es: "Colección" },
+  {
+    route: "collection",
+    canonical: "collection",
+    en: "Collection",
+    es: "Colección",
+    inactive: true,
+  },
   { route: "account", canonical: "account", en: "Account", es: "Cuenta" },
 ];
 
@@ -41,6 +53,21 @@ export function BottomNav() {
     >
       {ITEMS.map((it) => {
         const active = isActive(pathname, it.canonical);
+        if (it.inactive) {
+          return (
+            <span
+              key={it.canonical}
+              aria-disabled
+              className="flex cursor-not-allowed flex-col items-center justify-center gap-1 py-2 text-[9px] font-bold uppercase tracking-[0.1em] text-[color:var(--color-warm-gray)]/55"
+              title={t({ en: "Coming soon", es: "Próximamente" })}
+            >
+              <span>{t({ en: it.en, es: it.es })}</span>
+              <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/70">
+                Soon
+              </span>
+            </span>
+          );
+        }
         return (
           <Link
             key={it.canonical}
@@ -81,6 +108,21 @@ export function TopNav() {
         <div className="flex items-center gap-8">
           {ITEMS.map((it) => {
             const active = isActive(pathname, it.canonical);
+            if (it.inactive) {
+              return (
+                <span
+                  key={it.canonical}
+                  aria-disabled
+                  className="cursor-not-allowed text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/35"
+                  title={t({ en: "Coming soon", es: "Próximamente" })}
+                >
+                  {t({ en: it.en, es: it.es })}{" "}
+                  <span className="ml-1 text-[8px] font-extrabold tracking-[0.2em] text-[color:var(--color-warm-gray)]/80">
+                    SOON
+                  </span>
+                </span>
+              );
+            }
             return (
               <Link
                 key={it.canonical}

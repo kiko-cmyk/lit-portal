@@ -4,7 +4,12 @@ import { mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
-import type { EventListItem, HubDashboard, PuzzleState } from "@/lib/types";
+import type {
+  EventListItem,
+  HubDashboard,
+  PuzzleState,
+  UpcomingShipment,
+} from "@/lib/types";
 
 // GET /apps/portal/api/hub/dashboard
 // Aggregates everything the Hub needs in one round-trip.
@@ -85,9 +90,25 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     };
   }
 
+  // All upcoming shipments Seal has pre-scheduled. The "next" one is already
+  // surfaced via subscription.nextShipDate; everything after that goes into
+  // upcomingShipments so the Hub can render the full delivery calendar.
+  const completedCount = (sub.billing_attempts ?? []).filter(
+    (ba) => ba.completed_at,
+  ).length;
+  const upcomingShipments: UpcomingShipment[] = (sub.billing_attempts ?? [])
+    .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on && ba.date)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(1) // drop the first — that's subscription.nextShipDate
+    .map((ba, idx) => ({
+      date: ba.date,
+      boxNumber: completedCount + 2 + idx,
+    }));
+
   return {
     subscription,
     drops: { balance, tierEarned, activeReward },
     nextEvent,
+    upcomingShipments,
   };
 });

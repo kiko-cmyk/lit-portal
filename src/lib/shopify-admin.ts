@@ -872,4 +872,194 @@ export interface SubscriptionContractSummary {
   lines: SubscriptionContractLine[];
 }
 
-export const shopifyAdmin = new ShopifyAdminClient();
+// ============ Payment method ============
+
+export type PaymentInstrumentType =
+  | "card"
+  | "paypal"
+  | "shop_pay"
+  | "other"
+  | "unknown";
+
+export interface PaymentInstrument {
+  /** Shopify CustomerPaymentMethod GID (used for update-url mutation). */
+  id: string;
+  type: PaymentInstrumentType;
+  /** UI label, e.g. "Visa ·· 4242 · exp 08/28" or "PayPal · juan@…" */
+  label: string;
+  brand: string | null;
+  lastDigits: string | null;
+  expiryMonth: string | null;
+  expiryYear: string | null;
+  paypalEmail: string | null;
+}
+
+interface PaymentMethodEdge {
+  node: {
+    id: string;
+    revokedAt: string | null;
+    instrument:
+      | {
+          __typename: "CustomerCreditCard";
+          brand: string | null;
+          lastDigits: string | null;
+          expiryMonth: number | null;
+          expiryYear: number | null;
+        }
+      | {
+          __typename: "CustomerPaypalBillingAgreement";
+          paypalAccountEmail: string | null;
+        }
+      | {
+          __typename: "CustomerShopPayAgreement";
+          lastDigits: string | null;
+        }
+      | { __typename: string };
+  };
+}
+
+/**
+ * Get the customer's most recent non-revoked payment method (PayPal / card /
+ * Shop Pay / etc.). For Seal-owned subs the contract isn't visible to our
+ * app's scope, so we read from the customer directly. Shopify exposes all
+ * methods on `customer.paymentMethods`; we surface the first non-revoked.
+ */
+async function getCustomerPaymentMethodImpl(
+  client: ShopifyAdminClient,
+  customerId: string,
+): Promise<PaymentInstrument | null> {
+  const gid = customerId.startsWith("gid://")
+    ? customerId
+    : `gid://shopify/Customer/${customerId}`;
+  const data = await client.graphql<{
+    customer: { paymentMethods: { edges: PaymentMethodEdge[] } } | null;
+  }>(
+    `query custPay($id: ID!) {
+       customer(id: $id) {
+         paymentMethods(first: 10) {
+           edges { node {
+             id
+             revokedAt
+             instrument {
+               __typename
+               ... on CustomerCreditCard { brand lastDigits expiryMonth expiryYear }
+               ... on CustomerPaypalBillingAgreement { paypalAccountEmail }
+               ... on CustomerShopPayAgreement { lastDigits }
+             }
+           } }
+         }
+       }
+     }`,
+    { id: gid },
+  );
+
+  const active = (data.customer?.paymentMethods.edges ?? []).find(
+    (e) => !e.node.revokedAt,
+  );
+  if (!active) return null;
+  const inst = active.node.instrument;
+  const id = active.node.id;
+
+  if (inst.__typename === "CustomerCreditCard") {
+    const card = inst as Extract<
+      PaymentMethodEdge["node"]["instrument"],
+      { __typename: "CustomerCreditCard" }
+    >;
+    const exp =
+      card.expiryMonth && card.expiryYear
+        ? ` · exp ${String(card.expiryMonth).padStart(2, "0")}/${String(card.expiryYear).slice(-2)}`
+        : "";
+    return {
+      id,
+      type: "card",
+      label: `${card.brand ?? "Card"} ·· ${card.lastDigits ?? "····"}${exp}`,
+      brand: card.brand,
+      lastDigits: card.lastDigits,
+      expiryMonth: card.expiryMonth ? String(card.expiryMonth) : null,
+      expiryYear: card.expiryYear ? String(card.expiryYear) : null,
+      paypalEmail: null,
+    };
+  }
+  if (inst.__typename === "CustomerPaypalBillingAgreement") {
+    const pp = inst as Extract<
+      PaymentMethodEdge["node"]["instrument"],
+      { __typename: "CustomerPaypalBillingAgreement" }
+    >;
+    return {
+      id,
+      type: "paypal",
+      label: pp.paypalAccountEmail ? `PayPal · ${pp.paypalAccountEmail}` : "PayPal",
+      brand: null,
+      lastDigits: null,
+      expiryMonth: null,
+      expiryYear: null,
+      paypalEmail: pp.paypalAccountEmail,
+    };
+  }
+  if (inst.__typename === "CustomerShopPayAgreement") {
+    const sp = inst as Extract<
+      PaymentMethodEdge["node"]["instrument"],
+      { __typename: "CustomerShopPayAgreement" }
+    >;
+    return {
+      id,
+      type: "shop_pay",
+      label: sp.lastDigits ? `Shop Pay ·· ${sp.lastDigits}` : "Shop Pay",
+      brand: null,
+      lastDigits: sp.lastDigits,
+      expiryMonth: null,
+      expiryYear: null,
+      paypalEmail: null,
+    };
+  }
+  return {
+    id,
+    type: "other",
+    label: "Active payment method",
+    brand: null,
+    lastDigits: null,
+    expiryMonth: null,
+    expiryYear: null,
+    paypalEmail: null,
+  };
+}
+
+/**
+ * Generate a single-use Shopify-hosted URL where the customer can replace
+ * their stored payment method. Shopify renders the PCI-compliant form and
+ * redirects to the storefront on success.
+ */
+async function getPaymentMethodUpdateUrlImpl(
+  client: ShopifyAdminClient,
+  paymentMethodId: string,
+): Promise<string | null> {
+  const data = await client.graphql<{
+    customerPaymentMethodGetUpdateUrl: {
+      updatePaymentMethodUrl: string | null;
+      userErrors: Array<{ field: string[]; message: string }>;
+    };
+  }>(
+    `mutation updUrl($id: ID!) {
+       customerPaymentMethodGetUpdateUrl(customerPaymentMethodId: $id) {
+         updatePaymentMethodUrl
+         userErrors { field message }
+       }
+     }`,
+    { id: paymentMethodId },
+  );
+  const errs = data.customerPaymentMethodGetUpdateUrl.userErrors;
+  if (errs.length > 0) {
+    console.warn("[payment-method] getUpdateUrl userErrors:", errs);
+    return null;
+  }
+  return data.customerPaymentMethodGetUpdateUrl.updatePaymentMethodUrl;
+}
+
+const _shopifyAdminClient = new ShopifyAdminClient();
+
+export const shopifyAdmin = Object.assign(_shopifyAdminClient, {
+  getCustomerPaymentMethod: (customerId: string) =>
+    getCustomerPaymentMethodImpl(_shopifyAdminClient, customerId),
+  getPaymentMethodUpdateUrl: (paymentMethodId: string) =>
+    getPaymentMethodUpdateUrlImpl(_shopifyAdminClient, paymentMethodId),
+});

@@ -6,6 +6,11 @@ interface QuickActionButtonProps {
   icon: ReactNode;
   label: string;
   sub?: string;
+  /**
+   * When true, the tile renders muted-grey, non-interactive, with a SOON
+   * badge. `onClick` is ignored so callers don't accidentally fire flows
+   * that aren't ready (Phase 1 has Extras + Flavor in this state).
+   */
   comingSoon?: boolean;
   onClick?: () => void;
   disabled?: boolean;
@@ -15,7 +20,8 @@ interface QuickActionButtonProps {
  * Quick action tile from the Hub hi-fi (.qa-btn).
  *
  *   icon (20×20) ─ label uppercase 12px ─ sub 11px warm-gray
- *   hover: border yellow + translateY(-1px)
+ *   hover: border yellow + translateY(-1px) (active state only)
+ *   comingSoon: forced grey, not clickable, SOON badge
  */
 export function QuickActionButton({
   icon,
@@ -25,24 +31,38 @@ export function QuickActionButton({
   onClick,
   disabled,
 }: QuickActionButtonProps) {
+  const inert = comingSoon || disabled;
   return (
     <button
       type="button"
-      onClick={onClick}
-      disabled={disabled || (comingSoon && !onClick)}
-      className="group relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3 py-3.5 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/10"
+      onClick={comingSoon ? undefined : onClick}
+      disabled={inert}
+      aria-disabled={inert}
+      className={
+        comingSoon
+          ? "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-3 py-3.5 text-left cursor-not-allowed"
+          : "group relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3 py-3.5 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/10"
+      }
     >
       {comingSoon && (
         <span className="absolute right-2 top-2 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]">
           Soon
         </span>
       )}
-      <span className="h-5 w-5 text-[color:var(--color-lit-grey)]">{icon}</span>
-      <span className="text-[12px] font-extrabold uppercase leading-none tracking-[0.06em] text-[color:var(--color-lit-grey)]">
+      <span
+        className={`h-5 w-5 ${comingSoon ? "text-[color:var(--color-warm-gray)]/60" : "text-[color:var(--color-lit-grey)]"}`}
+      >
+        {icon}
+      </span>
+      <span
+        className={`text-[12px] font-extrabold uppercase leading-none tracking-[0.06em] ${comingSoon ? "text-[color:var(--color-warm-gray)]" : "text-[color:var(--color-lit-grey)]"}`}
+      >
         {label}
       </span>
       {sub && (
-        <span className="text-[11px] leading-[1.3] text-[color:var(--color-warm-gray)]">
+        <span
+          className={`text-[11px] leading-[1.3] ${comingSoon ? "text-[color:var(--color-warm-gray)]/70" : "text-[color:var(--color-warm-gray)]"}`}
+        >
           {sub}
         </span>
       )}

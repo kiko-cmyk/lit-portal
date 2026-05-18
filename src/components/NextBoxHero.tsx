@@ -1,35 +1,45 @@
 "use client";
 
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { frequencyLabel } from "@/lib/frequency-label";
+import type { Frequency } from "@/lib/types";
 
 export type NextBoxHeroVariant = "default" | "skipped" | "locked" | "new";
 
 interface NextBoxHeroProps {
   shipDate: Date | null;
   flavor: string;
-  boxNumber: number | null;
   variant: NextBoxHeroVariant;
   cutoffEndsAt?: Date | null;
   onUndoSkip?: () => void;
+  /** Customer's current plan, used in the meta-row. */
+  boxCount: number;
+  frequency: Frequency;
 }
 
 /**
- * Hi-fi next-box hero card.
+ * Hero card for "Your next box".
  *
- * Layout mirrors `designs/mobile/lit-hub-hifi/index.html` (.next-box):
- *   - eyebrow "YOUR NEXT BOX"
+ * Hierarchy (post user-feedback 2026-05-18):
+ *   - eyebrow "TU PRÓXIMA CAJA"
  *   - 58px Clash Display date
- *   - day caps with wide tracking
- *   - 3-col meta row: flavor | yellow countdown pill | box #
- *   - variant adds .skipped (greyed date + undo banner) or .locked (lock-note)
+ *   - day-of-week · "LLEGA EN X DÍAS" inline so the countdown reads as context
+ *     for the big date, not as a competing number
+ *   - 2-col meta row: SABOR | TU PLAN (boxes · frequency)
+ *
+ * Previously this card had a yellow countdown pill in the middle and a
+ * BOX #N cell on the right. Removed because the date already communicates
+ * "when" (no need for a second number) and the box index didn't help the
+ * customer.
  */
 export function NextBoxHero({
   shipDate,
   flavor,
-  boxNumber,
   variant,
   cutoffEndsAt,
   onUndoSkip,
+  boxCount,
+  frequency,
 }: NextBoxHeroProps) {
   const t = useLang();
   const lang = useLangValue();
@@ -48,7 +58,12 @@ export function NextBoxHero({
     ? shipDate.toLocaleDateString(dateLocale, { weekday: "long" })
     : "";
 
-  const { num, unit } = countdown({ shipDate, locked, lang });
+  const arrivalCopy = arrivalDescriptor(shipDate, locked, lang);
+  const planLabel = `${boxCount} ${
+    boxCount === 1
+      ? t({ en: "box", es: "caja" })
+      : t({ en: "boxes", es: "cajas" })
+  } · ${frequencyLabel(frequency, lang, { format: "short" })}`;
 
   return (
     <section
@@ -82,6 +97,12 @@ export function NextBoxHero({
 
         <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
           {weekday}
+          {arrivalCopy && (
+            <>
+              <span> · </span>
+              <span className="text-[color:var(--color-lit-grey)]">{arrivalCopy}</span>
+            </>
+          )}
           {skipped && (
             <>
               <span> · </span>
@@ -90,23 +111,15 @@ export function NextBoxHero({
           )}
         </div>
 
-        <div className="relative mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-t border-[color:var(--color-lit-grey)]/10 pt-4">
+        <div className="relative mt-5 grid grid-cols-2 items-center gap-4 border-t border-[color:var(--color-lit-grey)]/10 pt-4">
           <MetaCell
             label={t({ en: "Flavor", es: "Sabor" })}
-            value={flavor}
+            value={flavor.toUpperCase()}
             align="left"
           />
-
-          <div className="rounded-lg bg-[color:var(--color-bold-yellow)] px-3 py-2.5 text-center font-display font-black text-[color:var(--color-lit-grey)] min-w-[64px]">
-            <div className="text-xl leading-none tracking-[-0.02em]">{num}</div>
-            <div className="mt-1 text-[9px] font-black uppercase tracking-[0.2em] opacity-75">
-              {unit}
-            </div>
-          </div>
-
           <MetaCell
-            label={t({ en: "Box", es: "Caja" })}
-            value={boxNumber ? `#${boxNumber}` : "—"}
+            label={t({ en: "Your plan", es: "Tu plan" })}
+            value={planLabel.toUpperCase()}
             align="right"
           />
         </div>
@@ -135,8 +148,8 @@ export function NextBoxHero({
           <div className="mt-3.5 bg-[color:var(--color-lit-grey)]/[0.06] px-3 py-2 text-center text-[11px] text-[color:var(--color-warm-gray)]">
             <strong className="font-extrabold text-[color:var(--color-lit-grey)]">
               <T
-                en={`Locked in ${formatHM(cutoffEndsAt, "en")}`}
-                es={`Bloqueado en ${formatHM(cutoffEndsAt, "es")}`}
+                en={`Locked in ${formatHM(cutoffEndsAt)}`}
+                es={`Bloqueado en ${formatHM(cutoffEndsAt)}`}
               />
             </strong>
             <span>
@@ -166,57 +179,54 @@ function MetaCell({
       <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-warm-gray)]">
         {label}
       </div>
-      <div className="mt-0.5 font-display text-[18px] font-black uppercase tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+      <div className="mt-0.5 font-display text-[16px] font-black uppercase leading-tight tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
         {value}
       </div>
     </div>
   );
 }
 
-function countdown({
-  shipDate,
-  locked,
-  lang,
-}: {
-  shipDate: Date | null;
-  locked: boolean;
-  lang: "en" | "es";
-}): { num: string; unit: string } {
-  if (!shipDate) return { num: "—", unit: lang === "es" ? "días" : "days" };
+/**
+ * "LLEGA EN 15 DÍAS" / "LLEGA HOY" / "LLEGA EN 14H" — copy that contextualises
+ * the big date, replacing the old yellow countdown pill.
+ */
+function arrivalDescriptor(
+  shipDate: Date | null,
+  locked: boolean,
+  lang: "en" | "es",
+): string | null {
+  if (!shipDate) return null;
 
   const ms = shipDate.getTime() - Date.now();
   const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
   const hours = Math.max(0, Math.ceil(ms / (1000 * 60 * 60)));
 
   if (locked) {
-    return {
-      num: `${hours}h`,
-      unit: lang === "es" ? "al cierre" : "to lock",
-    };
+    return lang === "es"
+      ? `cierra en ${hours}h`
+      : `locks in ${hours}h`;
+  }
+  if (ms <= 0) {
+    return lang === "es" ? "llega hoy" : "arrives today";
   }
   if (days <= 1 && hours < 48) {
-    return {
-      num: `${hours}h`,
-      unit: lang === "es" ? "restan" : "left",
-    };
+    return lang === "es" ? `llega en ${hours}h` : `arrives in ${hours}h`;
   }
-  return {
-    num: String(Math.max(0, days)),
-    unit:
-      days === 1
-        ? lang === "es"
-          ? "día"
-          : "day"
-        : lang === "es"
-          ? "días"
-          : "days",
-  };
+  const unit =
+    days === 1
+      ? lang === "es"
+        ? "día"
+        : "day"
+      : lang === "es"
+        ? "días"
+        : "days";
+  return lang === "es" ? `llega en ${days} ${unit}` : `arrives in ${days} ${unit}`;
 }
 
-function formatHM(date: Date, lang: "en" | "es"): string {
+function formatHM(date: Date): string {
   const ms = Math.max(0, date.getTime() - Date.now());
   const totalMin = Math.floor(ms / (1000 * 60));
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
-  return lang === "es" ? `${h}h ${m}m` : `${h}h ${m}m`;
+  return `${h}h ${m}m`;
 }

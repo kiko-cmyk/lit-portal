@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
-import { ExtrasOverlay } from "@/components/ExtrasOverlay";
-import { FlavorOverlay } from "@/components/FlavorOverlay";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
+import { DeliveryCalendar } from "@/components/DeliveryCalendar";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
+import { OrderHistory } from "@/components/OrderHistory";
 import {
   CollectionPeekVisual,
   PeekCard,
@@ -19,11 +19,9 @@ import {
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
-import { Timeline } from "@/components/Timeline";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
 import { LangToggle, T, useLang, useLangValue } from "@/lib/i18n";
-import { portalHref } from "@/lib/portal-link";
 import type { HubDashboard, Subscription, TimelineEntry } from "@/lib/types";
 
 const JUST_SKIPPED_KEY = "lit:just-skipped";
@@ -39,10 +37,8 @@ export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [showFlavor, setShowFlavor] = useState(false);
   const [showPlan, setShowPlan] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
-  const [showExtras, setShowExtras] = useState(false);
   const [justSkipped, setJustSkipped] = useState<boolean>(
     () =>
       typeof window !== "undefined" &&
@@ -178,10 +174,11 @@ export default function HubPage() {
             <NextBoxHero
               shipDate={nextShipDate}
               flavor={sub.flavor}
-              boxNumber={sub.nextBoxNumber}
               variant={variant}
               cutoffEndsAt={cutoffEndsAt}
               onUndoSkip={justSkipped ? () => markSkipped(false) : undefined}
+              boxCount={sub.boxCount}
+              frequency={sub.frequency}
             />
 
             <section className="mx-6 mt-5 grid grid-cols-2 gap-2 md:mx-0 md:grid-cols-4">
@@ -214,7 +211,6 @@ export default function HubPage() {
                   es: "Nuevos sabores pronto",
                 })}
                 comingSoon
-                onClick={() => setShowFlavor(true)}
               />
               <QuickActionButton
                 icon={QAIcons.Extras}
@@ -223,7 +219,7 @@ export default function HubPage() {
                   en: "One-time add to next box",
                   es: "Añadir una vez a la caja",
                 })}
-                onClick={() => setShowExtras(true)}
+                comingSoon
               />
             </section>
 
@@ -256,27 +252,25 @@ export default function HubPage() {
                         es: "Una carta por caja. Completa el set.",
                       })
                 }
-                cta={t({ en: "See all", es: "Ver todas" })}
-                href={portalHref(lang, "collection")}
+                cta={t({ en: "Coming soon", es: "Pronto" })}
+                comingSoon
                 visual={<CollectionPeekVisual earned={collectionEarned} />}
               />
             </div>
 
-            <div className="mt-1">
-              <Timeline
-                past={timeline}
-                nextShipDate={nextShipDate}
-                nextBoxNumber={sub.nextBoxNumber}
-                nextFlavor={sub.flavor}
-              />
-            </div>
+            <DeliveryCalendar
+              nextShipDate={nextShipDate}
+              nextBoxNumber={sub.nextBoxNumber}
+              upcoming={data.upcomingShipments}
+            />
+
+            <OrderHistory limit={10} />
           </>
         )}
       </main>
 
       <BottomNav />
 
-      {showFlavor && <FlavorOverlay onClose={() => setShowFlavor(false)} />}
       {showPlan && (
         <PlanOverlay
           subscription={sub}
@@ -297,7 +291,6 @@ export default function HubPage() {
           }}
         />
       )}
-      {showExtras && <ExtrasOverlay onClose={() => setShowExtras(false)} />}
     </div>
   );
 }

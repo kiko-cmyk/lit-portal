@@ -554,7 +554,7 @@ export function getNextBoxNumber(s: SealSubscription): number {
  * flavor lookup.
  */
 export function extractFlavor(_s: SealSubscription): string {
-  return "Lemon Drop";
+  return "Salty Lemon";
 }
 
 /**
