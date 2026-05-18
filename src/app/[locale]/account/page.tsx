@@ -6,6 +6,7 @@ import { AddressOverlay } from "@/components/AddressOverlay";
 import { CancelTakeover } from "@/components/CancelTakeover";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
+import { PaymentUpdateOverlay } from "@/components/PaymentUpdateOverlay";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { QAIcons } from "@/components/QuickActionButton";
 import { SkipOverlay } from "@/components/SkipOverlay";
@@ -595,25 +596,42 @@ function PaymentBlock() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // URL we'll iframe in the PaymentUpdateOverlay. Null = overlay closed.
+  // Card flow: comes from `data.updateUrl` directly. PayPal / Shop Pay:
+  // generated server-side via send-update-email (returns a fresh updateUrl).
+  const [updateUrl, setUpdateUrl] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refetch = () => {
+    setLoading(true);
     api<PaymentMethodResponse>("/api/payment-method")
       .then(setData)
       .catch(() => setData({ instrument: null, updateUrl: null }))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleChange = async () => {
     if (!data?.instrument) return;
-    if (data.updateUrl) {
-      window.open(data.updateUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
-    // Fallback for PayPal / Shop Pay / etc. — Shopify can't render an inline
-    // update form for these, so trigger the secure email flow instead.
-    setBusy(true);
     setError(null);
     setMessage(null);
+
+    // Card path: Shopify already gave us a single-use update URL — iframe it
+    // straight into the in-portal overlay so the customer never leaves
+    // litsalt.com visually.
+    if (data.updateUrl) {
+      setUpdateUrl(data.updateUrl);
+      return;
+    }
+
+    // Non-card path (PayPal, Shop Pay): Shopify rejects the inline-URL
+    // mutation for these, so we trigger send-update-email which mails the
+    // customer a secure link. They can either open it from their inbox or
+    // we surface the confirmation in-portal.
+    setBusy(true);
     try {
       const res = await api<{ sent: boolean; email: string | null }>(
         "/api/payment-method/send-update-email",
@@ -623,8 +641,8 @@ function PaymentBlock() {
         setMessage(
           res.email
             ? t({
-                en: `We sent a secure link to ${res.email}. Open it to update your payment method.`,
-                es: `Te enviamos un enlace seguro a ${res.email}. Ábrelo para cambiar tu método de pago.`,
+                en: `We sent a secure link to ${res.email}. Open it from your inbox to update your payment method — you'll be back here after.`,
+                es: `Te enviamos un enlace seguro a ${res.email}. Ábrelo desde tu bandeja de entrada para cambiar tu método de pago — vuelves aquí al terminar.`,
               })
             : t({
                 en: "We sent you a secure link by email.",
@@ -706,6 +724,16 @@ function PaymentBlock() {
         <p className="mt-2 rounded-sm bg-[color:var(--color-danger)]/10 px-3 py-2 text-[11px] text-[color:var(--color-danger)]">
           {error}
         </p>
+      )}
+      {updateUrl && (
+        <PaymentUpdateOverlay
+          url={updateUrl}
+          onClose={() => setUpdateUrl(null)}
+          onCompleted={() => {
+            setUpdateUrl(null);
+            refetch();
+          }}
+        />
       )}
     </div>
   );

@@ -1054,9 +1054,12 @@ async function getPaymentMethodUpdateUrlImpl(
   const errs = data.customerPaymentMethodGetUpdateUrl.userErrors;
   if (errs.length > 0) {
     console.warn("[payment-method] getUpdateUrl userErrors:", errs);
-    return null;
   }
-  return data.customerPaymentMethodGetUpdateUrl.updatePaymentMethodUrl;
+  // Be permissive: if Shopify returned a URL even alongside a warning (which
+  // happens for some PayPal billing agreements), use it — the URL takes
+  // priority over the userErrors signal. Only fall back to email-update
+  // when the URL is genuinely absent.
+  return data.customerPaymentMethodGetUpdateUrl.updatePaymentMethodUrl || null;
 }
 
 /**
