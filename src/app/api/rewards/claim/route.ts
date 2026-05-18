@@ -58,45 +58,63 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     throw new ApiHttpError(400, "insufficient_drops", `Need ${threshold}, have ${balance}`);
   }
 
-  // Resolve fulfillment method + side-effect
-  let fulfillmentMethod: "next_shipment" | "seat_reserved";
-  let fulfillmentMetadata: Record<string, unknown> = {};
+  // Audit 2026-05-18 [CRIT]: previously the Seal side-effect (addOneTimeProduct)
+  // ran BEFORE inserting the claimed_rewards row. If the insert failed (RLS,
+  // constraint, network), the customer got the bottle without being debited.
+  // Two rapid clicks also raced the insert and could double-fulfill. Now:
+  //   1. Resolve dependencies (variant ID, active sub for product rewards;
+  //      event slot for event rewards). No side-effects yet.
+  //   2. Insert claimed_rewards as `pending` — uniqueness check stops double
+  //      claims at the DB layer.
+  //   3. Deduct drops (negative event) tagged with claimId for idempotency.
+  //   4. Trigger Seal side-effect.
+  //   5. Promote row to `confirmed` or mark `failed_rollback` if Seal fails.
 
-  if (body.rewardId === "bottle_500") {
-    fulfillmentMethod = "next_shipment";
-    const variantId = REWARD_VARIANT_IDS.bottle_500;
-    if (!variantId) {
-      throw new ApiHttpError(503, "reward_misconfigured", "Bottle variant ID not configured (set REWARD_VARIANT_BOTTLE)");
+  type Resolved = {
+    fulfillmentMethod: "next_shipment" | "seat_reserved";
+    fulfillmentMetadata: Record<string, unknown>;
+    pendingSideEffect: (() => Promise<void>) | null;
+  };
+
+  const resolveSideEffect = async (): Promise<Resolved> => {
+    if (body.rewardId === "bottle_500") {
+      const variantId = REWARD_VARIANT_IDS.bottle_500;
+      if (!variantId) {
+        throw new ApiHttpError(503, "reward_misconfigured", "Bottle variant ID not configured (set REWARD_VARIANT_BOTTLE)");
+      }
+      const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
+      if (!email) throw new ApiHttpError(404, "customer_not_found", "");
+      const subs = await seal.getSubscriptionsByEmail(email);
+      const sub = subs.find((s) => s.status === "ACTIVE");
+      if (!sub) throw new ApiHttpError(409, "no_active_subscription", "Need active subscription to receive bottle");
+      assertSubscriptionBelongsToCustomer(sub, email, "rewards/claim:bottle");
+      return {
+        fulfillmentMethod: "next_shipment",
+        fulfillmentMetadata: { sealSubscriptionId: sub.id, variantId },
+        pendingSideEffect: () => seal.addOneTimeProduct(sub.id, variantId, 1),
+      };
     }
-    // Add bottle to next Seal charge — needs sub lookup first
-    const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
-    if (!email) throw new ApiHttpError(404, "customer_not_found", "");
-    const subs = await seal.getSubscriptionsByEmail(email);
-    const sub = subs.find((s) => s.status === "ACTIVE");
-    if (!sub) throw new ApiHttpError(409, "no_active_subscription", "Need active subscription to receive bottle");
-    assertSubscriptionBelongsToCustomer(sub, email, "rewards/claim:bottle");
-    await seal.addOneTimeProduct(sub.id, variantId, 1);
-    fulfillmentMetadata = { sealSubscriptionId: sub.id, variantId };
-  } else if (body.rewardId === "merch_1000") {
-    fulfillmentMethod = "next_shipment";
-    if (!body.merchOption) {
-      throw new ApiHttpError(400, "missing_merch_option", "merchOption (socks/tee/hoodie) required for merch reward");
+    if (body.rewardId === "merch_1000") {
+      if (!body.merchOption) {
+        throw new ApiHttpError(400, "missing_merch_option", "merchOption (socks/tee/hoodie) required for merch reward");
+      }
+      const variantId = MERCH_VARIANT_IDS[body.merchOption];
+      if (!variantId) {
+        throw new ApiHttpError(503, "reward_misconfigured", `Merch variant for ${body.merchOption} not configured`);
+      }
+      const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
+      if (!email) throw new ApiHttpError(404, "customer_not_found", "");
+      const subs = await seal.getSubscriptionsByEmail(email);
+      const sub = subs.find((s) => s.status === "ACTIVE");
+      if (!sub) throw new ApiHttpError(409, "no_active_subscription", "Need active subscription to receive merch");
+      assertSubscriptionBelongsToCustomer(sub, email, "rewards/claim:merch");
+      return {
+        fulfillmentMethod: "next_shipment",
+        fulfillmentMetadata: { sealSubscriptionId: sub.id, variantId, option: body.merchOption },
+        pendingSideEffect: () => seal.addOneTimeProduct(sub.id, variantId, 1),
+      };
     }
-    const variantId = MERCH_VARIANT_IDS[body.merchOption];
-    if (!variantId) {
-      throw new ApiHttpError(503, "reward_misconfigured", `Merch variant for ${body.merchOption} not configured`);
-    }
-    const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
-    if (!email) throw new ApiHttpError(404, "customer_not_found", "");
-    const subs = await seal.getSubscriptionsByEmail(email);
-    const sub = subs.find((s) => s.status === "ACTIVE");
-    if (!sub) throw new ApiHttpError(409, "no_active_subscription", "Need active subscription to receive merch");
-    assertSubscriptionBelongsToCustomer(sub, email, "rewards/claim:merch");
-    await seal.addOneTimeProduct(sub.id, variantId, 1);
-    fulfillmentMetadata = { sealSubscriptionId: sub.id, variantId, option: body.merchOption };
-  } else {
-    // event_2500 — TODO: pick which event. For MVP, attach to the next active Madrid event.
-    fulfillmentMethod = "seat_reserved";
+    // event_2500 — pick the next active Madrid event.
     const { data: nextEvent } = await sb
       .from("events")
       .select("id")
@@ -109,10 +127,17 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     if (!nextEvent) {
       throw new ApiHttpError(503, "no_event_available", "No upcoming event to reserve seat for");
     }
-    fulfillmentMetadata = { eventId: nextEvent.id };
-  }
+    return {
+      fulfillmentMethod: "seat_reserved",
+      fulfillmentMetadata: { eventId: nextEvent.id },
+      pendingSideEffect: null,
+    };
+  };
 
-  // Atomic-ish: insert claim row + deduct drops via event log
+  const { fulfillmentMethod, fulfillmentMetadata, pendingSideEffect } = await resolveSideEffect();
+
+  // Step 1: insert claim row as `pending`. Unique index on (customer_id, reward_id)
+  // means a second concurrent click hits a 23505 and we 409 the dupe.
   const { data: claim, error: claimErr } = await sb
     .from("claimed_rewards")
     .insert({
@@ -126,9 +151,21 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     })
     .select("id")
     .single();
-  if (claimErr) throw new Error(`claim insert failed: ${claimErr.message}`);
+  if (claimErr) {
+    if ((claimErr as { code?: string }).code === "23505") {
+      throw new ApiHttpError(409, "already_claimed", "This reward has already been claimed");
+    }
+    throw new Error(`claim insert failed: ${claimErr.message}`);
+  }
 
-  // If event reward, also insert event_reservation
+  // Step 2: deduct drops (negative event tagged with claimId — idempotent if
+  // the awardDrops helper checks metadata.claimId in its unique index).
+  await awardDrops(ctx.customerId, "reward_claim", -threshold, {
+    rewardId: body.rewardId,
+    claimId: claim?.id,
+  });
+
+  // Step 3: event reservation (also persisted before Seal side-effect).
   if (body.rewardId === "event_2500" && claim) {
     await sb.from("event_reservations").insert({
       customer_id: ctx.customerId,
@@ -137,11 +174,33 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     });
   }
 
-  // Deduct Drops via negative event (drops_balances trigger handles balance recompute)
-  await awardDrops(ctx.customerId, "reward_claim", -threshold, {
-    rewardId: body.rewardId,
-    claimId: claim?.id,
-  });
+  // Step 4: Seal side-effect (the only step that mutates external state).
+  if (pendingSideEffect && claim) {
+    try {
+      await pendingSideEffect();
+      await sb
+        .from("claimed_rewards")
+        .update({ fulfillment_status: "confirmed" })
+        .eq("id", claim.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[claim] seal side-effect failed for claim ${claim.id}: ${msg}`);
+      await sb
+        .from("claimed_rewards")
+        .update({
+          fulfillment_status: "failed_rollback",
+          fulfillment_metadata: { ...fulfillmentMetadata, sealError: msg },
+        })
+        .eq("id", claim.id);
+      throw new ApiHttpError(502, "seal_side_effect_failed", msg);
+    }
+  } else if (claim) {
+    // event_2500 had no external side-effect — already complete.
+    await sb
+      .from("claimed_rewards")
+      .update({ fulfillment_status: "confirmed" })
+      .eq("id", claim.id);
+  }
 
   // Re-read balance for response
   const { data: refreshed } = await sb

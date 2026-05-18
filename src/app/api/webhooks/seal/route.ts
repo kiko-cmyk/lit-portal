@@ -18,7 +18,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const eventId = req.headers.get("x-seal-event-id") ?? crypto.randomUUID();
   const rawBody = await req.text();
 
-  if (SEAL_WEBHOOK_SECRET && !verifySealSignature(rawBody, signature)) {
+  // Fail-closed: refuse if the webhook secret isn't configured (post-audit
+  // 2026-05-18). Previously the `&&` short-circuited and accepted unsigned
+  // payloads when SEAL_WEBHOOK_SECRET was missing — a fail-open hole on
+  // preview deploys or rotation accidents.
+  if (!SEAL_WEBHOOK_SECRET) {
+    console.error("[seal-webhook] SEAL_WEBHOOK_SECRET not set — refusing payload");
+    return NextResponse.json({ error: "webhook_misconfigured" }, { status: 500 });
+  }
+  if (!verifySealSignature(rawBody, signature)) {
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
 

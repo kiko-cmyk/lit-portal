@@ -23,6 +23,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const rawBody = await req.text();
 
+  // Fail-closed if the secret isn't configured (post-audit 2026-05-18). The
+  // `verifyShopifyHmac` helper returns false when the secret is missing, but
+  // we want a louder signal in logs and a 500 (misconfiguration) instead of
+  // a 401 (signed-wrong) so the failure is debuggable rather than silent.
+  if (!SHOPIFY_WEBHOOK_SECRET) {
+    console.error("[shopify-webhook] SHOPIFY_WEBHOOK_SECRET not set — refusing payload");
+    return NextResponse.json({ error: "webhook_misconfigured" }, { status: 500 });
+  }
   if (!verifyShopifyHmac(rawBody, hmac)) {
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }

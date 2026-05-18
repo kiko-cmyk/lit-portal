@@ -175,13 +175,46 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   // 2) Remove the original item by its Seal item ID.
+  // Compensating action (post-audit 2026-05-18 [CRIT]): if remove fails after
+  // add succeeded, the sub is left with BOTH items and the customer would be
+  // charged for both at the next billing. We immediately try to roll back the
+  // add by locating the newly-added item and removing it, then surface the
+  // failure as `seal_inconsistent_state` so the FE can warn the customer to
+  // contact support if the compensation also fails.
   try {
     await seal.removeItems(sealSubscriptionId, [mainItem.id]);
     log("seal-remove-items-ok");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     log("seal-remove-items-failed", { msg });
-    throw new ApiHttpError(502, "seal_remove_items_failed", msg);
+    let compensated = false;
+    try {
+      const afterAdd = await seal.getSubscription(sealSubscriptionId);
+      const added = (afterAdd?.items ?? []).find(
+        (it) =>
+          !it.is_one_time_item &&
+          it.id !== mainItem.id &&
+          it.variant_id === variantDetails.variantId,
+      );
+      if (added?.id) {
+        await seal.removeItems(sealSubscriptionId, [added.id]);
+        compensated = true;
+        log("seal-compensate-remove-ok", { addedItemId: added.id });
+      } else {
+        log("seal-compensate-skipped-no-added-item-found");
+      }
+    } catch (rollbackErr) {
+      log("seal-compensate-remove-failed", {
+        msg: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+      });
+    }
+    throw new ApiHttpError(
+      502,
+      compensated ? "seal_remove_items_failed" : "seal_inconsistent_state",
+      compensated
+        ? `${msg} (rolled back add)`
+        : `${msg} (could NOT roll back add — subscription has duplicate items, contact support)`,
+    );
   }
 
   // 3) If the cadence changed, also bump the subscription-level interval —

@@ -103,6 +103,29 @@ export default function HubPage() {
     };
   }, [syncingUntil]);
 
+  const handleReactivate = async () => {
+    // Audit 2026-05-18 [CRIT]: the previous implementation redirected to
+    // litsalt.com/products/lit-subscription, which made the customer buy a
+    // SECOND subscription instead of reactivating the cancelled one. That
+    // reproduces the "sub orfana 13635794" incident. Now we call the proper
+    // endpoint; only on `reactivation_window_expired` (90d hold elapsed) or
+    // `second_cancel_no_reactivation` do we send them to the storefront.
+    try {
+      await api("/api/subscription/reactivate", { method: "POST" });
+      // Refetch dashboard so the Hub flips out of post-cancel mode.
+      const fresh = await api<HubDashboard>("/api/hub/dashboard");
+      setData(fresh);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === "reactivation_window_expired" || code === "second_cancel_no_reactivation") {
+        window.location.href = "https://litsalt.com/products/lit-subscription";
+        return;
+      }
+      console.error("[hub] reactivate failed", e);
+      setError(code ?? "reactivate_failed");
+    }
+  };
+
   const handlePlanUpdated = (updated: Subscription) => {
     setData((prev) => {
       if (!prev) return prev;
@@ -182,9 +205,7 @@ export default function HubPage() {
           <ReactivateCard
             dropsHeld={drops.balance}
             cardsKept={collectionEarned}
-            onReactivate={() => {
-              window.location.href = "https://litsalt.com/products/lit-subscription";
-            }}
+            onReactivate={handleReactivate}
           />
         ) : (
           <>

@@ -154,12 +154,20 @@ export const POST = withCustomer(async (req, ctx) => {
       .maybeSingle();
     const currentBalance = bal?.balance ?? 0;
 
-    // 2. Cancel in Seal
-    await seal.cancelSubscription(sub.id, { reason: body.primaryReason });
-
-    // 3. Upsert cancellations confirmation row
-    const releaseAt = isSecondPlus ? null : new Date(Date.now() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const lastShipDate = (sub.billing_attempts ?? []).find((a) => !a.completed_at)?.date ?? null;
+    // Audit 2026-05-18 [CRIT]: previously Seal cancelled first and Supabase
+    // was updated after. If any DB step failed after Seal returned 200, the
+    // sub was cancelled in Seal but the app's `cancellations` row stayed in
+    // `pending`, no `confirmed_at`, no `drops_release_at`, and the
+    // winback/drops-cleanup crons never fired. Now we mark the row as
+    // `committing` BEFORE talking to Seal, then promote to `confirmed` only
+    // after the Seal cancel + every dependent write succeed. If Seal fails
+    // we leave the row as `committing` and surface a hard error.
+    const releaseAt = isSecondPlus
+      ? null
+      : new Date(Date.now() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const lastShipDate = (sub.billing_attempts ?? []).find(
+      (a) => !a.completed_at && !a.status && !a.skipped_on,
+    )?.date ?? null;
 
     const { data: pendingRow } = await sb
       .from("cancellations")
@@ -168,33 +176,56 @@ export const POST = withCustomer(async (req, ctx) => {
       .eq("status", "pending")
       .maybeSingle();
 
-    const cancelRow = {
-      status: "confirmed" as const,
+    const committingPatch = {
+      status: "committing" as const,
       primary_reason: body.primaryReason ?? null,
       free_text: body.freeText ?? null,
       step_completed: 4,
-      confirmed_at: new Date().toISOString(),
       effective_last_ship_date: lastShipDate ? lastShipDate.slice(0, 10) : null,
       drops_held_at_cancel: isSecondPlus ? 0 : currentBalance,
       drops_release_at: releaseAt,
       cancel_count_at_event: cancelCount + 1,
     };
+
+    let cancellationId: string | null = null;
     if (pendingRow) {
-      await sb.from("cancellations").update(cancelRow).eq("id", pendingRow.id);
+      cancellationId = pendingRow.id as string;
+      const { error } = await sb.from("cancellations").update(committingPatch).eq("id", pendingRow.id);
+      if (error) throw new Error(`cancellations pre-commit update failed: ${error.message}`);
     } else {
-      await sb.from("cancellations").insert({ customer_id: ctx.customerId, ...cancelRow });
+      const { data: inserted, error } = await sb
+        .from("cancellations")
+        .insert({ customer_id: ctx.customerId, ...committingPatch })
+        .select("id")
+        .single();
+      if (error) throw new Error(`cancellations pre-commit insert failed: ${error.message}`);
+      cancellationId = inserted?.id as string;
     }
 
-    // 4. Drops handling per "1st vs 2nd cancel" rule
+    // Now call Seal. If this fails the row stays in `committing` — visible in
+    // ops dashboards as a half-finished cancel that needs manual follow-up.
+    try {
+      await seal.cancelSubscription(sub.id, { reason: body.primaryReason });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cancel] seal.cancelSubscription failed for sub ${sub.id}: ${msg}`);
+      throw new ApiHttpError(502, "seal_cancel_failed", msg);
+    }
+
+    // Seal accepted the cancellation. Promote the row to confirmed and do the
+    // dependent writes. If a follow-up step fails, the cancel is still
+    // committed in Seal, but the row remains in `committing` until the next
+    // retry — preferable to a silent partial state.
     if (isSecondPlus && currentBalance !== 0) {
-      // Reset drops to 0 immediately via negative event
+      // Tag the drops_event with cancellationId so reintentos del POST no
+      // dupliquen el negativo (the awardDrops helper checks metadata for the
+      // same tag).
       await awardDrops(ctx.customerId, "cancel_reset", -currentBalance, {
         reason: "second_plus_cancel",
+        cancellationId,
       });
     }
-    // For first cancel: balance stays — the 90-day hold cron will zero it on day 91 if not reactivated.
 
-    // 5. Bump cancel_count + last_cancelled_at on customer_preferences
     await sb
       .from("customer_preferences")
       .upsert(
@@ -205,6 +236,13 @@ export const POST = withCustomer(async (req, ctx) => {
         },
         { onConflict: "customer_id" },
       );
+
+    if (cancellationId) {
+      await sb
+        .from("cancellations")
+        .update({ status: "confirmed", confirmed_at: new Date().toISOString() })
+        .eq("id", cancellationId);
+    }
 
     // 6. Trigger Klaviyo event — flows can react with confirmation + schedule win-back
     klaviyo
