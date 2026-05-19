@@ -69,8 +69,8 @@ export function AddressOverlay({
       setError(
         code === "cutoff_passed"
           ? t({
-              en: "Too late — your next box ships within 72h.",
-              es: "Demasiado tarde — tu próxima caja sale en 72h.",
+              en: "Too late, your next box ships within 72h.",
+              es: "Demasiado tarde, tu próxima caja sale en 72h.",
             })
           : t({
               en: "Couldn't save. Try again.",

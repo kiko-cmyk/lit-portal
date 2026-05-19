@@ -687,8 +687,8 @@ function PaymentBlock() {
         setMessage(
           res.email
             ? t({
-                en: `We sent a secure link to ${res.email}. Open it from your inbox to update your payment method — you'll be back here after.`,
-                es: `Te enviamos un enlace seguro a ${res.email}. Ábrelo desde tu bandeja de entrada para cambiar tu método de pago — vuelves aquí al terminar.`,
+                en: `We sent a secure link to ${res.email}. Open it from your inbox to update your payment method, you'll be back here after.`,
+                es: `Te enviamos un enlace seguro a ${res.email}. Ábrelo desde tu bandeja de entrada para cambiar tu método de pago, vuelves aquí al terminar.`,
               })
             : t({
                 en: "We sent you a secure link by email.",

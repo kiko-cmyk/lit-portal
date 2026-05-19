@@ -52,8 +52,8 @@ export function ExtrasOverlay({ onClose }: { onClose: () => void }) {
       setError(
         code === "cutoff_passed"
           ? t({
-              en: "Too late — next box ships within 72h.",
-              es: "Demasiado tarde — el próximo envío sale en 72h.",
+              en: "Too late, next box ships within 72h.",
+              es: "Demasiado tarde, el próximo envío sale en 72h.",
             })
           : t({
               en: "Couldn't add. Try again or contact us.",

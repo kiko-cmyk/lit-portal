@@ -11,7 +11,7 @@ import { T } from "@/lib/i18n";
  */
 
 const COMING = [
-  { name: "Salty Peach", note: "First drop — June" },
+  { name: "Salty Peach", note: "First drop, June" },
   { name: "Raw", note: "July" },
   { name: "Coming", note: "TBA" },
 ];

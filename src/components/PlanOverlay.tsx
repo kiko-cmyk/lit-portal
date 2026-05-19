@@ -77,8 +77,8 @@ export function PlanOverlay({
       if (err.code === "cutoff_passed") {
         setError(
           t({
-            en: "Too late — your next box ships within 72h.",
-            es: "Demasiado tarde — tu próxima caja se envía en 72h.",
+            en: "Too late, your next box ships within 72h.",
+            es: "Demasiado tarde, tu próxima caja se envía en 72h.",
           }),
         );
       } else {

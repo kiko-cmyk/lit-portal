@@ -53,7 +53,12 @@ export function CancelTakeover({
       </button>
 
       <div className="mx-auto max-w-md px-6 pt-16 pb-10 sm:max-w-lg md:max-w-2xl">
-        {step === 1 && stats && (
+        {/* Step 1 monta la estructura inmediatamente; los stats llegan
+            cuando la API responde (puede tardar 1-2 s por las llamadas en
+            paralelo a Shopify + Seal + Supabase). Antes esperábamos a
+            tener stats para renderizar nada → la modal aparecía vacía y
+            "tardaba" en cargar. */}
+        {step === 1 && (
           <Step1
             customer={customer}
             stats={stats}
@@ -117,11 +122,12 @@ function Step1({
   onKeepGoing,
 }: {
   customer: CustomerProfile;
-  stats: CancelStep1Response["data"];
+  stats: CancelStep1Response["data"] | null;
   onContinue: () => void;
   onKeepGoing: () => void;
 }) {
   const t = useLang();
+  const loading = stats === null;
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
@@ -131,10 +137,26 @@ function Step1({
         <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <div className="mt-10 grid grid-cols-2 gap-4">
-        <Stat label={t({ en: "Boxes received", es: "Cajas recibidas" })} value={stats.boxes} />
-        <Stat label={t({ en: "Cards collected", es: "Cartas coleccionadas" })} value={stats.cards} />
-        <Stat label={t({ en: "Drops stacked", es: "Drops acumulados" })} value={stats.drops} />
-        <Stat label={t({ en: "Months in inner circle", es: "Meses en inner circle" })} value={stats.monthsInCircle} />
+        <Stat
+          label={t({ en: "Boxes received", es: "Cajas recibidas" })}
+          value={stats?.boxes ?? 0}
+          loading={loading}
+        />
+        <Stat
+          label={t({ en: "Cards collected", es: "Cartas coleccionadas" })}
+          value={stats?.cards ?? 0}
+          loading={loading}
+        />
+        <Stat
+          label={t({ en: "Drops stacked", es: "Drops acumulados" })}
+          value={stats?.drops ?? 0}
+          loading={loading}
+        />
+        <Stat
+          label={t({ en: "Months in inner circle", es: "Meses en inner circle" })}
+          value={stats?.monthsInCircle ?? 0}
+          loading={loading}
+        />
       </div>
       <div className="mt-10 space-y-3">
         <button
@@ -142,7 +164,7 @@ function Step1({
           onClick={onKeepGoing}
           className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
         >
-          <T en="Keep going" es="Sigue conmigo" />
+          <T en="Stay with LIT" es="Seguir con LIT" />
         </button>
         <button
           type="button"
@@ -168,9 +190,9 @@ function Step2({
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="We can" es="Podemos" />
+        <T en="We can adjust" es="Podemos ajustar" />
         <br />
-        <T en="adjust" es="ajustar" />
+        <T en="your subscription" es="tu suscripción" />
         <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <div className="mt-8 space-y-3">
@@ -184,15 +206,15 @@ function Step2({
         <Alternative
           labelEn="Change your plan"
           labelEs="Cambia tu plan"
-          subEn="Fewer boxes, longer cadence — your call."
-          subEs="Menos cajas, más espaciadas — tú decides."
+          subEn="Fewer boxes, longer cadence, your call."
+          subEs="Menos cajas, más espaciadas, tú decides."
           onClick={onAlternative}
         />
         <Alternative
           labelEn="New flavors in June"
           labelEs="Sabores nuevos en junio"
-          subEn="Hold tight — Salty Peach is coming."
-          subEs="Aguanta — Salty Peach está al caer."
+          subEn="Hold tight, Salty Peach is coming."
+          subEs="Aguanta, Salty Peach está al caer."
           onClick={onAlternative}
         />
       </div>
@@ -418,10 +440,24 @@ function DoneState({ done, onClose }: { done: CancelStep4Response; onClose: () =
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({
+  label,
+  value,
+  loading,
+}: {
+  label: string;
+  value: number;
+  loading?: boolean;
+}) {
   return (
     <div className="rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
-      <div className="font-display text-4xl font-black">{value}</div>
+      <div
+        className={`font-display text-4xl font-black transition-opacity duration-300 ${
+          loading ? "animate-pulse opacity-40" : "opacity-100"
+        }`}
+      >
+        {value}
+      </div>
       <div className="mt-1 text-[10px] uppercase tracking-[0.18em] opacity-60">{label}</div>
     </div>
   );
