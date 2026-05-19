@@ -9,6 +9,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, type ReactNode } from "react";
+import { api } from "@/lib/api-client";
 import { swapLocale, type Lang } from "@/lib/portal-link";
 
 export type { Lang };
@@ -32,6 +33,15 @@ export function LangProvider({
 
   const setLang = (l: Lang) => {
     if (l === locale) return;
+    // Persist to Shopify customer metafield so the choice survives sessions
+    // and is picked up by other surfaces (emails, etc.). Fire-and-forget —
+    // the URL swap drives the UI either way. Was previously done by the
+    // standalone LanguagePicker inside Account; since the toggle moved into
+    // the header, persistence had to move with it. (2026-05-19)
+    api("/api/customer/language", {
+      method: "PATCH",
+      body: JSON.stringify({ language: l }),
+    }).catch(() => {});
     router.push(swapLocale(pathname, l));
   };
 

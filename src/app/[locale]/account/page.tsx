@@ -20,7 +20,6 @@ import {
   LangToggle,
   T,
   useLang,
-  useLangSetter,
   useLangValue,
   usePageTitle,
 } from "@/lib/i18n";
@@ -97,7 +96,9 @@ export default function AccountPage() {
     <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/85 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
+      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
+          2026-05-19). */}
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <div className="flex items-center gap-2.5">
           <LangToggle />
@@ -109,7 +110,7 @@ export default function AccountPage() {
         </div>
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-6 md:pb-12">
+      <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
           <h1 className="font-display text-[48px] font-black uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]">
             <T en="Account" es="Cuenta" />
@@ -280,10 +281,8 @@ export default function AccountPage() {
           <PaymentBlock />
         </Section>
 
-        <Section title={t({ en: "Language", es: "Idioma" })}>
-          <LanguagePicker />
-        </Section>
-
+        {/* Language picker removed from Account body per Juan 2026-05-18 round 7
+            — the LangToggle in the header is the single source of truth. */}
         <OrdersSection orders={orders} />
 
         <Marquee />
@@ -739,36 +738,8 @@ function PaymentBlock() {
   );
 }
 
-function LanguagePicker() {
-  const lang = useLangValue();
-  const setGlobalLang = useLangSetter();
-  const change = (next: "en" | "es") => {
-    if (next === lang) return;
-    api("/api/customer/language", {
-      method: "PATCH",
-      body: JSON.stringify({ language: next }),
-    }).catch(() => {});
-    setGlobalLang(next);
-  };
-  return (
-    <div className="flex gap-1.5">
-      {(["en", "es"] as const).map((l) => (
-        <button
-          key={l}
-          type="button"
-          onClick={() => change(l)}
-          className={`rounded-[3px] border px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.12em] ${
-            lang === l
-              ? "border-[color:var(--color-lit-grey)] bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-              : "border-[color:var(--color-lit-grey)]/15 text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
-          }`}
-        >
-          {l.toUpperCase()}
-        </button>
-      ))}
-    </div>
-  );
-}
+// LanguagePicker removed 2026-05-18 round 7 — the header LangToggle covers
+// the same function and is always visible (sticky header).
 
 function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
   const [open, setOpen] = useState(true);

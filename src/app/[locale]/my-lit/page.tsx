@@ -201,7 +201,10 @@ export default function HubPage() {
     <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/85 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
+      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
+          2026-05-19). z-40 sits above the BottomNav z-40 sibling, fine on
+          mobile because they don't overlap (top vs bottom). */}
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <div className="flex items-center gap-2.5">
           <LangToggle />
@@ -213,7 +216,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-6 md:pb-12">
+      <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPostCancel ? (
           <ReactivateCard
