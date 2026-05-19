@@ -112,35 +112,51 @@ export default function AccountPage() {
 
       <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
-          <h1 className="font-display text-[48px] font-black uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]">
+          <h1
+            className="font-display font-semibold uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]"
+            style={{ fontSize: "clamp(40px, 11vw, 64px)" }}
+          >
             <T en="Account" es="Cuenta" />
           </h1>
         </div>
 
-        <section className="mx-6 mb-4 flex items-center gap-3.5 rounded-[14px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
+        {/* Profile chip — alineado al estilo MetaCell del Hub: Display
+            semibold (no black), eyebrow en Cond. */}
+        <section className="mx-6 mb-4 flex items-center gap-3.5 rounded-[20px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
           <div
-            className="flex h-[54px] w-[54px] flex-shrink-0 items-center justify-center rounded-xl font-display text-[22px] font-black uppercase tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
+            className="flex h-[54px] w-[54px] flex-shrink-0 items-center justify-center rounded-2xl font-display font-semibold uppercase tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
             style={{
+              fontSize: 22,
               background:
-                "linear-gradient(135deg, var(--color-bold-yellow) 0%, #d8d754 100%)",
+                "linear-gradient(135deg, var(--color-bold-yellow) 0%, var(--color-retro-ochre) 100%)",
+              boxShadow:
+                "0 0 0 2px var(--color-sharp-white), 0 0 0 3px rgba(50, 55, 67, 0.18)",
             }}
           >
             {initials}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="font-display text-[20px] font-black leading-[1.1] tracking-[-0.01em] uppercase text-[color:var(--color-lit-grey)]">
+            <div
+              className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
+              style={{ fontSize: "clamp(18px, 4.5vw, 22px)" }}
+            >
               {customer.name}
             </div>
-            <div className="mt-0.5 text-[11px] tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+            <div
+              className="mt-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+            >
               <T en="Member since" es="Miembro desde" />{" "}
-              {new Date(customer.memberSince).toLocaleDateString(dateLocale, {
-                month: "long",
-                year: "numeric",
-              })}{" "}
+              {new Date(customer.memberSince)
+                .toLocaleDateString(dateLocale, {
+                  month: "short",
+                  year: "numeric",
+                })
+                .toUpperCase()}{" "}
               ·{" "}
               <T
-                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box in" : "boxes in"}`}
-                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja recibida" : "cajas recibidas"}`}
+                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"}`}
+                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"}`}
               />
             </div>
           </div>
@@ -213,7 +229,8 @@ export default function AccountPage() {
             <button
               type="button"
               onClick={() => setPlanOpen(true)}
-              className="mt-3 flex w-full items-center justify-between border-t border-[color:var(--color-lit-grey)]/6 pt-3 text-[11px] font-bold tracking-[0.05em] text-[color:var(--color-lit-grey)]"
+              className="group mt-3 flex w-full items-center justify-between border-t border-[color:var(--color-lit-grey)]/6 pt-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)] transition-colors hover:text-[color:var(--color-bold-yellow)]"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
             >
               <span>
                 <T
@@ -221,7 +238,7 @@ export default function AccountPage() {
                   es="Cambiar cajas o frecuencia"
                 />
               </span>
-              <span className="text-[14px] text-[color:var(--color-warm-gray)]">→</span>
+              <span className="text-[16px] transition-transform group-hover:translate-x-0.5 text-[color:var(--color-warm-gray)] group-hover:text-[color:var(--color-lit-grey)]">→</span>
             </button>
           </Section>
         )}
@@ -277,7 +294,7 @@ export default function AccountPage() {
           </Section>
         )}
 
-        <Section title={t({ en: "How you pay", es: "Cómo pagas" })}>
+        <Section title={t({ en: "Payment method", es: "Método de pago" })}>
           <PaymentBlock />
         </Section>
 
@@ -351,22 +368,26 @@ function CompactAction({
       aria-disabled={inert}
       className={
         comingSoon
-          ? "relative flex flex-col items-center gap-1.5 rounded-lg border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-1.5 py-3 cursor-not-allowed"
-          : "flex flex-col items-center gap-1.5 rounded-lg border border-[color:var(--color-lit-grey)]/6 bg-[color:var(--color-sharp-white)] px-1.5 py-3 transition-all hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[color:var(--color-lit-grey)]/6 disabled:hover:bg-[color:var(--color-sharp-white)]"
+          ? "relative flex flex-col items-center gap-2 rounded-2xl border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-1.5 py-3.5 cursor-not-allowed"
+          : "flex flex-col items-center gap-2 rounded-2xl border border-[color:var(--color-lit-grey)]/6 bg-[color:var(--color-sharp-white)] px-1.5 py-3.5 transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-bold-yellow)]/60 hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/6 disabled:hover:bg-[color:var(--color-sharp-white)]"
       }
     >
       {comingSoon && (
-        <span className="absolute right-1 top-1 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1 py-0.5 text-[7px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
+        <span
+          className="absolute right-1.5 top-1.5 rounded-full bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 8 }}
+        >
           Soon
         </span>
       )}
       <span
-        className={`h-[18px] w-[18px] ${comingSoon ? "text-[color:var(--color-warm-gray)]/60" : "text-[color:var(--color-lit-grey)]"}`}
+        className={`h-[20px] w-[20px] ${comingSoon ? "text-[color:var(--color-warm-gray)]/55" : "text-[color:var(--color-lit-grey)]"}`}
       >
         {icon}
       </span>
       <span
-        className={`text-[9px] font-extrabold uppercase leading-[1.15] tracking-[0.06em] ${comingSoon ? "text-[color:var(--color-warm-gray)]" : "text-[color:var(--color-lit-grey)]"}`}
+        className={`font-semibold uppercase leading-[1.15] tracking-[0.22em] ${comingSoon ? "text-[color:var(--color-warm-gray)]" : "text-[color:var(--color-lit-grey)]"}`}
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
       >
         {label}
       </span>
@@ -386,16 +407,20 @@ function Section({
   onAction?: () => void;
 }) {
   return (
-    <section className="mx-6 mb-3 rounded-xl border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
-      <div className="mb-3 flex items-baseline justify-between">
-        <span className="font-display text-[15px] font-black uppercase tracking-[-0.005em] text-[color:var(--color-lit-grey)]">
+    <section className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6">
+      <div className="mb-4 flex items-baseline justify-between">
+        <h2
+          className="font-display font-semibold uppercase leading-[1] tracking-[-0.01em] text-[color:var(--color-lit-grey)]"
+          style={{ fontSize: "clamp(16px, 3.6vw, 19px)" }}
+        >
           {title}
-        </span>
+        </h2>
         {actionLabel && onAction && (
           <button
             type="button"
             onClick={onAction}
-            className="py-1 text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
+            className="py-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
           >
             {actionLabel}
           </button>
@@ -419,16 +444,25 @@ function SubsummCell({
 }) {
   return (
     <div
-      className={`px-1 py-3.5 text-center ${showRightBorder ? "border-r border-[color:var(--color-lit-grey)]/6" : ""}`}
+      className={`px-1 py-4 text-center ${showRightBorder ? "border-r border-[color:var(--color-lit-grey)]/6" : ""}`}
     >
-      <div className="text-[8px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-warm-gray)]">
+      <div
+        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
+      >
         {label}
       </div>
-      <div className="mt-1 font-display text-[16px] font-black uppercase leading-none tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+      <div
+        className="mt-1.5 font-display font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
+        style={{ fontSize: "clamp(18px, 4.2vw, 22px)" }}
+      >
         {value}
       </div>
       {sub && (
-        <div className="mt-0.5 text-[9px] tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+        <div
+          className="mt-1 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]/85"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
+        >
           {sub}
         </div>
       )}
@@ -474,8 +508,11 @@ function EditableRow({
 
   if (!editing) {
     return (
-      <div className="flex gap-3 border-b border-[color:var(--color-lit-grey)]/4 py-2 last:border-b-0">
-        <div className="min-w-[84px] pt-0.5 text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+      <div className="flex gap-3 border-b border-[color:var(--color-lit-grey)]/6 py-3 last:border-b-0">
+        <div
+          className="min-w-[88px] pt-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+        >
           {label}
         </div>
         <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
@@ -487,7 +524,8 @@ function EditableRow({
             setDraft(value);
             setEditing(true);
           }}
-          className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)]"
+          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           <T en="Edit" es="Editar" />
         </button>
@@ -496,24 +534,28 @@ function EditableRow({
   }
 
   return (
-    <div className="border-b border-[color:var(--color-lit-grey)]/4 py-2 last:border-b-0">
-      <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+    <div className="border-b border-[color:var(--color-lit-grey)]/6 py-3 last:border-b-0">
+      <div
+        className="mb-2 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+      >
         {label}
       </div>
-      <div className="flex gap-1.5">
+      <div className="flex gap-2">
         <input
           autoFocus
           type={inputType}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           disabled={busy}
-          className="flex-1 rounded-[4px] border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-brisky-cream)] px-2.5 py-2 text-[13px] text-[color:var(--color-lit-grey)] focus:border-[color:var(--color-bold-yellow)] focus:bg-[color:var(--color-sharp-white)] focus:outline-none disabled:opacity-50"
+          className="flex-1 rounded-full border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-brisky-cream)] px-4 py-2 text-[13px] text-[color:var(--color-lit-grey)] focus:border-[color:var(--color-bold-yellow)] focus:bg-[color:var(--color-sharp-white)] focus:outline-none disabled:opacity-50"
         />
         <button
           type="button"
           onClick={handleSave}
           disabled={busy}
-          className="rounded-[2px] bg-[color:var(--color-lit-grey)] px-3 text-[10px] font-black uppercase tracking-[0.15em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
+          className="rounded-full bg-[color:var(--color-lit-grey)] px-4 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           {busy ? "…" : <T en="Save" es="OK" />}
         </button>
@@ -521,12 +563,12 @@ function EditableRow({
           type="button"
           onClick={() => setEditing(false)}
           disabled={busy}
-          className="rounded-[2px] border border-[color:var(--color-lit-grey)]/20 px-2 text-[12px] font-bold text-[color:var(--color-warm-gray)]"
+          className="rounded-full border border-[color:var(--color-lit-grey)]/20 px-2.5 text-[14px] font-bold text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
         >
           ×
         </button>
       </div>
-      {err && <p className="mt-1 text-[10px] text-[color:var(--color-danger)]">{err}</p>}
+      {err && <p className="mt-2 text-[10px] text-[color:var(--color-danger)]">{err}</p>}
     </div>
   );
 }
@@ -543,7 +585,8 @@ function AddressBlock({
       <button
         type="button"
         onClick={onEdit}
-        className="text-[12px] font-bold uppercase tracking-[0.15em] underline opacity-70"
+        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)] underline-offset-2 hover:underline"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
       >
         <T en="Add shipping address" es="Añadir dirección" />
       </button>
@@ -551,10 +594,13 @@ function AddressBlock({
   }
   return (
     <div className="flex items-start gap-3 py-1">
-      <div className="min-w-[84px] pt-0.5 text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+      <div
+        className="min-w-[88px] pt-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+      >
         <T en="Address" es="Dirección" />
       </div>
-      <div className="flex-1 text-[13px] leading-[1.45] text-[color:var(--color-lit-grey)]">
+      <div className="flex-1 text-[13px] leading-[1.5] text-[color:var(--color-lit-grey)]">
         <div>{address.address1}</div>
         {address.address2 && <div>{address.address2}</div>}
         <div>
@@ -566,7 +612,8 @@ function AddressBlock({
       <button
         type="button"
         onClick={onEdit}
-        className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)]"
+        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
       >
         <T en="Edit" es="Editar" />
       </button>
@@ -672,7 +719,10 @@ function PaymentBlock() {
   if (!data?.instrument) {
     return (
       <div className="flex items-center gap-3 py-1">
-        <div className="min-w-[84px] text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+        <div
+          className="min-w-[88px] font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+        >
           <T en="Method" es="Método" />
         </div>
         <div className="flex-1 text-[13px] text-[color:var(--color-warm-gray)]">
@@ -695,7 +745,10 @@ function PaymentBlock() {
   return (
     <div>
       <div className="flex items-center gap-3 py-1">
-        <div className="min-w-[84px] text-[11px] font-bold uppercase tracking-[0.05em] text-[color:var(--color-warm-gray)]">
+        <div
+          className="min-w-[88px] font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+        >
           {typeLabel}
         </div>
         <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
@@ -705,7 +758,8 @@ function PaymentBlock() {
           type="button"
           onClick={handleChange}
           disabled={busy}
-          className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           {busy ? (
             <T en="Sending…" es="Enviando…" />
@@ -743,35 +797,43 @@ function PaymentBlock() {
 
 function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
   const [open, setOpen] = useState(true);
-  const t = useLang();
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
   return (
-    <section className="mx-6 mb-3 rounded-xl border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
+    <section className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full cursor-pointer items-center justify-between"
+        className="flex w-full cursor-pointer items-baseline justify-between"
       >
-        <span className="font-display text-[15px] font-black uppercase tracking-[-0.005em] text-[color:var(--color-lit-grey)]">
+        <h2
+          className="font-display font-semibold uppercase leading-[1] tracking-[-0.01em] text-[color:var(--color-lit-grey)]"
+          style={{ fontSize: "clamp(16px, 3.6vw, 19px)" }}
+        >
           <T en="My orders" es="Mis pedidos" />
-        </span>
+        </h2>
         <span
-          className={`text-[12px] text-[color:var(--color-warm-gray)] transition-transform ${open ? "rotate-180" : ""}`}
+          className={`text-[13px] text-[color:var(--color-warm-gray)] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         >
           ▾
         </span>
       </button>
       {open && (
-        <div className="mt-3">
+        <div className="mt-4">
           {!orders && (
-            <p className="text-[11px] opacity-60">
+            <p
+              className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+            >
               <T en="Loading…" es="Cargando…" />
             </p>
           )}
           {orders && orders.length === 0 && (
-            <p className="text-[11px] opacity-60">
+            <p
+              className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+            >
               <T en="No orders yet." es="Aún no hay pedidos." />
             </p>
           )}
@@ -780,49 +842,43 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
               {orders.map((o) => (
                 <li
                   key={o.id}
-                  className="flex items-center justify-between border-t border-[color:var(--color-lit-grey)]/6 py-2.5 text-[12px]"
+                  className="flex items-center justify-between border-t border-[color:var(--color-lit-grey)]/6 py-3"
                 >
                   <div className="flex flex-col gap-0.5">
-                    <span className="font-bold text-[color:var(--color-lit-grey)]">
+                    <span className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
                       {o.orderNumber} ·{" "}
                       {new Date(o.date).toLocaleDateString(dateLocale, {
                         month: "short",
                         day: "numeric",
                       })}
                     </span>
-                    <span className="text-[11px] text-[color:var(--color-warm-gray)]">
-                      {o.total.toFixed(2)} {o.currency} · {o.status}
-                    </span>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
                     <span
-                      className="rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
-                      style={{
-                        background:
-                          o.status === "delivered"
-                            ? "var(--color-success)"
-                            : o.status === "scheduled" || o.status === "upcoming"
-                              ? "var(--color-bold-yellow)"
-                              : "rgba(50, 55, 67, 0.15)",
-                        color:
-                          o.status === "delivered"
-                            ? "var(--color-cream)"
-                            : "var(--color-lit-grey)",
-                      }}
+                      className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+                      style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
                     >
-                      {(o.status || "—").toUpperCase()}
+                      {o.total.toFixed(2)} {o.currency}
                     </span>
-                    {o.invoiceUrl && (
-                      <a
-                        href={o.invoiceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[10px] tracking-[0.1em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)]"
-                      >
-                        {t({ en: "Invoice", es: "Factura" })}
-                      </a>
-                    )}
                   </div>
+                  {/* Status pill only — enlace a Factura eliminado por
+                      Juan 2026-05-19: el cliente no descarga la factura
+                      desde el portal. */}
+                  <span
+                    className="rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
+                    style={{
+                      background:
+                        o.status === "delivered"
+                          ? "var(--color-success)"
+                          : o.status === "scheduled" || o.status === "upcoming"
+                            ? "var(--color-bold-yellow)"
+                            : "rgba(50, 55, 67, 0.15)",
+                      color:
+                        o.status === "delivered"
+                          ? "var(--color-cream)"
+                          : "var(--color-lit-grey)",
+                    }}
+                  >
+                    {(o.status || "—").toUpperCase()}
+                  </span>
                 </li>
               ))}
             </ul>

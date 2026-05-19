@@ -41,12 +41,9 @@ export function DangerZone({ onCancel, signoutUrl }: DangerZoneProps) {
         }}
       />
 
-      <div
-        className="relative mb-4 font-semibold uppercase tracking-[0.32em] text-[color:var(--color-bold-yellow)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        {lang === "es" ? "Zona oscura" : "Dark zone"}
-      </div>
+      {/* Eyebrow "Zona oscura" eliminado a petición de Juan 2026-05-19:
+          el banner debe entrar directo con el headline, sin etiqueta
+          interna duplicada. */}
 
       <h2
         className="relative mb-7 font-semibold uppercase leading-[0.95] tracking-[-0.025em] text-[color:var(--color-brisky-cream)]"
