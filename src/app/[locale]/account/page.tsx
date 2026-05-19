@@ -111,9 +111,11 @@ export default function AccountPage() {
 
       <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
+          {/* H1 a la misma escala que el día del Hero ("JUN") — Juan
+              2026-05-19. Display semibold, mismo clamp y tracking. */}
           <h1
-            className="font-display font-semibold uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]"
-            style={{ fontSize: "clamp(40px, 11vw, 64px)" }}
+            className="font-display font-semibold uppercase leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
+            style={{ fontSize: "clamp(3.6rem, 13vw, 5.8rem)" }}
           >
             <T en="Account" es="Cuenta" />
           </h1>
@@ -757,10 +759,10 @@ function PaymentBlock() {
           >
             <T en="Email sent" es="Email enviado" />
           </div>
-          <p className="text-[12px] leading-[1.45] text-[color:var(--color-lit-grey)]">
+          <p className="text-[12px] leading-[1.5] text-[color:var(--color-lit-grey)]">
             <T
-              en={`We sent a secure link to ${sentTo}. Open it from your inbox to update your payment method, you'll be back here after.`}
-              es={`Te enviamos un enlace seguro a ${sentTo}. Ábrelo desde tu bandeja para cambiar tu método de pago, vuelves aquí al terminar.`}
+              en={`We've sent a secure link to ${sentTo} so you can update your payment method. Come back here when you're done.`}
+              es={`Te hemos enviado un enlace seguro a ${sentTo} para que puedas cambiar tu método de pago. Vuelve aquí al terminar.`}
             />
           </p>
           <div className="mt-2.5 flex items-center gap-3">
