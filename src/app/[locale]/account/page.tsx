@@ -9,7 +9,6 @@ import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
-import { PaymentUpdateOverlay } from "@/components/PaymentUpdateOverlay";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { QAIcons } from "@/components/QuickActionButton";
 import { SkipOverlay } from "@/components/SkipOverlay";
@@ -640,66 +639,42 @@ function PaymentBlock() {
   const [data, setData] = useState<PaymentMethodResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  // Email destination of the last successful send. Null = no email sent
+  // (idle state). String = success banner visible with "Resend" link.
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // URL we'll iframe in the PaymentUpdateOverlay. Null = overlay closed.
-  // Card flow: comes from `data.updateUrl` directly. PayPal / Shop Pay:
-  // generated server-side via send-update-email (returns a fresh updateUrl).
-  const [updateUrl, setUpdateUrl] = useState<string | null>(null);
 
-  const refetch = () => {
-    setLoading(true);
+  useEffect(() => {
     api<PaymentMethodResponse>("/api/payment-method")
       .then(setData)
       .catch(() => setData({ instrument: null, updateUrl: null }))
       .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleChange = async () => {
+  // 2026-05-19: unified email-only flow. We used to try to iframe the
+  // Shopify `customerPaymentMethodGetUpdateUrl` for cards and only fall
+  // back to email for PayPal/Shop Pay. Shopify serves the iframe-blocked
+  // tracking.litsalt.com URL with X-Frame-Options:DENY, so 100% of the
+  // time we ended up in the popup fallback that visually pulls the
+  // customer out of the portal — which is exactly what we promised never
+  // to do. Without bringing in our own card form (Stripe Elements, etc.),
+  // the only option is to always send the secure email — the customer
+  // never sees the second portal inside ours, and Shopify's hosted page
+  // only opens from their inbox if they choose to act on the email.
+  const sendEmail = async () => {
     if (!data?.instrument) return;
     setError(null);
-    setMessage(null);
-
-    // Card path: Shopify already gave us a single-use update URL — iframe it
-    // straight into the in-portal overlay so the customer never leaves
-    // litsalt.com visually.
-    if (data.updateUrl) {
-      setUpdateUrl(data.updateUrl);
-      return;
-    }
-
-    // Non-card path (PayPal, Shop Pay): Shopify rejects the inline-URL
-    // mutation for these, so we trigger send-update-email which mails the
-    // customer a secure link. They can either open it from their inbox or
-    // we surface the confirmation in-portal.
     setBusy(true);
     try {
       const res = await api<{ sent: boolean; email: string | null }>(
         "/api/payment-method/send-update-email",
         { method: "POST" },
       );
-      if (res.sent) {
-        setMessage(
-          res.email
-            ? t({
-                en: `We sent a secure link to ${res.email}. Open it from your inbox to update your payment method, you'll be back here after.`,
-                es: `Te enviamos un enlace seguro a ${res.email}. Ábrelo desde tu bandeja de entrada para cambiar tu método de pago, vuelves aquí al terminar.`,
-              })
-            : t({
-                en: "We sent you a secure link by email.",
-                es: "Te enviamos un enlace seguro por email.",
-              }),
-        );
-      }
+      if (res.sent) setSentTo(res.email);
     } catch {
       setError(
         t({
-          en: "Couldn't send the update email. Try again or contact us.",
+          en: "Couldn't send the email. Try again or contact us.",
           es: "No se pudo enviar el email. Inténtalo de nuevo o escríbenos.",
         }),
       );
@@ -710,7 +685,10 @@ function PaymentBlock() {
 
   if (loading) {
     return (
-      <div className="text-[12px] text-[color:var(--color-warm-gray)]">
+      <div
+        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+      >
         <T en="Loading…" es="Cargando…" />
       </div>
     );
@@ -754,39 +732,73 @@ function PaymentBlock() {
         <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
           {inst.label}
         </div>
-        <button
-          type="button"
-          onClick={handleChange}
-          disabled={busy}
-          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-        >
-          {busy ? (
-            <T en="Sending…" es="Enviando…" />
-          ) : (
-            <T en="Change" es="Cambiar" />
-          )}
-        </button>
+        {!sentTo && (
+          <button
+            type="button"
+            onClick={sendEmail}
+            disabled={busy}
+            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          >
+            {busy ? (
+              <T en="Sending…" es="Enviando…" />
+            ) : (
+              <T en="Change" es="Cambiar" />
+            )}
+          </button>
+        )}
       </div>
-      {message && (
-        <p className="mt-2 rounded-sm bg-[color:var(--color-bold-yellow)]/15 px-3 py-2 text-[11px] leading-[1.4] text-[color:var(--color-lit-grey)]">
-          {message}
-        </p>
+
+      {sentTo && (
+        <div className="mt-3 rounded-[14px] border border-[color:var(--color-bold-yellow)]/40 bg-[color:var(--color-bold-yellow)]/12 px-4 py-3.5">
+          <div
+            className="mb-1.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          >
+            <T en="Email sent" es="Email enviado" />
+          </div>
+          <p className="text-[12px] leading-[1.45] text-[color:var(--color-lit-grey)]">
+            <T
+              en={`We sent a secure link to ${sentTo}. Open it from your inbox to update your payment method, you'll be back here after.`}
+              es={`Te enviamos un enlace seguro a ${sentTo}. Ábrelo desde tu bandeja para cambiar tu método de pago, vuelves aquí al terminar.`}
+            />
+          </p>
+          <div className="mt-2.5 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={sendEmail}
+              disabled={busy}
+              className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+            >
+              {busy ? (
+                <T en="Resending…" es="Reenviando…" />
+              ) : (
+                <T en="Resend email" es="Reenviar email" />
+              )}
+            </button>
+            <span className="text-[color:var(--color-warm-gray)]/40">·</span>
+            <button
+              type="button"
+              onClick={() => setSentTo(null)}
+              className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)]"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+            >
+              <T en="Close" es="Cerrar" />
+            </button>
+          </div>
+        </div>
       )}
+
       {error && (
-        <p className="mt-2 rounded-sm bg-[color:var(--color-danger)]/10 px-3 py-2 text-[11px] text-[color:var(--color-danger)]">
-          {error}
-        </p>
-      )}
-      {updateUrl && (
-        <PaymentUpdateOverlay
-          url={updateUrl}
-          onClose={() => setUpdateUrl(null)}
-          onCompleted={() => {
-            setUpdateUrl(null);
-            refetch();
-          }}
-        />
+        <div className="mt-3 rounded-[14px] border border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/8 px-4 py-3">
+          <p
+            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-danger)]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
+          >
+            {error}
+          </p>
+        </div>
       )}
     </div>
   );
