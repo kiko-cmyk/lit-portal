@@ -381,12 +381,12 @@ function SyncingBanner() {
         {lang === "es" ? (
           <>
             <strong className="font-extrabold">Aplicando el cambio de plan.</strong>{" "}
-            Tu nueva fecha de envío aparecerá en un momento — mantén esta página abierta.
+            Tu nueva fecha de envío aparecerá en unos minutos. Refresca la página.
           </>
         ) : (
           <>
             <strong className="font-extrabold">Applying your plan change.</strong>{" "}
-            Your new ship date will appear in a moment — keep this page open.
+            Your new ship date will appear in a few minutes. Refresh the page.
           </>
         )}
       </div>
