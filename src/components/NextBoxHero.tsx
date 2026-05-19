@@ -210,12 +210,15 @@ function MetaCell({
 }) {
   return (
     <div className={align === "right" ? "text-right" : "text-left"}>
-      <div className="eyebrow-cond" style={{ fontSize: 10 }}>
+      <div
+        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+      >
         {label}
       </div>
       <div
-        className="mt-1.5 font-display font-bold leading-[0.95] tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
-        style={{ fontSize: "clamp(15px, 4vw, 18px)" }}
+        className="mt-1.5 text-[13px] font-semibold leading-tight text-[color:var(--color-lit-grey)]"
+        style={{ fontFamily: "var(--font-body)", letterSpacing: "0.02em" }}
       >
         {value}
       </div>

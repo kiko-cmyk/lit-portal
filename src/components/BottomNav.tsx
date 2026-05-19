@@ -101,7 +101,7 @@ export function TopNav() {
       className="hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)] md:block"
       aria-label="Primary"
     >
-      <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-8 py-5">
+      <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-8 py-5">
         <Link href={portalHref(lang, "home")} aria-label="LIT" className="cursor-pointer">
           <Logo />
         </Link>

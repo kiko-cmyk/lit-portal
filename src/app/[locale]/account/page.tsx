@@ -105,7 +105,7 @@ export default function AccountPage() {
         </div>
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
+      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-6 md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
           <h1 className="font-display text-[48px] font-black uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]">
             <T en="Account" es="Cuenta" />

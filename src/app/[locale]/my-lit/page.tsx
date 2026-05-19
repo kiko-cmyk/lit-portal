@@ -200,7 +200,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
+      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-6 md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPostCancel ? (
           <ReactivateCard

@@ -201,7 +201,7 @@ export default function CollectionPage() {
         </div>
       </header>
 
-      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-3xl md:px-8 md:pt-6 md:pb-12">
+      <main className="flex-1 pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-6 md:pb-12">
         <section className="px-6 pt-2 pb-5 md:px-0">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-warm-gray)]">

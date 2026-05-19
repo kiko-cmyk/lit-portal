@@ -3,12 +3,18 @@
 import type { ReactNode } from "react";
 
 /**
- * Section title block. Renders the display-face title centred over its
- * section. Per Juan 2026-05-18: NO eyebrow line above the title, NO rule
- * below it, NO right-aligned meta — just the title.
+ * Section title — single line, refined. Per Juan 2026-05-18 round 2:
+ * "demasiada Clash Display, queda muy brusco. Eleva el nivel, algo más
+ * minimalista". So:
+ *   - Clash Display kept (brand) but weight dropped to 500 (medium),
+ *     not the heavy 700-900 we were running before.
+ *   - Tracking loosened from -0.025em to -0.005em — letters breathe.
+ *   - No uppercase. Title-case feels editorial instead of shouty.
+ *   - Smaller cap on the size scale (clamp 18-22px).
+ *   - More top margin so sections have real breathing room.
  *
- * The eyebrow/meta props remain in the API so individual callers can
- * opt back in later, but the Hub no longer uses them.
+ * The eyebrow and meta props remain optional but the Hub now never
+ * passes them — kept for flexibility on future surfaces.
  */
 export function SectionDivider({
   eyebrow,
@@ -20,7 +26,7 @@ export function SectionDivider({
   meta?: string | ReactNode;
 }) {
   return (
-    <div className="mx-6 mt-10 mb-4 md:mx-0">
+    <div className="mx-6 mt-14 mb-5 md:mx-0 md:mt-16">
       {eyebrow && (
         <div
           className="mb-1.5 font-bold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
@@ -31,17 +37,18 @@ export function SectionDivider({
       )}
       <div className="flex items-end justify-between gap-4">
         <h2
-          className="font-bold uppercase leading-[0.92] tracking-[-0.025em] text-[color:var(--color-lit-grey)]"
+          className="font-medium leading-[1] tracking-[-0.005em] text-[color:var(--color-lit-grey)]"
           style={{
             fontFamily: "var(--font-display)",
-            fontSize: "clamp(22px, 6vw, 30px)",
+            fontSize: "clamp(18px, 4vw, 22px)",
+            textTransform: "none",
           }}
         >
           {title}
         </h2>
         {meta && (
           <div
-            className="font-extrabold uppercase tracking-[0.28em] text-[color:var(--color-lit-grey)]"
+            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
             style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
           >
             {meta}
