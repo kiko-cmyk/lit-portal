@@ -6,74 +6,118 @@ interface QuickActionButtonProps {
   icon: ReactNode;
   label: string;
   sub?: string;
-  /**
-   * When true, the tile renders muted-grey, non-interactive, with a SOON
-   * badge. `onClick` is ignored so callers don't accidentally fire flows
-   * that aren't ready (Phase 1 has Extras + Flavor in this state).
-   */
+  /** Optional editorial eyebrow (e.g. "01"). Rendered top-left in Condensed. */
+  eyebrow?: string;
+  /** Soft tan/cream when true → muted grey + SOON badge, not clickable. */
   comingSoon?: boolean;
   onClick?: () => void;
   disabled?: boolean;
 }
 
 /**
- * Quick action tile from the Hub hi-fi (.qa-btn).
- *
- *   icon (20×20) ─ label uppercase 12px ─ sub 11px warm-gray
- *   hover: border yellow + translateY(-1px) (active state only)
- *   comingSoon: forced grey, not clickable, SOON badge
+ * Quick action tile. Same 4-col grid structure as the MVP but rendered
+ * with editorial polish: numbered eyebrow (Barlow Condensed), title in
+ * the display face, animated arrow that slides in on hover, taller
+ * card so the type can breathe.
  */
 export function QuickActionButton({
   icon,
   label,
   sub,
+  eyebrow,
   comingSoon,
   onClick,
   disabled,
 }: QuickActionButtonProps) {
   const inert = comingSoon || disabled;
+  const base =
+    "group relative flex h-full w-full flex-col gap-2 overflow-hidden rounded-2xl px-4 pt-3 pb-4 text-left transition-all duration-200 ease-out";
+  const active =
+    "border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] hover:-translate-y-[3px] hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/8 hover:shadow-[0_14px_28px_-18px_rgba(50,55,67,0.35)] active:translate-y-0";
+  const muted =
+    "border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] cursor-not-allowed";
+
   return (
     <button
       type="button"
       onClick={comingSoon ? undefined : onClick}
       disabled={inert}
       aria-disabled={inert}
-      className={
-        comingSoon
-          ? "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-3 py-3.5 text-left cursor-not-allowed"
-          : "group relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3 py-3.5 text-left transition-all duration-200 ease-out hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 hover:shadow-[0_8px_18px_-12px_rgba(50,55,67,0.25)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/10 disabled:hover:shadow-none"
-      }
+      className={`${base} ${comingSoon ? muted : active} disabled:cursor-not-allowed disabled:opacity-60`}
     >
+      <div className="flex items-center justify-between">
+        {eyebrow && (
+          <span
+            className="font-bold uppercase tracking-[0.22em]"
+            style={{
+              fontFamily: "var(--font-cond)",
+              fontSize: 10,
+              color: comingSoon ? "var(--color-warm-gray)" : "var(--color-warm-gray)",
+            }}
+          >
+            {eyebrow}
+          </span>
+        )}
+        <span
+          className={`h-5 w-5 transition-transform duration-200 ${
+            comingSoon
+              ? "text-[color:var(--color-warm-gray)]/55"
+              : "text-[color:var(--color-lit-grey)] group-hover:scale-[1.1] group-hover:rotate-[-3deg]"
+          }`}
+        >
+          {icon}
+        </span>
+      </div>
+
       {comingSoon && (
-        <span className="absolute right-2 top-2 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]">
+        <span
+          className="absolute right-3 top-3 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-extrabold uppercase tracking-[0.2em] text-[color:var(--color-warm-gray)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 8 }}
+        >
           Soon
         </span>
       )}
+
       <span
-        className={`h-5 w-5 transition-transform duration-200 ${comingSoon ? "text-[color:var(--color-warm-gray)]/60" : "text-[color:var(--color-lit-grey)] group-hover:scale-[1.08]"}`}
-      >
-        {icon}
-      </span>
-      <span
-        className={`text-[12px] font-extrabold uppercase leading-none tracking-[0.06em] ${comingSoon ? "text-[color:var(--color-warm-gray)]" : "text-[color:var(--color-lit-grey)]"}`}
+        className="mt-3 font-bold uppercase leading-[0.95] tracking-[-0.015em]"
+        style={{
+          fontFamily: "var(--font-display)",
+          fontSize: "clamp(14px, 3.6vw, 17px)",
+          color: comingSoon ? "var(--color-warm-gray)" : "var(--color-lit-grey)",
+        }}
       >
         {label}
       </span>
+
       {sub && (
         <span
-          className={`text-[11px] leading-[1.3] ${comingSoon ? "text-[color:var(--color-warm-gray)]/70" : "text-[color:var(--color-warm-gray)]"}`}
+          className="text-[11px] leading-[1.35]"
+          style={{
+            color: comingSoon
+              ? "rgba(122, 116, 106, 0.65)"
+              : "var(--color-warm-gray)",
+          }}
         >
           {sub}
+        </span>
+      )}
+
+      {/* Animated arrow — slides in from the right on hover. Invisible on
+          comingSoon tiles since they're not clickable. */}
+      {!comingSoon && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute bottom-3 right-3 -translate-x-2 text-[16px] font-bold text-[color:var(--color-lit-grey)] opacity-0 transition-all duration-200 ease-out group-hover:translate-x-0 group-hover:opacity-100"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          →
         </span>
       )}
     </button>
   );
 }
 
-/**
- * Inline SVG icon set — line icons sized 20×20, matching the hi-fi exactly.
- * Each icon is a self-contained SVG; consumers pass them via `icon` prop.
- */
+/** Inline SVG icon set — line icons sized 20×20. */
 export const QAIcons = {
   ChangePlan: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

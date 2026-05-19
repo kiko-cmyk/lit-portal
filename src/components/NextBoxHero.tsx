@@ -12,25 +12,23 @@ interface NextBoxHeroProps {
   variant: NextBoxHeroVariant;
   cutoffEndsAt?: Date | null;
   onUndoSkip?: () => void;
-  /** Customer's current plan, used in the meta-row. */
   boxCount: number;
   frequency: Frequency;
 }
 
 /**
- * Hero card for "Your next box".
+ * Hero card — "My next box".
  *
- * Hierarchy (post user-feedback 2026-05-18):
- *   - eyebrow "TU PRÓXIMA CAJA"
- *   - 58px Clash Display date
- *   - day-of-week · "LLEGA EN X DÍAS" inline so the countdown reads as context
- *     for the big date, not as a competing number
- *   - 2-col meta row: SABOR | TU PLAN (boxes · frequency)
- *
- * Previously this card had a yellow countdown pill in the middle and a
- * BOX #N cell on the right. Removed because the date already communicates
- * "when" (no need for a second number) and the box index didn't help the
- * customer.
+ * Same content/structure as the MVP (eyebrow → date → weekday + arrival
+ * descriptor → 2-col meta row Flavor | Plan + skip/lock banners), now with
+ * editorial polish:
+ *   - cream cover with interior mesh + faint grain
+ *   - diagonal yellow tape pill anchoring the top-left corner
+ *   - issue strip (Barlow Condensed) above the date with edition + status
+ *   - mega date in Clash Display (clamp 4.5–7.5rem) — DAY rendered as
+ *     stroke-outline overlay sliding into place after MONTH
+ *   - cover-rise + char-rise entrance animations on mount
+ *   - hover lift on the whole surface
  */
 export function NextBoxHero({
   shipDate,
@@ -48,119 +46,158 @@ export function NextBoxHero({
   const skipped = variant === "skipped";
   const locked = variant === "locked";
 
-  const monthDay = shipDate
+  const month = shipDate
     ? shipDate
-        .toLocaleDateString(dateLocale, { month: "short", day: "numeric" })
+        .toLocaleDateString(dateLocale, { month: "short" })
+        .replace(".", "")
         .toUpperCase()
     : "—";
-
+  const day = shipDate ? shipDate.getDate().toString() : "—";
   const weekday = shipDate
     ? shipDate.toLocaleDateString(dateLocale, { weekday: "long" })
     : "";
 
   const arrivalCopy = arrivalDescriptor(shipDate, locked, lang);
   const planLabel = `${boxCount} ${
-    boxCount === 1
-      ? t({ en: "box", es: "caja" })
-      : t({ en: "boxes", es: "cajas" })
-  } · ${frequencyLabel(frequency, lang, { format: "short" })}`;
+    boxCount === 1 ? t({ en: "BOX", es: "CAJA" }) : t({ en: "BOXES", es: "CAJAS" })
+  } · ${frequencyLabel(frequency, lang, { format: "short" }).toUpperCase()}`;
+
+  const tapeLabel = locked
+    ? t({ en: "Locked", es: "Cerrada" })
+    : skipped
+      ? t({ en: "Skipped", es: "Saltada" })
+      : t({ en: "Next box", es: "Próxima" });
 
   return (
     <section
-      className={
-        "relative mx-6 mt-2 overflow-hidden rounded-2xl bg-[color:var(--color-sharp-white)] px-6 pt-7 pb-6 shadow-[0_8px_24px_rgba(100,90,70,0.08)] ring-1 ring-[color:var(--color-lit-grey)]/5 md:mx-0 md:px-8 md:pt-9"
-      }
+      className="cover-rise relative mx-6 mt-2 overflow-hidden rounded-[24px] bg-[color:var(--color-cream)] px-6 pt-10 pb-7 md:mx-0 md:rounded-[28px] md:px-8 md:pt-12 md:pb-9"
+      style={{
+        boxShadow:
+          "0 1px 0 rgba(255,255,255,0.6) inset, 0 24px 50px -20px rgba(50,40,30,0.22), 0 8px 16px -10px rgba(50,40,30,0.16)",
+        isolation: "isolate",
+      }}
     >
-      <div
+      {/* Interior mesh — three radials drifting slowly */}
+      <span
         aria-hidden
-        className="pointer-events-none absolute -right-16 -top-16 h-52 w-52 rounded-full"
+        className="pointer-events-none absolute -inset-[10%] -z-10"
         style={{
           background:
-            "radial-gradient(circle, rgba(235, 238, 98, 0.28) 0%, transparent 70%)",
+            "radial-gradient(at 80% 10%, rgba(235, 238, 98, 0.55) 0%, transparent 45%), radial-gradient(at 10% 90%, rgba(200, 155, 95, 0.32) 0%, transparent 50%), radial-gradient(at 50% 50%, rgba(55, 53, 84, 0.10) 0%, transparent 60%)",
+          filter: "blur(20px)",
+          animation: "cover-mesh-drift 14s ease-in-out infinite alternate",
         }}
       />
 
-      <div className="relative">
-        <div className="lead-label">
-          <T en="My next box" es="Mi próxima caja" />
-        </div>
+      {/* Tape pill — diagonal yellow strip in top-left */}
+      <span
+        className="absolute top-3.5 -left-9 z-[3] inline-block rotate-[-22deg] bg-[color:var(--color-bold-yellow)] px-10 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
+        style={{
+          boxShadow: "0 4px 10px rgba(0,0,0,0.12)",
+          fontFamily: "var(--font-display)",
+        }}
+      >
+        {tapeLabel}
+      </span>
 
-        <div
-          className={`mt-2 font-display text-[58px] font-black leading-[0.86] tracking-[-0.04em] ${
-            skipped
-              ? "text-[color:var(--color-warm-gray-lt)]"
-              : "text-[color:var(--color-lit-grey)]"
-          }`}
+      {/* Issue strip — Barlow Condensed all-caps. Eyebrow + status. */}
+      <div className="mb-4 flex items-baseline justify-between md:mb-5">
+        <span className="eyebrow-cond">
+          <T en="My LIT" es="Mi LIT" />{" "}
+          <strong className="text-[color:var(--color-lit-grey)]">
+            <T en="Issue" es="Edición" /> #{shipDate ? shipDate.getMonth() + 1 : "—"}
+          </strong>
+        </span>
+        <span
+          className="eyebrow-cond"
+          style={{ color: "var(--color-lit-grey)" }}
         >
-          {monthDay}
-        </div>
+          {arrivalCopy ?? <T en="Loading" es="Cargando" />}
+        </span>
+      </div>
 
-        <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
-          {weekday}
-          {arrivalCopy && (
-            <>
-              <span> · </span>
-              <span className="text-[color:var(--color-lit-grey)]">{arrivalCopy}</span>
-            </>
-          )}
-          {skipped && (
-            <>
-              <span> · </span>
-              <T en="skipped" es="saltada" />
-            </>
-          )}
-        </div>
+      {/* Mega date — month + day, with the day painted as stroked outline */}
+      <div className="relative">
+        <span
+          className="char-rise block font-display font-bold leading-[0.82] tracking-[-0.045em] text-[color:var(--color-lit-grey)]"
+          style={{ fontSize: "var(--display-mega)" }}
+        >
+          {month}
+        </span>
+        <span
+          className="char-rise block font-display font-bold leading-[0.82] tracking-[-0.045em]"
+          style={{
+            fontSize: "var(--display-mega)",
+            marginTop: "-0.05em",
+            color: "transparent",
+            WebkitTextStroke: "2px var(--color-lit-grey)",
+            animationDelay: "0.18s",
+          }}
+        >
+          {day}
+        </span>
+      </div>
 
-        <div className="relative mt-5 grid grid-cols-2 items-center gap-4 border-t border-[color:var(--color-lit-grey)]/10 pt-4">
-          <MetaCell
-            label={t({ en: "Flavor", es: "Sabor" })}
-            value={flavor.toUpperCase()}
-            align="left"
-          />
-          <MetaCell
-            label={t({ en: "Your plan", es: "Tu plan" })}
-            value={planLabel.toUpperCase()}
-            align="right"
-          />
-        </div>
-
+      <div className="mt-3 font-[var(--font-cond)] text-[12px] font-bold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]">
+        {weekday || ""}
         {skipped && (
-          <div className="mt-3.5 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-3.5 py-2.5">
-            <span className="text-[12px] text-[color:var(--color-lit-grey)]">
-              <T
-                en="You skipped this one. Next box moves out one cycle."
-                es="Saltaste esta. La próxima caja pasa un ciclo."
-              />
-            </span>
-            {onUndoSkip && (
-              <button
-                type="button"
-                onClick={onUndoSkip}
-                className="text-[10px] font-extrabold uppercase tracking-[0.15em] underline"
-              >
-                <T en="Undo" es="Deshacer" />
-              </button>
-            )}
-          </div>
-        )}
-
-        {locked && cutoffEndsAt && (
-          <div className="mt-3.5 bg-[color:var(--color-lit-grey)]/[0.06] px-3 py-2 text-center text-[11px] text-[color:var(--color-warm-gray)]">
-            <strong className="font-extrabold text-[color:var(--color-lit-grey)]">
-              <T
-                en={`Locked in ${formatHM(cutoffEndsAt)}`}
-                es={`Bloqueado en ${formatHM(cutoffEndsAt)}`}
-              />
-            </strong>
-            <span>
-              <T
-                en=" · Changes apply to the box after."
-                es=" · Los cambios aplican a la siguiente."
-              />
-            </span>
-          </div>
+          <>
+            <span> · </span>
+            <T en="skipped" es="saltada" />
+          </>
         )}
       </div>
+
+      {/* Meta row — Flavor + Plan, 2-col with editorial spacing */}
+      <div className="mt-6 grid grid-cols-2 gap-4 border-t border-[color:var(--color-lit-grey)]/15 pt-5">
+        <MetaCell
+          label={t({ en: "Flavor", es: "Sabor" })}
+          value={flavor.toUpperCase()}
+          align="left"
+        />
+        <MetaCell
+          label={t({ en: "Your plan", es: "Tu plan" })}
+          value={planLabel}
+          align="right"
+        />
+      </div>
+
+      {skipped && (
+        <div className="mt-4 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5">
+          <span className="text-[12px] text-[color:var(--color-lit-grey)]">
+            <T
+              en="You skipped this one. Next box moves out one cycle."
+              es="Saltaste esta. La próxima caja pasa un ciclo."
+            />
+          </span>
+          {onUndoSkip && (
+            <button
+              type="button"
+              onClick={onUndoSkip}
+              className="text-[10px] font-extrabold uppercase tracking-[0.15em] underline"
+            >
+              <T en="Undo" es="Deshacer" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {locked && cutoffEndsAt && (
+        <div className="mt-4 bg-[color:var(--color-lit-grey)]/[0.06] px-3 py-2 text-center text-[11px] text-[color:var(--color-warm-gray)]">
+          <strong className="font-extrabold text-[color:var(--color-lit-grey)]">
+            <T
+              en={`Locked in ${formatHM(cutoffEndsAt)}`}
+              es={`Bloqueado en ${formatHM(cutoffEndsAt)}`}
+            />
+          </strong>
+          <span>
+            <T
+              en=" · Changes apply to the box after."
+              es=" · Los cambios aplican a la siguiente."
+            />
+          </span>
+        </div>
+      )}
     </section>
   );
 }
@@ -176,51 +213,39 @@ function MetaCell({
 }) {
   return (
     <div className={align === "right" ? "text-right" : "text-left"}>
-      <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-warm-gray)]">
+      <div className="eyebrow-cond" style={{ fontSize: 10 }}>
         {label}
       </div>
-      <div className="mt-0.5 font-display text-[16px] font-black uppercase leading-tight tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+      <div
+        className="mt-1.5 font-display font-bold leading-[0.95] tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
+        style={{ fontSize: "clamp(15px, 4vw, 18px)" }}
+      >
         {value}
       </div>
     </div>
   );
 }
 
-/**
- * "LLEGA EN 15 DÍAS" / "LLEGA HOY" / "LLEGA EN 14H" — copy that contextualises
- * the big date, replacing the old yellow countdown pill.
- */
 function arrivalDescriptor(
   shipDate: Date | null,
   locked: boolean,
   lang: "en" | "es",
 ): string | null {
   if (!shipDate) return null;
-
   const ms = shipDate.getTime() - Date.now();
   const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
   const hours = Math.max(0, Math.ceil(ms / (1000 * 60 * 60)));
 
   if (locked) {
-    return lang === "es"
-      ? `cierra en ${hours}h`
-      : `locks in ${hours}h`;
+    return lang === "es" ? `Cierra en ${hours}h` : `Locks in ${hours}h`;
   }
   if (ms <= 0) {
-    return lang === "es" ? "llega hoy" : "arrives today";
+    return lang === "es" ? "Llega hoy" : "Arrives today";
   }
   if (days <= 1 && hours < 48) {
-    return lang === "es" ? `llega en ${hours}h` : `arrives in ${hours}h`;
+    return lang === "es" ? `Llega en ${hours}h` : `Arrives in ${hours}h`;
   }
-  const unit =
-    days === 1
-      ? lang === "es"
-        ? "día"
-        : "day"
-      : lang === "es"
-        ? "días"
-        : "days";
-  return lang === "es" ? `llega en ${days} ${unit}` : `arrives in ${days} ${unit}`;
+  return lang === "es" ? `Llega en ${days} días` : `Arrives in ${days} days`;
 }
 
 function formatHM(date: Date): string {

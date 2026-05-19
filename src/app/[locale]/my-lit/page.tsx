@@ -9,6 +9,7 @@ import { ImpactStats } from "@/components/ImpactStats";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
 import { SciencePanel } from "@/components/SciencePanel";
+import { SectionDivider } from "@/components/SectionDivider";
 import {
   CollectionPeekVisual,
   PeekCard,
@@ -221,8 +222,14 @@ export default function HubPage() {
               frequency={sub.frequency}
             />
 
-            <section className="mx-6 mt-5 grid grid-cols-2 gap-2 md:mx-0 md:grid-cols-4">
+            <SectionDivider
+              eyebrow={t({ en: "Quick actions", es: "Acciones rápidas" })}
+              title={t({ en: "Manage", es: "Gestionar" })}
+              meta={`04 · ${t({ en: "shortcuts", es: "atajos" })}`}
+            />
+            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
               <QuickActionButton
+                eyebrow="01"
                 icon={QAIcons.ChangePlan}
                 label={t({ en: "Change plan", es: "Cambiar plan" })}
                 sub={`${sub.boxCount} ${
@@ -234,6 +241,7 @@ export default function HubPage() {
                 disabled={sub.withinCutoff}
               />
               <QuickActionButton
+                eyebrow="02"
                 icon={QAIcons.Skip}
                 label={t({ en: "Skip next box", es: "Saltar próxima" })}
                 sub={t({
@@ -244,6 +252,7 @@ export default function HubPage() {
                 disabled={sub.withinCutoff}
               />
               <QuickActionButton
+                eyebrow="03"
                 icon={QAIcons.Flavor}
                 label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
                 sub={t({
@@ -253,6 +262,7 @@ export default function HubPage() {
                 comingSoon
               />
               <QuickActionButton
+                eyebrow="04"
                 icon={QAIcons.Extras}
                 label={t({ en: "Extras", es: "Extras" })}
                 sub={t({
@@ -263,7 +273,12 @@ export default function HubPage() {
               />
             </section>
 
-            <div className="mt-5">
+            <SectionDivider
+              eyebrow={t({ en: "The set", es: "La colección" })}
+              title={t({ en: "Collection", es: "Colección" })}
+              meta={`${String(collectionEarned).padStart(2, "0")} / 12`}
+            />
+            <div>
               <PeekCard
                 variant="collection"
                 lead={t({
@@ -298,25 +313,29 @@ export default function HubPage() {
               />
             </div>
 
+            <SectionDivider
+              eyebrow={t({ en: "The calendar", es: "El calendario" })}
+              title={t({ en: "Upcoming", es: "Próximas" })}
+              meta={t({ en: "Scroll", es: "Desliza" })}
+            />
             <DeliveryCalendar
               nextShipDate={nextShipDate}
               upcoming={data.upcomingShipments}
             />
 
-            {/* "Tu impacto" — counter-up stats from data we already have.
-                Hidden for brand-new subs (no boxes received yet) to avoid
-                showing zeroes that read as "nothing happened". */}
-            {timeline.length > 0 && (
-              <ImpactStats
-                boxesReceived={timeline.length}
-                memberSince={sub.createdAt}
-              />
-            )}
+            {/* "Tu impacto" — visible incluso a 0 boxes con copy zero-state. */}
+            <ImpactStats
+              boxesReceived={timeline.length}
+              memberSince={sub.createdAt}
+            />
 
+            <SectionDivider
+              eyebrow={t({ en: "The receipts", es: "Los recibos" })}
+              title={t({ en: "Order history", es: "Historial" })}
+            />
             <OrderHistory limit={10} />
 
-            {/* Brand-education banner — pinned at the bottom so the
-                customer closes the page with the formula reinforced. */}
+            {/* Brand-education banner — pinned at the bottom. */}
             <SciencePanel />
           </>
         )}

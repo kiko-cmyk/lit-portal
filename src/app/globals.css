@@ -45,8 +45,19 @@
   --color-indigo: #373554;
 
   /* ─── Typography ─── */
-  --font-display: var(--font-clash-display, "Clash Display"), "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Clash Display", "Helvetica Neue", "Arial Black", sans-serif;
   --font-body: var(--font-barlow, "Barlow"), -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-cond: var(--font-barlow-condensed, "Barlow Condensed"), "Helvetica Neue", system-ui, sans-serif;
+
+  /* Editorial scale (clamp() — mobile baseline up to desktop cap). */
+  --display-mega: clamp(4.5rem, 18vw, 7.5rem);
+  --display-xxl:  clamp(3rem, 12vw, 5rem);
+  --display-xl:   clamp(2rem, 8vw, 3.4rem);
+  --display-l:    clamp(1.4rem, 5vw, 2rem);
+
+  /* Motion. */
+  --ease-out-soft: cubic-bezier(0.16, 0.84, 0.44, 1);
+  --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 :root {
@@ -245,9 +256,52 @@ button:disabled,
   z-index: 1;
 }
 
+/* Cover rise + char rise — used by NextBoxHero so the hero feels like a
+   magazine cover dropping into place. */
+@keyframes cover-rise {
+  from { opacity: 0; transform: translateY(28px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+@keyframes char-rise {
+  from { opacity: 0; transform: translateY(40px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+@keyframes cover-mesh-drift {
+  0%   { transform: translate(0, 0);            }
+  100% { transform: translate(-3%, 2%) scale(1.03); }
+}
+
+/* Staggered fade-down for the top rail (header). */
+@keyframes fade-down {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+.cover-rise {
+  animation: cover-rise 720ms var(--ease-out-soft) 0.05s both;
+}
+.char-rise {
+  animation: char-rise 720ms var(--ease-out-soft) both;
+}
+
+/* Helper: numeric label that reads as Barlow Condensed all-caps with
+   wide tracking. Used for issue strip, action numbers, calendar months. */
+.eyebrow-cond {
+  font-family: var(--font-cond);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--color-warm-gray);
+}
+
 /* Respect users who don't want motion. */
 @media (prefers-reduced-motion: reduce) {
-  .mesh-bg::before { animation: none; }
+  .mesh-bg::before,
+  .cover-rise,
+  .char-rise {
+    animation: none;
+  }
   .reveal {
     opacity: 1;
     transform: none;
