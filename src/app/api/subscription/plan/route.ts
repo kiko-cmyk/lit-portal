@@ -1,6 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
-import { mapToSubscription, normalizeFrequency, seal } from "@/lib/seal";
+import { mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -74,16 +74,18 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // subs. The plan-change pipeline below only mutates Seal (add_items +
   // remove_items + edit interval), so requiring the Shopify contract would
   // 404 every Seal-owned sub unnecessarily.
+  //
+  // PERF (Juan 2026-05-19): we used to call getSubscription(id) right after
+  // this to "refresh" the data, but getSubscriptionsByEmail already passes
+  // with-items=true&with-billing-attempts=true so the records are complete.
+  // Each Seal paginated call costs ~2-4 s (Seal ignores ?id= so we scan
+  // all 26 pages). Dropping the redundant fetch saves ~3 s per request.
   const sealSubs = await seal.getSubscriptionsByEmail(email);
-  const sealSubMatch =
+  const sealSub =
     sealSubs.find((s) => s.status === "ACTIVE") ??
     sealSubs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
-  if (!sealSubMatch) {
-    throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
-  }
-  const sealSub = await seal.getSubscription(sealSubMatch.id);
   if (!sealSub) {
-    throw new ApiHttpError(404, "seal_sub_not_found", `Seal sub ${sealSubMatch.id} not found`);
+    throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
   }
   assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/plan");
   const sealSubscriptionId = sealSub.id;
@@ -291,99 +293,86 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   }
 
-  // Re-fetch the updated subscription. Seal regenerates `billing_attempts`
-  // async after `add_items + remove_items + edit interval` — usually within
-  // 1–3 s. We poll for up to ~1.5 s so we stay well inside Vercel's 10 s
-  // function timeout (the Shopify + Seal calls above already cost ~4-6 s).
-  // The Hub front-end picks up any slower-than-1.5-s case with its own
-  // 60 s silent retry loop, so dropping nextShipDate from the response
-  // is acceptable. Lowered from 4000ms 2026-05-19 after a 504 reported by
-  // Juan (Vercel timed out and returned storefront HTML).
-  const refreshed = await waitForSealBillingAttempts(sealSubscriptionId, 1_500, 400);
-  if (!refreshed) {
-    throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
-  }
-
-  // VERIFY post-mutation state matches what we requested. Seal has been
-  // observed to return success:true on edits that didn't actually mutate,
-  // so trusting only the mutation responses isn't enough. If verification
-  // fails we surface a precise error code so the customer knows exactly
-  // what didn't change (and can retry).
-  const refreshedMainItem =
-    refreshed.items.find((it) => !it.is_one_time_item) ?? refreshed.items[0];
-  const actualInterval = (refreshed.delivery_interval ?? "").toLowerCase().trim();
-  const expectedNormalized = expectedInterval.toLowerCase().trim();
-  // Accept both "X day"/"X days" and "X month"/"X months" as a verification
-  // match: Seal stores singular on write but sometimes echoes plural on
-  // read for n > 1 (e.g. "3 months"). Strip trailing 's' before comparing.
-  const stripPlural = (s: string) => s.replace(/s\b/g, "").trim();
-  const intervalMatches = stripPlural(actualInterval) === stripPlural(expectedNormalized);
-  const variantMatches =
-    !variantChanged ||
-    refreshedMainItem?.variant_id === variantDetails.variantId;
-
-  if (!intervalMatches || !variantMatches) {
-    console.error("[plan-change] post-mutation verification failed", {
-      expectedInterval,
-      actualInterval: refreshed.delivery_interval,
-      expectedVariant: variantDetails.variantId,
-      actualVariant: refreshedMainItem?.variant_id,
-      intervalMatches,
-      variantMatches,
-    });
-    if (!intervalMatches && variantMatches) {
-      throw new ApiHttpError(
-        502,
-        variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
-        `Seal accepted the edit but delivery_interval is still "${refreshed.delivery_interval}" (expected "${expectedInterval}"). Try again.`,
-      );
-    }
-    if (intervalMatches && !variantMatches) {
-      throw new ApiHttpError(
-        502,
-        "variant_change_failed",
-        `Seal accepted add_items/remove_items but the sub still has variant ${refreshedMainItem?.variant_id} (expected ${variantDetails.variantId}).`,
-      );
-    }
-    throw new ApiHttpError(
-      502,
-      "plan_verification_failed",
-      `Sub state doesn't match expected after plan change.`,
-    );
-  }
-
-  log("done", {
-    items: refreshed.items.length,
-    pendingAttempts: (refreshed.billing_attempts ?? []).filter(
-      (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
-    ).length,
-    finalInterval: refreshed.delivery_interval,
-    finalVariant: refreshedMainItem?.variant_id,
+  // PERF (Juan 2026-05-19): we used to call waitForSealBillingAttempts
+  // here, which loops getSubscription() (each call paginates 26 pages on
+  // LIT's data, ~2-4 s/call). Combined with the upstream
+  // getSubscriptionsByEmail (~2-4 s) + editSubscription + retry, the route
+  // routinely hit Vercel's 10 s function timeout and returned storefront
+  // HTML, leaving the customer thinking the change had failed when it
+  // had actually committed.
+  //
+  // New strategy: trust the mutation responses. editSubscription now
+  // propagates success:false errors (commit 3f1fa4b) and retries once on
+  // failure (700 ms delay). If we got here, all three mutations returned
+  // success:true to us. Skip the synchronous re-fetch + verification
+  // entirely and build the response synthetically from what we just
+  // committed. The Hub front-end has its own 60 s silent re-poll loop
+  // that picks up Seal's regenerated billing_attempts (nextShipDate)
+  // when they're ready — same pattern we already use for skip/undo.
+  //
+  // Trade-off: a silent Seal lie (success:true on a no-op) wouldn't be
+  // caught in-band. That risk is mitigated by: (a) editSubscription
+  // raising on success:false, (b) the retry catching transient hiccups,
+  // (c) Vercel logs showing the edit response body for post-mortem.
+  // If Seal lies start happening we'll observe it and reintroduce a
+  // light verification fetch.
+  const responseSub = synthesizePostMutationSub(
+    sealSub,
+    targetFrequency,
+    targetBoxCount,
+    expectedInterval,
+    variantChanged ? variantDetails.variantId : null,
+  );
+  log("done-synthetic", {
+    sealSubscriptionId,
+    finalInterval: expectedInterval,
+    finalVariant: variantChanged ? variantDetails.variantId : sealSub.items.find((it) => !it.is_one_time_item)?.variant_id,
+    fePollWillRefresh: true,
   });
-  return mapToSubscription(refreshed, ctx.customerId);
+  return mapToSubscription(responseSub, ctx.customerId);
 });
 
 /**
- * Poll Seal for the updated subscription until it has a pending
- * `billing_attempts` entry, or until `timeoutMs` elapses. Returns the most
- * recent fetch regardless — caller decides what to do with a stale response.
+ * Build a SealSubscription-shaped object that reflects the post-mutation
+ * state we just committed. We avoid the costly re-fetch (each paginated
+ * read costs 2-4 s) by stitching together: (a) the pre-mutation snapshot
+ * for fields that don't change, (b) the explicit target values for the
+ * fields we just changed, (c) an empty/null billing_attempts so the FE
+ * triggers its silent re-poll for the regenerated date.
  */
-async function waitForSealBillingAttempts(
-  sealSubId: number,
-  timeoutMs: number,
-  intervalMs: number,
-) {
-  const deadline = Date.now() + timeoutMs;
-  let latest = await seal.getSubscription(sealSubId);
-  while (Date.now() < deadline) {
-    if (latest) {
-      const pending = (latest.billing_attempts ?? []).find(
-        (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
-      );
-      if (pending?.date) return latest;
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-    latest = await seal.getSubscription(sealSubId);
-  }
-  return latest;
+function synthesizePostMutationSub(
+  pre: SealSubscription,
+  _targetFrequency: Frequency,
+  _targetBoxCount: number | null,
+  expectedInterval: string,
+  newVariantId: string | null,
+): SealSubscription {
+  const mainPre = pre.items.find((it) => !it.is_one_time_item) ?? pre.items[0]!;
+  const items = pre.items.map((it) => {
+    if (it.is_one_time_item) return it;
+    if (it.id !== mainPre.id) return it;
+    return newVariantId !== null
+      ? { ...it, variant_id: newVariantId, selling_plan_name: expectedInterval }
+      : { ...it, selling_plan_name: expectedInterval };
+  });
+  return {
+    ...pre,
+    delivery_interval: expectedInterval,
+    billing_interval: expectedInterval,
+    items,
+    // Clear pending billing_attempts so the FE knows to re-poll for the
+    // regenerated date (it will auto-update once Seal finishes async).
+    billing_attempts: (pre.billing_attempts ?? []).filter(
+      (ba) => ba.completed_at || ba.status || ba.skipped_on,
+    ),
+  };
 }
+
+// waitForSealBillingAttempts removed 2026-05-19: it was the main cause of
+// 10 s Vercel timeouts on this route. Each iteration paginated through 26
+// pages of Seal data (~2-4 s per call) and the route ran out of budget
+// before completing. Replaced with the synthetic response strategy above,
+// where the FE picks up the regenerated nextShipDate via its own 60 s
+// silent re-poll. If we need server-side verification again later, ship
+// it as a separate light-weight call with a strict timeout (e.g.,
+// AbortController.signal after 2 s) so we never block the response.
