@@ -21,16 +21,12 @@ export const metadata: Metadata = {
   // Per-page titles override this via each route's generateMetadata().
   title: { default: "LIT", template: "%s — LIT" },
   description: "Post-purchase portal for LIT Hydration subscribers.",
-  icons: {
-    icon: [
-      {
-        url: "https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png",
-        type: "image/png",
-      },
-    ],
-    shortcut: "https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png",
-    apple: "https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png",
-  },
+  // Icons resuelven por convención de file-based metadata:
+  //   src/app/icon.png        → <link rel="icon">
+  //   src/app/apple-icon.png  → <link rel="apple-touch-icon">
+  // Antes apuntábamos al PNG ancho del logo en el CDN de Shopify, que
+  // estiraba el favicon. Ahora usamos la versión cuadrada 1920×1920 de
+  // /brand/logos/DARK-INDIGO.png copiada en src/app/.
 };
 
 export default function RootLayout({
