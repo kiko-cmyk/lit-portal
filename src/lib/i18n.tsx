@@ -80,28 +80,29 @@ export function usePageTitle(title: { en: string; es: string }) {
 }
 
 /**
- * EN/ES toggle matching the hi-fi `.lang-toggle`. Renders 2 tiny buttons inside
- * a faint grey pill. Active button gets dark bg + yellow text. Navigates to
- * the equivalent URL in the other locale — the slug changes per language so
- * `/en/my-lit` ↔ `/es/mi-lit` is a real URL swap, not just a state toggle.
+ * EN/ES toggle — rounded-pill style per Juan 2026-05-18 round 4. Two
+ * buttons share a single pill outline; active state fills with lit-grey
+ * + yellow text, inactive stays muted. Click navigates to the equivalent
+ * URL slug in the other locale (real URL swap, not just state).
  */
 export function LangToggle({ className }: { className?: string }) {
   const lang = useLangValue();
   const setLang = useLangSetter();
   return (
     <div
-      className={`flex gap-[1px] rounded-sm bg-[color:var(--color-lit-grey)]/8 p-0.5 ${className ?? ""}`}
+      className={`inline-flex items-center rounded-full border border-[color:var(--color-lit-grey)]/22 p-[3px] ${className ?? ""}`}
     >
-      {(["en", "es"] as const).map((l) => (
+      {(["es", "en"] as const).map((l) => (
         <button
           key={l}
           type="button"
           onClick={() => setLang(l)}
-          className={`rounded-[1px] px-2 py-[3px] text-[10px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
+          className={`rounded-full px-2.5 py-[5px] font-semibold uppercase tracking-[0.18em] transition-colors duration-150 cursor-pointer ${
             lang === l
               ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
               : "text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
           }`}
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           {l}
         </button>

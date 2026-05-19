@@ -4,8 +4,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { AddressOverlay } from "@/components/AddressOverlay";
 import { CancelTakeover } from "@/components/CancelTakeover";
+import { CustomerChip } from "@/components/CustomerChip";
+import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
+import { Marquee } from "@/components/Marquee";
 import { PaymentUpdateOverlay } from "@/components/PaymentUpdateOverlay";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import { QAIcons } from "@/components/QuickActionButton";
@@ -96,8 +99,9 @@ export default function AccountPage() {
 
       <header className="flex items-center justify-between px-6 pt-5 pb-1 md:hidden">
         <Logo />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <LangToggle />
+          {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={tier?.earned ?? false}
             tierEarnedAt={tier?.earnedAt ?? null}
@@ -282,15 +286,12 @@ export default function AccountPage() {
 
         <OrdersSection orders={orders} />
 
-        <div className="mx-6 mt-8 pb-4 text-center md:mx-0">
-          <button
-            type="button"
-            onClick={() => setCancelOpen(true)}
-            className="px-2 py-2 text-[12px] tracking-[0.02em] text-[color:var(--color-danger)] underline underline-offset-[3px]"
-          >
-            <T en="Cancel subscription" es="Cancelar suscripción" />
-          </button>
-        </div>
+        <Marquee />
+
+        <DangerZone
+          onCancel={() => setCancelOpen(true)}
+          signoutUrl="https://litsalt.com/account/logout"
+        />
       </main>
 
       <BottomNav />

@@ -37,11 +37,10 @@ export function SectionDivider({
       )}
       <div className="flex items-end justify-between gap-4">
         <h2
-          className="font-medium leading-[1] tracking-[-0.005em] text-[color:var(--color-lit-grey)]"
+          className="font-semibold uppercase leading-[1] tracking-[-0.01em] text-[color:var(--color-lit-grey)]"
           style={{
             fontFamily: "var(--font-display)",
             fontSize: "clamp(18px, 4vw, 22px)",
-            textTransform: "none",
           }}
         >
           {title}

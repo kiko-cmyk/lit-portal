@@ -2,6 +2,7 @@
 
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import { frequencyLabel } from "@/lib/frequency-label";
+import { WaxSeal } from "@/components/WaxSeal";
 import type { Frequency } from "@/lib/types";
 
 export type NextBoxHeroVariant = "default" | "skipped" | "locked" | "new";
@@ -99,6 +100,14 @@ export function NextBoxHero({
       >
         {tapeLabel}
       </span>
+
+      {/* Wax-seal brand badge — rotating rim, static "STAY LIT" centre.
+          Anchors the empty right side of the hero. Hidden on small mobile
+          where it would crash with the issue strip — appears at >=420px. */}
+      <div className="pointer-events-none absolute -right-2 -top-2 z-[2] hidden [@media(min-width:420px)]:block md:right-8 md:top-8">
+        <WaxSeal size={140} className="md:hidden" />
+        <WaxSeal size={200} className="hidden md:block" />
+      </div>
 
       {/* Issue strip — eyebrow on the left, arrival countdown on the right. */}
       <div className="mb-4 flex items-baseline justify-between md:mb-5">

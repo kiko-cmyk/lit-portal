@@ -256,6 +256,22 @@ button:disabled,
   z-index: 1;
 }
 
+/* Marquee — slow horizontal ticker for brand claims. The track is
+   duplicated so once one half scrolls off, the second half is already
+   in place. */
+@keyframes marquee {
+  from { transform: translateX(0);    }
+  to   { transform: translateX(-50%); }
+}
+
+/* Wax-seal slow spin — text around a circular path rotates 360deg over
+   28s. The badge sits in the hero so the page has a tactile / printed
+   element, not just type. */
+@keyframes seal-spin {
+  from { transform: rotate(0deg);   }
+  to   { transform: rotate(360deg); }
+}
+
 /* Cover rise + char rise — used by NextBoxHero so the hero feels like a
    magazine cover dropping into place. */
 @keyframes cover-rise {

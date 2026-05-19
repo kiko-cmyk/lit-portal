@@ -2,28 +2,33 @@
 
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
+import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
+import { CustomerChip } from "@/components/CustomerChip";
+import { DeliveryCalendar } from "@/components/DeliveryCalendar";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
-import { DeliveryCalendar } from "@/components/DeliveryCalendar";
+import { Marquee } from "@/components/Marquee";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
-import { SectionDivider } from "@/components/SectionDivider";
-import {
-  CollectionPeekVisual,
-  PeekCard,
-} from "@/components/PeekCard";
 import { PlanOverlay } from "@/components/PlanOverlay";
 import {
   QAIcons,
   QuickActionButton,
 } from "@/components/QuickActionButton";
 import { ReactivateCard } from "@/components/ReactivateCard";
+import { SectionDivider } from "@/components/SectionDivider";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
-import type { HubDashboard, Subscription, TimelineEntry } from "@/lib/types";
+import { portalHref } from "@/lib/portal-link";
+import type {
+  CustomerProfile,
+  HubDashboard,
+  Subscription,
+  TimelineEntry,
+} from "@/lib/types";
 
 const JUST_SKIPPED_KEY = "lit:just-skipped";
 
@@ -46,11 +51,15 @@ export default function HubPage() {
       window.sessionStorage.getItem(JUST_SKIPPED_KEY) === "1",
   );
   const [syncingUntil, setSyncingUntil] = useState<number | null>(null);
+  const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const t = useLang();
   const lang = useLangValue();
   usePageTitle({ en: "My LIT", es: "Mi LIT" }); // browser tab title
 
   useEffect(() => {
+    api<CustomerProfile>("/api/customer")
+      .then(setCustomer)
+      .catch(() => setCustomer(null));
     api<HubDashboard>("/api/hub/dashboard")
       .then((fresh) => {
         setData(fresh);
@@ -194,9 +203,13 @@ export default function HubPage() {
 
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
         <Logo />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <LangToggle />
-          <TierPill visible={drops.tierEarned} tierEarnedAt={drops.activeReward ? null : null} />
+          {customer && <CustomerChip name={customer.name} />}
+          <TierPill
+            visible={drops.tierEarned}
+            tierEarnedAt={drops.activeReward ? null : null}
+          />
         </div>
       </header>
 
@@ -281,41 +294,13 @@ export default function HubPage() {
             />
             <OrderHistory limit={10} />
 
+            <Marquee />
+
             <SectionDivider title={t({ en: "Collection", es: "Colección" })} />
-            <div>
-              <PeekCard
-                variant="collection"
-                lead={t({
-                  en: "Collection · Edition 01",
-                  es: "Colección · Edición 01",
-                })}
-                title={
-                  isNew
-                    ? t({
-                        en: "0 of 12 · just starting",
-                        es: "0 de 12 · recién empiezas",
-                      })
-                    : t({
-                        en: `${collectionEarned} of 12 earned`,
-                        es: `${collectionEarned} de 12 ganadas`,
-                      })
-                }
-                sub={
-                  isNew
-                    ? t({
-                        en: "Your first card ships with your first box.",
-                        es: "Tu primera carta va con tu primera caja.",
-                      })
-                    : t({
-                        en: "One card per box. Finish the set.",
-                        es: "Una carta por caja. Completa el set.",
-                      })
-                }
-                cta={t({ en: "Coming soon", es: "Pronto" })}
-                comingSoon
-                visual={<CollectionPeekVisual earned={collectionEarned} />}
-              />
-            </div>
+            <CollectionMiniGrid
+              earned={collectionEarned}
+              href={portalHref(lang, "collection")}
+            />
           </>
         )}
       </main>
