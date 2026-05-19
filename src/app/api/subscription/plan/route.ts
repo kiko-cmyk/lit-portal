@@ -249,11 +249,17 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   };
   const expectedInterval = intervalLabelByFrequency[targetFrequency];
   if (planChanged) {
+    // Only send delivery_interval. We used to send billing_interval too,
+    // but reference_seal_api documents only delivery_interval as the
+    // editable field for cadence — Seal may silently no-op the whole
+    // edit when an undocumented field is present. Juan 2026-05-19:
+    // edit returned success:true but Seal didn't actually change the
+    // interval; the customer saw old cadence after reloading. Dropping
+    // billing_interval is our best lead.
     let firstErr: unknown = null;
     try {
       await seal.editSubscription(sealSubscriptionId, {
         delivery_interval: expectedInterval,
-        billing_interval: expectedInterval,
       });
       log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 1 });
     } catch (e) {
@@ -262,14 +268,10 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
         msg: e instanceof Error ? e.message : String(e),
         interval: expectedInterval,
       });
-      // Give Seal ~700ms to settle after the add+remove churn, then retry.
-      // editSubscription with the same interval is idempotent so retry is
-      // safe even if the first call actually committed and just timed out.
       await new Promise((r) => setTimeout(r, 700));
       try {
         await seal.editSubscription(sealSubscriptionId, {
           delivery_interval: expectedInterval,
-          billing_interval: expectedInterval,
         });
         log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 2 });
       } catch (e2) {
@@ -279,9 +281,6 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
           secondMsg: msg,
           interval: expectedInterval,
         });
-        // The variant change DID land (add+remove succeeded), but the
-        // cadence didn't. Tell the FE specifically — generic 502 means
-        // the customer is left thinking everything worked.
         throw new ApiHttpError(
           502,
           variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
@@ -293,29 +292,114 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   }
 
-  // PERF (Juan 2026-05-19): we used to call waitForSealBillingAttempts
-  // here, which loops getSubscription() (each call paginates 26 pages on
-  // LIT's data, ~2-4 s/call). Combined with the upstream
-  // getSubscriptionsByEmail (~2-4 s) + editSubscription + retry, the route
-  // routinely hit Vercel's 10 s function timeout and returned storefront
-  // HTML, leaving the customer thinking the change had failed when it
-  // had actually committed.
+  // VERIFICATION POST-MUTATION (Juan 2026-05-19 round 2):
   //
-  // New strategy: trust the mutation responses. editSubscription now
-  // propagates success:false errors (commit 3f1fa4b) and retries once on
-  // failure (700 ms delay). If we got here, all three mutations returned
-  // success:true to us. Skip the synchronous re-fetch + verification
-  // entirely and build the response synthetically from what we just
-  // committed. The Hub front-end has its own 60 s silent re-poll loop
-  // that picks up Seal's regenerated billing_attempts (nextShipDate)
-  // when they're ready — same pattern we already use for skip/undo.
+  // Background:
+  //   - We removed the synchronous re-fetch in a previous commit because
+  //     Seal pagination cost ~2-4 s per call and we kept hitting Vercel's
+  //     10 s timeout. We replaced it with a synthetic response.
+  //   - Then Juan reported that the frequency change "looked OK" but
+  //     never actually applied — exactly the silent Seal lie I warned
+  //     about. The synthetic response was masking real failures.
   //
-  // Trade-off: a silent Seal lie (success:true on a no-op) wouldn't be
-  // caught in-band. That risk is mitigated by: (a) editSubscription
-  // raising on success:false, (b) the retry catching transient hiccups,
-  // (c) Vercel logs showing the edit response body for post-mortem.
-  // If Seal lies start happening we'll observe it and reintroduce a
-  // light verification fetch.
+  // Compromise:
+  //   1) Wait 500 ms for Seal to settle after edit (gives it a beat to
+  //      apply the interval before we read it back).
+  //   2) Fetch the sub ONCE with a hard 4 s AbortController budget. If
+  //      verification fits in budget AND matches expected state → return
+  //      the real sub data. If it MISMATCHES → throw a precise error so
+  //      the customer knows what to retry.
+  //   3) If the verify call times out or errors → log it loudly and fall
+  //      back to the synthetic response. The customer still sees apparent
+  //      success, but we have observability to fix in follow-up.
+  //
+  // Net latency: ~1-4 s extra. Total request stays well under 10 s for
+  // the common case (~6-8 s) and only nears the limit on slow Seal days.
+
+  // 500 ms grace period
+  await new Promise((r) => setTimeout(r, 500));
+
+  // Verify with strict 4 s budget
+  let verified: SealSubscription | null = null;
+  let verifyOutcome: "ok" | "timeout" | "error" = "ok";
+  const verifyController = new AbortController();
+  const verifyTimer = setTimeout(() => verifyController.abort(), 4_000);
+  try {
+    verified = await seal.getSubscription(sealSubscriptionId, verifyController.signal);
+  } catch (e) {
+    if ((e as { name?: string }).name === "AbortError") {
+      verifyOutcome = "timeout";
+    } else {
+      verifyOutcome = "error";
+    }
+    console.error("[plan-change] verify fetch failed", {
+      sealSubscriptionId,
+      outcome: verifyOutcome,
+      msg: e instanceof Error ? e.message : String(e),
+    });
+  } finally {
+    clearTimeout(verifyTimer);
+  }
+
+  if (verified) {
+    const refreshedMainItem =
+      verified.items.find((it) => !it.is_one_time_item) ?? verified.items[0];
+    const actualInterval = (verified.delivery_interval ?? "").toLowerCase().trim();
+    const expectedNormalized = expectedInterval.toLowerCase().trim();
+    const stripPlural = (s: string) => s.replace(/s\b/g, "").trim();
+    const intervalMatches =
+      stripPlural(actualInterval) === stripPlural(expectedNormalized);
+    const variantMatches =
+      !variantChanged ||
+      refreshedMainItem?.variant_id === variantDetails.variantId;
+
+    if (!intervalMatches || !variantMatches) {
+      console.error("[plan-change] verification MISMATCH — Seal silent lie", {
+        expectedInterval,
+        actualInterval: verified.delivery_interval,
+        expectedVariant: variantDetails.variantId,
+        actualVariant: refreshedMainItem?.variant_id,
+        intervalMatches,
+        variantMatches,
+      });
+      if (!intervalMatches && variantMatches) {
+        throw new ApiHttpError(
+          502,
+          variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
+          `Seal accepted the edit but delivery_interval is still "${verified.delivery_interval}" (expected "${expectedInterval}").`,
+        );
+      }
+      if (intervalMatches && !variantMatches) {
+        throw new ApiHttpError(
+          502,
+          "variant_change_failed",
+          `Seal accepted add_items/remove_items but the sub still has variant ${refreshedMainItem?.variant_id} (expected ${variantDetails.variantId}).`,
+        );
+      }
+      throw new ApiHttpError(
+        502,
+        "plan_verification_failed",
+        `Both interval and variant didn't match expected values after plan change.`,
+      );
+    }
+
+    log("done-verified", {
+      sealSubscriptionId,
+      finalInterval: verified.delivery_interval,
+      finalVariant: refreshedMainItem?.variant_id,
+    });
+    return mapToSubscription(verified, ctx.customerId);
+  }
+
+  // Verification timed out or errored — fall back to synthetic response.
+  // The mutation may have applied; we just couldn't confirm in time. The
+  // FE's silent re-poll picks up the real state on the next refresh.
+  log("done-unverified", {
+    sealSubscriptionId,
+    verifyOutcome,
+    finalInterval: expectedInterval,
+    finalVariant: variantChanged ? variantDetails.variantId : sealSub.items.find((it) => !it.is_one_time_item)?.variant_id,
+  });
   const responseSub = synthesizePostMutationSub(
     sealSub,
     targetFrequency,
@@ -323,12 +407,6 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     expectedInterval,
     variantChanged ? variantDetails.variantId : null,
   );
-  log("done-synthetic", {
-    sealSubscriptionId,
-    finalInterval: expectedInterval,
-    finalVariant: variantChanged ? variantDetails.variantId : sealSub.items.find((it) => !it.is_one_time_item)?.variant_id,
-    fePollWillRefresh: true,
-  });
   return mapToSubscription(responseSub, ctx.customerId);
 });
 

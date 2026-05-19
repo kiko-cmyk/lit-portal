@@ -165,7 +165,7 @@ class SealClient {
     return matches;
   }
 
-  async getSubscription(id: number): Promise<SealSubscription | null> {
+  async getSubscription(id: number, signal?: AbortSignal): Promise<SealSubscription | null> {
     // Seal silently ignores `?id=` (verified 2026-04-27, re-confirmed
     // 2026-05-14 — passing id=12635109 returned the first sub of page 1
     // unfiltered). We have to paginate and match client-side, same pattern
@@ -176,9 +176,17 @@ class SealClient {
         "with-billing-attempts": "true",
         page: String(page),
       });
+      // Pass signal through so callers can cancel the whole paginated
+      // scan (used by plan-change verify to enforce a tight 4 s budget).
       return this.req<SealListResponse<SealSubscription>>(
         `/subscriptions?${params.toString()}`,
-      ).catch(() => null);
+        { signal },
+      ).catch((e) => {
+        // Re-throw aborts so the caller can detect them; swallow other
+        // network errors so partial results still return null/best-effort.
+        if ((e as { name?: string }).name === "AbortError") throw e;
+        return null;
+      });
     };
 
     const page1 = await fetchPage(1);
