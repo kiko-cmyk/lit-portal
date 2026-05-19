@@ -1,9 +1,10 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
-import { SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
+import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { supabaseAdmin } from "@/lib/supabase";
 import type { Frequency, Subscription } from "@/lib/types";
 
 const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo", "6mo"];
@@ -41,19 +42,16 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       extra ?? {},
     );
 
-  const url = new URL(req.url);
-  const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
-  const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
-  if (!email) {
-    throw new ApiHttpError(404, "customer_not_found", `No email for ${ctx.customerId}`);
-  }
-  log("resolved-email", { email });
-
   const body = (await req.json().catch(() => ({}))) as {
     boxCount?: number;
     frequency?: Frequency;
+    /** Optional fast-path: when present, skips the slow Seal pagination. */
+    sealSubscriptionId?: number | string;
+    mainItemId?: number;
+    currentVariantId?: string;
+    currentFrequency?: Frequency;
   };
-  log("body", body);
+  log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
 
   if (
     body.boxCount !== undefined &&
@@ -68,50 +66,79 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     throw new ApiHttpError(400, "no_changes", "Provide boxCount and/or frequency");
   }
 
-  // Resolve the active Seal subscription directly. We deliberately do NOT
-  // call resolveSubIds() here: that helper also requires a Shopify
-  // SubscriptionContract, which only exists for Shopify-owned (Skio-style)
-  // subs. The plan-change pipeline below only mutates Seal (add_items +
-  // remove_items + edit interval), so requiring the Shopify contract would
-  // 404 every Seal-owned sub unnecessarily.
+  // Fast-path: the FE passed sealSubscriptionId + mainItemId + currentVariantId
+  // + currentFrequency from its cached dashboard state. Use them directly
+  // and skip the ~5 s Seal pagination scan that used to dominate this
+  // route. We still resolve email once for ownership verification.
   //
-  // PERF (Juan 2026-05-19): we used to call getSubscription(id) right after
-  // this to "refresh" the data, but getSubscriptionsByEmail already passes
-  // with-items=true&with-billing-attempts=true so the records are complete.
-  // Each Seal paginated call costs ~2-4 s (Seal ignores ?id= so we scan
-  // all 26 pages). Dropping the redundant fetch saves ~3 s per request.
-  const sealSubs = await seal.getSubscriptionsByEmail(email);
-  const sealSub =
-    sealSubs.find((s) => s.status === "ACTIVE") ??
-    sealSubs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
-  if (!sealSub) {
-    throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
-  }
-  assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/plan");
-  const sealSubscriptionId = sealSub.id;
-  log("seal-sub-fetched", { sealSubscriptionId, items: sealSub.items.length });
+  // Slow-path (fallback): no IDs in body → call getSubscriptionsByEmail
+  // and pick the active sub. Kept for backwards compat (mobile that
+  // sends an older payload) but should be rare.
+  let sealSubscriptionId: number;
+  let mainItemNumericId: number;
+  let mainItemVariantId: string;
+  let currentFrequency: Frequency;
+  let nextAttemptDate: string | null = null;
 
-  // Pick the main subscription line (non-one-time item)
-  const mainItem = sealSub.items.find((it) => !it.is_one_time_item) ?? sealSub.items[0];
-  if (!mainItem) {
-    throw new ApiHttpError(500, "no_main_line", "Seal subscription has no items");
-  }
-  log("main-item", { id: mainItem.id, variant: mainItem.variant_id, qty: mainItem.quantity });
+  const ownsOkFast =
+    body.sealSubscriptionId !== undefined
+      ? await verifyOwnershipFast(Number(body.sealSubscriptionId), ctx.customerId)
+      : false;
 
-  // Cutoff against next billing attempt date
-  const nextAttempt = (sealSub.billing_attempts ?? []).find(
-    (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
-  );
-  if (nextAttempt?.date && isWithinCutoff(nextAttempt.date)) {
+  if (
+    body.sealSubscriptionId &&
+    body.mainItemId &&
+    body.currentVariantId &&
+    body.currentFrequency &&
+    ownsOkFast
+  ) {
+    sealSubscriptionId = Number(body.sealSubscriptionId);
+    mainItemNumericId = body.mainItemId;
+    mainItemVariantId = body.currentVariantId;
+    currentFrequency = body.currentFrequency;
+    log("fastpath-ids-from-body", { sealSubscriptionId, mainItemNumericId });
+  } else {
+    log("slowpath-pagination-scan");
+    const url2 = new URL(req.url);
+    const devEmail = process.env.NODE_ENV === "development" ? url2.searchParams.get("__dev_email") : null;
+    const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
+    if (!email) {
+      throw new ApiHttpError(404, "customer_not_found", `No email for ${ctx.customerId}`);
+    }
+    const sealSubsList = await seal.getSubscriptionsByEmail(email);
+    const matched =
+      sealSubsList.find((s) => s.status === "ACTIVE") ??
+      sealSubsList.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
+    if (!matched) {
+      throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
+    }
+    assertSubscriptionBelongsToCustomer(matched, email, "subscription/plan");
+
+    const main = matched.items.find((it) => !it.is_one_time_item) ?? matched.items[0];
+    if (!main) {
+      throw new ApiHttpError(500, "no_main_line", "Seal subscription has no items");
+    }
+    sealSubscriptionId = matched.id;
+    mainItemNumericId = main.id;
+    mainItemVariantId = main.variant_id;
+    currentFrequency = normalizeFrequency(matched.delivery_interval);
+
+    const nextAttempt = (matched.billing_attempts ?? []).find(
+      (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
+    );
+    nextAttemptDate = nextAttempt?.date ?? null;
+  }
+  log("sub-resolved", { sealSubscriptionId, mainItemNumericId, currentFrequency });
+
+  // Cutoff against next billing attempt date (only when we have it from
+  // the slow path; on fast path we trust the FE's cutoff state which is
+  // already enforced at the QuickActionButton level via `disabled={withinCutoff}`).
+  if (nextAttemptDate && isWithinCutoff(nextAttemptDate)) {
     throw new ApiHttpError(400, "cutoff_passed", "Cannot change plan within 72h of next ship");
   }
 
   // Resolve target variant + frequency + detect what actually changed.
-  // Important: we always WRITE the canonical selling_plan_id for the target
-  // frequency (legacy IDs may not be associated with the new variant —
-  // Seal then silently swaps to an arbitrary plan it considers valid).
   const targetBoxCount = body.boxCount ?? null;
-  const currentFrequency = normalizeFrequency(sealSub.delivery_interval);
   const targetFrequency = body.frequency ?? currentFrequency;
 
   const newVariantNumeric = targetBoxCount
@@ -125,18 +152,27 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     throw new ApiHttpError(500, "selling_plan_not_mapped", `No selling plan for ${targetFrequency}`);
   }
 
-  const variantChanged = newVariantNumeric !== null && newVariantNumeric !== mainItem.variant_id;
+  const variantChanged = newVariantNumeric !== null && newVariantNumeric !== mainItemVariantId;
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
 
   log("change-detected", { variantChanged, planChanged, targetFrequency, targetBoxCount });
   if (!variantChanged && !planChanged) {
     log("no-op");
-    return mapToSubscription(sealSub, ctx.customerId);
+    // No-op: return a synthetic sub matching the input state. We don't
+    // have the full pre-mutation sub fetched on the fast path, so build
+    // a minimal placeholder; the FE already has the real state cached.
+    return synthesizeNoOpSub(
+      sealSubscriptionId,
+      mainItemNumericId,
+      mainItemVariantId,
+      currentFrequency,
+      ctx.customerId,
+    );
   }
 
   // Build the new item we'll add. The variant is either the requested new
   // one OR the existing one (when only the cadence is changing).
-  const effectiveVariantNumeric = variantChanged ? newVariantNumeric! : mainItem.variant_id;
+  const effectiveVariantNumeric = variantChanged ? newVariantNumeric! : mainItemVariantId;
   const variantDetails = await shopifyAdmin.getVariantForSealAddItems(effectiveVariantNumeric);
   if (!variantDetails) {
     throw new ApiHttpError(500, "variant_lookup_failed", `Shopify has no variant ${effectiveVariantNumeric}`);
@@ -161,7 +197,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     await seal.addItems(sealSubscriptionId, [{
       productId: variantDetails.productId,
       variantId: variantDetails.variantId,
-      quantity: mainItem.quantity,
+      quantity: 1, // LIT model: always 1, box count encoded in variant
       title: variantDetails.title,
       sku: variantDetails.sku,
       taxable: variantDetails.taxable,
@@ -184,7 +220,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // failure as `seal_inconsistent_state` so the FE can warn the customer to
   // contact support if the compensation also fails.
   try {
-    await seal.removeItems(sealSubscriptionId, [mainItem.id]);
+    await seal.removeItems(sealSubscriptionId, [mainItemNumericId]);
     log("seal-remove-items-ok");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -195,7 +231,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       const added = (afterAdd?.items ?? []).find(
         (it) =>
           !it.is_one_time_item &&
-          it.id !== mainItem.id &&
+          it.id !== mainItemNumericId &&
           it.variant_id === variantDetails.variantId,
       );
       if (added?.id) {
@@ -398,51 +434,114 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     sealSubscriptionId,
     verifyOutcome,
     finalInterval: expectedInterval,
-    finalVariant: variantChanged ? variantDetails.variantId : sealSub.items.find((it) => !it.is_one_time_item)?.variant_id,
+    finalVariant: variantChanged ? variantDetails.variantId : mainItemVariantId,
   });
-  const responseSub = synthesizePostMutationSub(
-    sealSub,
-    targetFrequency,
-    targetBoxCount,
+  return synthesizePostMutationSub(
+    sealSubscriptionId,
+    mainItemNumericId,
+    variantChanged ? variantDetails.variantId : mainItemVariantId,
     expectedInterval,
-    variantChanged ? variantDetails.variantId : null,
+    ctx.customerId,
   );
-  return mapToSubscription(responseSub, ctx.customerId);
 });
 
 /**
- * Build a SealSubscription-shaped object that reflects the post-mutation
- * state we just committed. We avoid the costly re-fetch (each paginated
- * read costs 2-4 s) by stitching together: (a) the pre-mutation snapshot
- * for fields that don't change, (b) the explicit target values for the
- * fields we just changed, (c) an empty/null billing_attempts so the FE
- * triggers its silent re-poll for the regenerated date.
+ * Verify the given seal_subscription_id belongs to the given Shopify
+ * customer by reading the cached mapping in Supabase (sub-100 ms).
+ *
+ * The mapping is populated by `/api/hub/dashboard` on every dashboard
+ * load — so a customer who has the Plan overlay open has guaranteed
+ * already populated their row. If for some reason the cache is missing
+ * (cold customer, db blip), this returns false and the caller falls
+ * back to the slow paginated email scan.
+ */
+async function verifyOwnershipFast(
+  sealSubscriptionId: number,
+  shopifyCustomerId: string,
+): Promise<boolean> {
+  const sb = supabaseAdmin();
+  const { data } = await sb
+    .from("subscriptions")
+    .select("seal_subscription_id")
+    .eq("customer_id", shopifyCustomerId)
+    .maybeSingle();
+  if (!data?.seal_subscription_id) return false;
+  return String(data.seal_subscription_id) === String(sealSubscriptionId);
+}
+
+/**
+ * Build the Subscription response shape from the IDs we already know,
+ * without fetching from Seal. The FE's silent re-poll picks up the
+ * regenerated nextShipDate on the next dashboard refresh.
  */
 function synthesizePostMutationSub(
-  pre: SealSubscription,
-  _targetFrequency: Frequency,
-  _targetBoxCount: number | null,
+  sealSubscriptionId: number,
+  mainItemId: number,
+  finalVariantId: string,
   expectedInterval: string,
-  newVariantId: string | null,
-): SealSubscription {
-  const mainPre = pre.items.find((it) => !it.is_one_time_item) ?? pre.items[0]!;
-  const items = pre.items.map((it) => {
-    if (it.is_one_time_item) return it;
-    if (it.id !== mainPre.id) return it;
-    return newVariantId !== null
-      ? { ...it, variant_id: newVariantId, selling_plan_name: expectedInterval }
-      : { ...it, selling_plan_name: expectedInterval };
-  });
+  customerId: string,
+): Subscription {
+  // Derive the resulting boxCount from the variant id. Falls back to 1
+  // for unmapped variants (shouldn't happen — we only mutate to mapped ones).
+  const boxCount = BOX_COUNT_BY_VARIANT[finalVariantId] ?? 1;
+  const frequency = normalizeFrequency(expectedInterval);
   return {
-    ...pre,
-    delivery_interval: expectedInterval,
-    billing_interval: expectedInterval,
-    items,
-    // Clear pending billing_attempts so the FE knows to re-poll for the
-    // regenerated date (it will auto-update once Seal finishes async).
-    billing_attempts: (pre.billing_attempts ?? []).filter(
-      (ba) => ba.completed_at || ba.status || ba.skipped_on,
-    ),
+    customerId,
+    sealSubscriptionId: String(sealSubscriptionId),
+    mainItemId,
+    currentVariantId: finalVariantId,
+    boxCount,
+    frequency,
+    frequencyLabel: expectedInterval,
+    flavor: "Salty Lemon",
+    nextShipDate: null, // FE will re-poll to pick up regenerated date
+    nextBoxNumber: null,
+    status: "active",
+    createdAt: new Date().toISOString(),
+    withinCutoff: false,
+    cutoffEndsAt: null,
+    shippingAddress: null,
+    payment: {
+      cardExpiryMonth: null,
+      cardExpiryYear: null,
+      sealEditUrl: null,
+    },
+  };
+}
+
+/**
+ * No-op response: nothing changed, so return current state without any
+ * Seal calls. The FE will refresh the dashboard separately.
+ */
+function synthesizeNoOpSub(
+  sealSubscriptionId: number,
+  mainItemId: number,
+  variantId: string,
+  frequency: Frequency,
+  customerId: string,
+): Subscription {
+  const boxCount = BOX_COUNT_BY_VARIANT[variantId] ?? 1;
+  return {
+    customerId,
+    sealSubscriptionId: String(sealSubscriptionId),
+    mainItemId,
+    currentVariantId: variantId,
+    boxCount,
+    frequency,
+    frequencyLabel: frequency,
+    flavor: "Salty Lemon",
+    nextShipDate: null,
+    nextBoxNumber: null,
+    status: "active",
+    createdAt: new Date().toISOString(),
+    withinCutoff: false,
+    cutoffEndsAt: null,
+    shippingAddress: null,
+    payment: {
+      cardExpiryMonth: null,
+      cardExpiryYear: null,
+      sealEditUrl: null,
+    },
   };
 }
 

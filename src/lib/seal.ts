@@ -572,9 +572,12 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
   const next = getNextBillingAttempt(s);
   const nextShipDate = next?.date ?? null;
   const frequency = normalizeFrequency(s.delivery_interval);
+  const mainItem = s.items.find((it) => !it.is_one_time_item) ?? s.items[0];
   return {
     customerId,
     sealSubscriptionId: String(s.id),
+    mainItemId: mainItem?.id ?? 0,
+    currentVariantId: mainItem?.variant_id ?? "",
     boxCount: getBoxCount(s),
     frequency,
     frequencyLabel: s.delivery_interval,

@@ -48,6 +48,15 @@ export type MerchOption = "socks" | "tee" | "hoodie";
 export interface Subscription {
   customerId: string;
   sealSubscriptionId: string;
+  /**
+   * Seal item id of the MAIN subscription line (non-one-time). Exposed so
+   * the FE can pass it directly to `/api/subscription/plan` and the
+   * backend can skip the 33-page Seal pagination scan when looking up the
+   * sub. Saves ~5 s per plan-change call.
+   */
+  mainItemId: number;
+  /** Current variant id of the main item. Exposed for the same reason. */
+  currentVariantId: string;
   boxCount: number;
   frequency: Frequency;
   frequencyLabel: string;

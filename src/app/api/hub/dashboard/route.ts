@@ -45,6 +45,29 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   assertSubscriptionBelongsToCustomer(sub, email, "hub/dashboard");
   const subscription = mapToSubscription(sub, ctx.customerId);
 
+  // Cache the customer → seal_subscription_id mapping so the plan route
+  // can skip the ~3-5 s pagination scan when verifying ownership. Fire
+  // and forget — we don't block the dashboard response on this write.
+  // The mapping is also used by other routes that need a fast lookup.
+  sb.from("subscriptions")
+    .upsert(
+      {
+        customer_id: ctx.customerId,
+        seal_subscription_id: String(sub.id),
+        box_count: subscription.boxCount,
+        frequency: subscription.frequency,
+        flavor: subscription.flavor,
+        next_ship_date: subscription.nextShipDate,
+        next_box_number: subscription.nextBoxNumber,
+        status: subscription.status,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "customer_id" },
+    )
+    .then((r) => {
+      if (r.error) console.warn("[hub-dashboard] subscriptions cache upsert failed:", r.error);
+    });
+
   const balance = balanceRes?.balance ?? 0;
   const tierEarned = !!balanceRes?.tier_earned_at;
 

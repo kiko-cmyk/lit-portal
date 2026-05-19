@@ -65,9 +65,20 @@ export function PlanOverlay({
     setBusy(true);
     setError(null);
     try {
+      // Pass the IDs we already have so the backend can skip the
+      // expensive Seal pagination scan (Juan 2026-05-19 — cut ~5 s off
+      // the route's wall-clock budget). The backend falls back to the
+      // slow path if any of these are missing.
       const updated = await api<Subscription>("/api/subscription/plan", {
         method: "PATCH",
-        body: JSON.stringify({ boxCount, frequency }),
+        body: JSON.stringify({
+          boxCount,
+          frequency,
+          sealSubscriptionId: subscription.sealSubscriptionId,
+          mainItemId: subscription.mainItemId,
+          currentVariantId: subscription.currentVariantId,
+          currentFrequency: subscription.frequency,
+        }),
       });
       onUpdated(updated);
       setDone(true);
