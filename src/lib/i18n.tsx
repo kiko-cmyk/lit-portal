@@ -100,19 +100,21 @@ export function LangToggle({ className }: { className?: string }) {
   const setLang = useLangSetter();
   return (
     <div
-      className={`inline-flex items-center rounded-full border border-[color:var(--color-lit-grey)]/22 p-[3px] ${className ?? ""}`}
+      className={`inline-flex flex-shrink-0 items-center rounded-full border border-[color:var(--color-lit-grey)]/40 bg-[color:var(--color-sharp-white)]/70 p-[3px] shadow-[0_1px_2px_rgba(50,40,30,0.08)] ${className ?? ""}`}
     >
       {(["es", "en"] as const).map((l) => (
         <button
           key={l}
           type="button"
           onClick={() => setLang(l)}
-          className={`rounded-full px-2.5 py-[5px] font-semibold uppercase tracking-[0.18em] transition-colors duration-150 cursor-pointer ${
+          aria-label={l === "es" ? "Español" : "English"}
+          aria-pressed={lang === l}
+          className={`rounded-full px-2.5 py-[5px] font-bold uppercase tracking-[0.18em] transition-colors duration-150 cursor-pointer ${
             lang === l
               ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-              : "text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
+              : "text-[color:var(--color-lit-grey)]/55 hover:text-[color:var(--color-lit-grey)]"
           }`}
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
           {l}
         </button>

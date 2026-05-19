@@ -95,13 +95,15 @@ export function NextBoxHero({
       />
 
       {/* Top row: tape pill on the left, arrival countdown on the right.
-          Both fully inside the card, no rotation overflow. */}
+          Both fully inside the card, no rotation overflow.
+          Round 7b (Juan 2026-05-19): bumped 10→12px so labels son legibles
+          a primera vista. */}
       <div className="mb-5 flex items-center justify-between gap-3 md:mb-7">
         <span
-          className="inline-flex items-center rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
+          className="inline-flex items-center rounded-full bg-[color:var(--color-bold-yellow)] px-3.5 py-1.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
           style={{
             fontFamily: "var(--font-cond)",
-            fontSize: 10,
+            fontSize: 12,
             boxShadow: "0 4px 10px rgba(0,0,0,0.08)",
           }}
         >
@@ -109,7 +111,7 @@ export function NextBoxHero({
         </span>
         <span
           className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
         >
           {arrivalCopy ?? <T en="Loading" es="Cargando" />}
         </span>
@@ -122,11 +124,11 @@ export function NextBoxHero({
       <div className="grid grid-cols-[1fr_auto] items-center gap-4 md:gap-6">
         {/* Date column */}
         <div className="min-w-0">
-          <div className="flex items-baseline gap-3 md:gap-4">
+          <div className="flex items-baseline gap-4 md:gap-6">
             <span
               className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
               style={{
-                fontSize: "clamp(2.8rem, 10vw, 4.6rem)",
+                fontSize: "clamp(3.6rem, 13vw, 5.8rem)",
                 color: skipped ? "var(--color-warm-gray-lt)" : undefined,
               }}
             >
@@ -135,9 +137,9 @@ export function NextBoxHero({
             <span
               className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em]"
               style={{
-                fontSize: "clamp(2.8rem, 10vw, 4.6rem)",
+                fontSize: "clamp(3.6rem, 13vw, 5.8rem)",
                 color: "transparent",
-                WebkitTextStroke: "2px var(--color-lit-grey)",
+                WebkitTextStroke: "2.5px var(--color-lit-grey)",
                 animationDelay: "0.15s",
               }}
             >
@@ -149,7 +151,7 @@ export function NextBoxHero({
             className="mt-3 font-semibold uppercase tracking-[0.28em] text-[color:var(--color-warm-gray)]"
             style={{
               fontFamily: "var(--font-cond)",
-              fontSize: 11,
+              fontSize: 12,
             }}
           >
             {weekday}
@@ -237,7 +239,7 @@ function MetaCell({
     <div className={align === "right" ? "text-right" : "text-left"}>
       <div
         className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+        style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
       >
         {label}
       </div>
@@ -245,7 +247,7 @@ function MetaCell({
         className="mt-2 font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
         style={{
           fontFamily: "var(--font-display)",
-          fontSize: "clamp(18px, 4.5vw, 24px)",
+          fontSize: "clamp(20px, 5vw, 26px)",
         }}
       >
         {value}
