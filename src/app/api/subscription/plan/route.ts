@@ -259,10 +259,13 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
 
   // Re-fetch the updated subscription. Seal regenerates `billing_attempts`
   // async after `add_items + remove_items + edit interval` — usually within
-  // 1–3 s. We poll for up to ~4 s so we leave plenty of headroom inside
-  // Shopify App Proxy's 30 s upstream timeout. The Hub front-end picks up
-  // any slower-than-4-s case with its own silent retry loop.
-  const refreshed = await waitForSealBillingAttempts(sealSubscriptionId, 4_000, 500);
+  // 1–3 s. We poll for up to ~1.5 s so we stay well inside Vercel's 10 s
+  // function timeout (the Shopify + Seal calls above already cost ~4-6 s).
+  // The Hub front-end picks up any slower-than-1.5-s case with its own
+  // 60 s silent retry loop, so dropping nextShipDate from the response
+  // is acceptable. Lowered from 4000ms 2026-05-19 after a 504 reported by
+  // Juan (Vercel timed out and returned storefront HTML).
+  const refreshed = await waitForSealBillingAttempts(sealSubscriptionId, 1_500, 400);
   if (!refreshed) {
     throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
   }

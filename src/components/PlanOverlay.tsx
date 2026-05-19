@@ -81,12 +81,20 @@ export function PlanOverlay({
             es: "Demasiado tarde, tu próxima caja se envía en 72h.",
           }),
         );
-      } else {
-        const detail = err.message ?? err.code ?? "unknown_error";
+      } else if (err.code === "gateway_timeout" || err.status === 504 || err.status === 502) {
+        // Vercel timed out / Shopify storefront fallback. Don't dump HTML
+        // on the customer — friendly retry message instead.
         setError(
           t({
-            en: `Couldn't update plan (${detail}). Try again or contact us.`,
-            es: `No se pudo cambiar el plan (${detail}). Inténtalo de nuevo.`,
+            en: "The service is taking longer than usual. Wait a moment and try again.",
+            es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
+          }),
+        );
+      } else {
+        setError(
+          t({
+            en: "Couldn't update your plan. Try again or contact us.",
+            es: "No se pudo cambiar el plan. Inténtalo de nuevo o escríbenos.",
           }),
         );
       }

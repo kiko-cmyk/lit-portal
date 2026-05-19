@@ -40,9 +40,22 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       parsed = null;
     }
-    const code = parsed?.error ?? `http_${res.status}`;
-    const message =
-      parsed?.message ?? (text ? text.slice(0, 240) : `HTTP ${res.status}`);
+
+    // If the body is HTML (Vercel timeout / Shopify storefront fallback /
+    // crashed function), the customer should not see raw markup or
+    // analytics scripts in the error toast. Replace with a friendly
+    // gateway-timeout code so the consuming UI can show its own copy.
+    // We still log the full body to console for debugging.
+    const isHtmlBody =
+      !parsed &&
+      /^\s*(<!doctype|<html|<\?xml)/i.test(text);
+    const code = parsed?.error
+      ?? (isHtmlBody ? "gateway_timeout" : `http_${res.status}`);
+    const message = parsed?.message
+      ?? (isHtmlBody
+        ? `The service didn't respond in time (HTTP ${res.status}). Try again in a moment.`
+        : (text ? text.slice(0, 240) : `HTTP ${res.status}`));
+
     console.warn(`[api] ${path} → ${res.status}`, parsed ?? text);
     throw new ApiClientError(res.status, code, message);
   }
