@@ -375,7 +375,7 @@ function CompactAction({
     >
       {comingSoon && (
         <span
-          className="absolute right-1.5 top-1.5 rounded-full bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+          className="absolute right-1.5 top-1.5 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 8 }}
         >
           Soon
@@ -877,7 +877,7 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
                       Juan 2026-05-19: el cliente no descarga la factura
                       desde el portal. */}
                   <span
-                    className="rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
+                    className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
                     style={{
                       background:
                         o.status === "delivered"
