@@ -30,7 +30,32 @@ import type {
   TimelineEntry,
 } from "@/lib/types";
 
+// Persistencia del banner "Saltaste la entrega anterior". Antes vivía
+// en sessionStorage (se perdía al cerrar pestaña). Ahora en localStorage
+// con la fecha del próximo envío como expiry — el banner se queda
+// hasta que el siguiente envío salga, momento en el que ya no aplica.
+// Juan 2026-05-19.
 const JUST_SKIPPED_KEY = "lit:just-skipped";
+
+interface JustSkippedRecord {
+  until: string; // ISO ship date — banner se auto-limpia tras esto.
+}
+
+function readJustSkipped(): JustSkippedRecord | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(JUST_SKIPPED_KEY);
+    if (!raw) return null;
+    const rec = JSON.parse(raw) as JustSkippedRecord;
+    if (!rec.until || Date.now() > new Date(rec.until).getTime()) {
+      window.localStorage.removeItem(JUST_SKIPPED_KEY);
+      return null;
+    }
+    return rec;
+  } catch {
+    return null;
+  }
+}
 
 // Window during which the Hub silently re-polls /api/hub/dashboard after a
 // plan change, waiting for Seal to finish regenerating billing_attempts.
@@ -46,9 +71,7 @@ export default function HubPage() {
   const [showPlan, setShowPlan] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [justSkipped, setJustSkipped] = useState<boolean>(
-    () =>
-      typeof window !== "undefined" &&
-      window.sessionStorage.getItem(JUST_SKIPPED_KEY) === "1",
+    () => readJustSkipped() !== null,
   );
   const [syncingUntil, setSyncingUntil] = useState<number | null>(null);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
@@ -162,11 +185,16 @@ export default function HubPage() {
     }
   };
 
-  const markSkipped = (next: boolean) => {
+  const markSkipped = (next: boolean, until?: string | null) => {
     setJustSkipped(next);
-    if (typeof window !== "undefined") {
-      if (next) window.sessionStorage.setItem(JUST_SKIPPED_KEY, "1");
-      else window.sessionStorage.removeItem(JUST_SKIPPED_KEY);
+    if (typeof window === "undefined") return;
+    if (next && until) {
+      window.localStorage.setItem(
+        JUST_SKIPPED_KEY,
+        JSON.stringify({ until } satisfies JustSkippedRecord),
+      );
+    } else {
+      window.localStorage.removeItem(JUST_SKIPPED_KEY);
     }
   };
 
@@ -322,7 +350,10 @@ export default function HubPage() {
           subscription={sub}
           onClose={() => setShowSkip(false)}
           onSkipped={(newDate) => {
-            markSkipped(true);
+            // Persistir la marca de "saltado" con la nueva fecha como
+            // expiry. El banner se mantendrá hasta que esa fecha pase
+            // o hasta que el cliente pulse Deshacer.
+            markSkipped(true, newDate);
             setData({
               ...data,
               subscription: { ...sub, nextShipDate: newDate },

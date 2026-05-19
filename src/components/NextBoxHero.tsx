@@ -68,11 +68,14 @@ export function NextBoxHero({
     boxCount === 1 ? t({ en: "BOX", es: "CAJA" }) : t({ en: "BOXES", es: "CAJAS" })
   } · ${frequencyLabel(frequency, lang, { format: "short" }).toUpperCase()}`;
 
+  // Después de un skip, la fecha que se muestra ES la PRÓXIMA real
+  // (el calendario ya saltó un ciclo). Por eso la pill arriba se
+  // mantiene siempre como "Próxima entrega" salvo que estemos en
+  // ventana de cutoff (Cerrada). El estado "Saltada" sólo se refleja
+  // en el banner inferior, no en la cabecera del hero. (Juan 2026-05-19)
   const tapeLabel = locked
     ? t({ en: "Locked", es: "Cerrada" })
-    : skipped
-      ? t({ en: "Skipped", es: "Saltada" })
-      : t({ en: "Next delivery", es: "Próxima entrega" });
+    : t({ en: "Next delivery", es: "Próxima entrega" });
 
   return (
     <section
@@ -129,7 +132,6 @@ export function NextBoxHero({
               className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
               style={{
                 fontSize: "clamp(3.6rem, 13vw, 5.8rem)",
-                color: skipped ? "var(--color-warm-gray-lt)" : undefined,
               }}
             >
               {month}
@@ -155,12 +157,6 @@ export function NextBoxHero({
             }}
           >
             {weekday}
-            {skipped && (
-              <>
-                <span> · </span>
-                <T en="skipped" es="saltada" />
-              </>
-            )}
           </div>
         </div>
 
@@ -190,8 +186,8 @@ export function NextBoxHero({
         <div className="mt-4 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5">
           <span className="text-[12px] text-[color:var(--color-lit-grey)]">
             <T
-              en="You skipped this one. Next box moves out one cycle."
-              es="Saltaste esta. La próxima caja pasa un ciclo."
+              en="You skipped the previous delivery. This is your next one."
+              es="Saltaste la entrega anterior. Esta es tu próxima."
             />
           </span>
           {onUndoSkip && (
