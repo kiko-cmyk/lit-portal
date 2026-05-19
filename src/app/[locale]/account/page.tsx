@@ -112,9 +112,12 @@ export default function AccountPage() {
       <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         <div className="px-6 pt-3 pb-5 md:px-0">
           {/* H1 a la misma escala que el día del Hero ("JUN") — Juan
-              2026-05-19. Display semibold, mismo clamp y tracking. */}
+              2026-05-19. Peso bajado a 500 (medium) porque "CUENTA"
+              tiene 6 letras gruesas en mayúscula y a 600 se sentía más
+              pesado que "JUN" (3 caracteres). 500 iguala el peso óptico
+              de ambos titulares. */}
           <h1
-            className="font-display font-semibold uppercase leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
+            className="font-display font-medium uppercase leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
             style={{ fontSize: "clamp(3.6rem, 13vw, 5.8rem)" }}
           >
             <T en="Account" es="Cuenta" />
