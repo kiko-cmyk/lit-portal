@@ -182,7 +182,7 @@ export default function CollectionPage() {
     >
       <TopNav />
 
-      <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-cream)]/85 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Link
           href={portalHref(lang, "home")}
           className="text-[13px] font-medium text-[color:var(--color-lit-grey)] hover:opacity-60"

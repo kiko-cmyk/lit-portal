@@ -98,7 +98,7 @@ export function TopNav() {
   const t = useLang();
   return (
     <nav
-      className="hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)] md:block"
+      className="sticky top-0 z-30 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/85 backdrop-blur-md md:block"
       aria-label="Primary"
     >
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-8 py-5">

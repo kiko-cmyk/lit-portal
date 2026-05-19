@@ -28,18 +28,9 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
 
   return (
     <section className="mx-6 mt-5 md:mx-0">
-      <div className="section-label mb-3 flex items-center justify-between">
-        <span>
-          <T en="Order history" es="Historial de pedidos" />
-        </span>
-        <span className="font-extrabold text-[color:var(--color-lit-grey)]">
-          {orders.length}{" "}
-          {orders.length === 1
-            ? t({ en: "order", es: "pedido" })
-            : t({ en: "orders", es: "pedidos" })}
-        </span>
-      </div>
-
+      {/* Per Juan 2026-05-18 round 6: drop the inner "Historial de pedidos"
+          label and the order-count meta — the SectionDivider above already
+          says "Historial", this internal eyebrow was duplicate noise. */}
       {orders.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)]/60 px-5 py-6 text-center text-[12px] text-[color:var(--color-warm-gray)]">
           <T
@@ -67,24 +58,14 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
                   {o.total.toFixed(2)} {o.currency} · {translateStatus(o.status, lang)}
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-1">
-                <span
-                  className="rounded-[2px] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
-                  style={statusStyle(o.status)}
-                >
-                  {translateStatus(o.status, lang).toUpperCase()}
-                </span>
-                {o.invoiceUrl && (
-                  <a
-                    href={o.invoiceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] tracking-[0.1em] text-[color:var(--color-warm-gray)] underline hover:text-[color:var(--color-lit-grey)]"
-                  >
-                    {t({ en: "Invoice", es: "Factura" })}
-                  </a>
-                )}
-              </div>
+              {/* Status pill only — invoice download intentionally removed
+                  per Juan: customers don't need raw invoices from the portal. */}
+              <span
+                className="rounded-[2px] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
+                style={statusStyle(o.status)}
+              >
+                {translateStatus(o.status, lang).toUpperCase()}
+              </span>
             </li>
           ))}
         </ul>

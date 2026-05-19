@@ -201,7 +201,7 @@ export default function HubPage() {
     <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/85 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <div className="flex items-center gap-2.5">
           <LangToggle />

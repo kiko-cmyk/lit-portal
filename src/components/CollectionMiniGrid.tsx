@@ -1,13 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { T, useLang } from "@/lib/i18n";
+import { T } from "@/lib/i18n";
 
 interface CollectionMiniGridProps {
   /** How many of the 12 are earned. */
   earned: number;
-  /** Where the "Ver las 12" link points (collection page). */
-  href: string;
+  /** Kept for forward-compat; ignored in Phase 1 (Collection is SOON). */
+  href?: string;
 }
 
 /**
@@ -20,8 +19,7 @@ interface CollectionMiniGridProps {
  * On narrow mobile widths, the row wraps onto two lines (6 + 6); on
  * desktop they all fit in a single row inside the max-w-5xl container.
  */
-export function CollectionMiniGrid({ earned, href }: CollectionMiniGridProps) {
-  const t = useLang();
+export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
   return (
     <section
       className="relative mx-6 overflow-hidden rounded-[22px] px-6 py-7 md:mx-0 md:px-8 md:py-8"
@@ -47,14 +45,15 @@ export function CollectionMiniGrid({ earned, href }: CollectionMiniGridProps) {
         >
           <T en="Edition 01" es="Edición 01" />
         </span>
-        <Link
-          href={href}
-          className="flex items-center gap-1 border-b border-[color:var(--color-lit-grey)]/60 pb-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-opacity hover:opacity-70"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
+        {/* Phase 1: Collection is not yet clickable — physical cards aren't
+            shipping, so the destination page is a teaser. SOON pill replaces
+            the previous "Ver las 12" link. */}
+        <span
+          className="inline-flex items-center rounded-full bg-[color:var(--color-lit-grey)]/10 px-2.5 py-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-retro-rust)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
-          {t({ en: "See all 12", es: "Ver las 12" })}{" "}
-          <span aria-hidden>↗</span>
-        </Link>
+          Soon
+        </span>
       </div>
 
       <div className="relative grid grid-cols-6 gap-2 sm:grid-cols-12 sm:gap-2.5">

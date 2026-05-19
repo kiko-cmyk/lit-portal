@@ -5,16 +5,9 @@
  * the first half scrolls off, the second half is already in place. Animated
  * via the `marquee` keyframe in globals.css.
  *
- * Per Juan 2026-05-18 round 4: include "GET LIT · SUPERIOR HYDRATION" at
- * minimum, decorate with a few extra brand voice lines.
+ * Per Juan 2026-05-18 round 6: locked to three words — LIT . PERFORM . REPEAT.
  */
-const CLAIMS = [
-  "GET LIT",
-  "SUPERIOR HYDRATION",
-  "STAY LIT",
-  "CHOOSE YOUR ADDICTIONS WISELY",
-  "ZERO COMPROMISE",
-];
+const CLAIMS = ["LIT", "PERFORM", "REPEAT"];
 
 export function Marquee() {
   // Half × 2 → seamless loop. The wider the track, the slower it perceives.

@@ -18,18 +18,23 @@ interface NextBoxHeroProps {
 }
 
 /**
- * Hero card — "My next box".
+ * Hero card — round 6 redesign (Juan 2026-05-18). Everything in normal
+ * document flow so nothing is cropped and nothing is uncentered:
  *
- * Same content/structure as the MVP (eyebrow → date → weekday + arrival
- * descriptor → 2-col meta row Flavor | Plan + skip/lock banners), now with
- * editorial polish:
- *   - cream cover with interior mesh + faint grain
- *   - diagonal yellow tape pill anchoring the top-left corner
- *   - issue strip (Barlow Condensed) above the date with edition + status
- *   - mega date in Clash Display (clamp 4.5–7.5rem) — DAY rendered as
- *     stroke-outline overlay sliding into place after MONTH
- *   - cover-rise + char-rise entrance animations on mount
- *   - hover lift on the whole surface
+ *   [tape pill — horizontal, inside the card]
+ *   ┌────────────────────────────────────┐
+ *   │ JUN              [STAY LIT seal]   │  ← date column + seal column
+ *   │ 30                                 │
+ *   │ ──                                 │
+ *   │ Martes · Llega en 30 días          │
+ *   │ ─────────────────────────────────  │
+ *   │ Sabor       Tu plan                │
+ *   │ Salty Lemon 4 cajas · 45 días      │
+ *   └────────────────────────────────────┘
+ *
+ * No `position: absolute` for the seal — it lives in a flex/grid track on
+ * the right so the date and the seal never collide. Seal is hidden under
+ * 480 px; below that the hero is type-only.
  */
 export function NextBoxHero({
   shipDate,
@@ -71,14 +76,14 @@ export function NextBoxHero({
 
   return (
     <section
-      className="cover-rise relative mx-6 mt-2 overflow-hidden rounded-[24px] bg-[color:var(--color-cream)] px-6 pt-10 pb-7 md:mx-0 md:rounded-[28px] md:px-8 md:pt-12 md:pb-9"
+      className="cover-rise relative mx-6 mt-2 overflow-hidden rounded-[24px] bg-[color:var(--color-cream)] px-6 pt-6 pb-7 md:mx-0 md:rounded-[28px] md:px-10 md:pt-8 md:pb-10"
       style={{
         boxShadow:
           "0 1px 0 rgba(255,255,255,0.6) inset, 0 24px 50px -20px rgba(50,40,30,0.22), 0 8px 16px -10px rgba(50,40,30,0.16)",
         isolation: "isolate",
       }}
     >
-      {/* Interior mesh — three radials drifting slowly */}
+      {/* Interior mesh */}
       <span
         aria-hidden
         className="pointer-events-none absolute -inset-[10%] -z-10"
@@ -86,74 +91,82 @@ export function NextBoxHero({
           background:
             "radial-gradient(at 80% 10%, rgba(235, 238, 98, 0.55) 0%, transparent 45%), radial-gradient(at 10% 90%, rgba(200, 155, 95, 0.32) 0%, transparent 50%), radial-gradient(at 50% 50%, rgba(55, 53, 84, 0.10) 0%, transparent 60%)",
           filter: "blur(20px)",
-          animation: "cover-mesh-drift 14s ease-in-out infinite alternate",
         }}
       />
 
-      {/* Tape pill — diagonal yellow strip in top-left */}
-      <span
-        className="absolute top-3.5 -left-9 z-[3] inline-block rotate-[-22deg] bg-[color:var(--color-bold-yellow)] px-10 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
-        style={{
-          boxShadow: "0 4px 10px rgba(0,0,0,0.12)",
-          fontFamily: "var(--font-display)",
-        }}
-      >
-        {tapeLabel}
-      </span>
-
-      {/* Wax-seal brand badge — rotating rim, static "STAY LIT" centre.
-          Sits middle-right of the hero, fully inside the card so it never
-          covers the issue strip nor the meta row. Hidden on tight mobile
-          (<420px) where there's no room. */}
-      <div className="pointer-events-none absolute right-5 top-1/2 z-[2] hidden -translate-y-1/2 [@media(min-width:420px)]:block md:right-10">
-        <WaxSeal size={130} className="md:hidden" />
-        <WaxSeal size={190} className="hidden md:block" />
-      </div>
-
-      {/* Issue strip — arrival countdown only (Juan: drop "Mi LIT" here). */}
-      <div className="mb-4 flex items-baseline justify-end md:mb-5">
+      {/* Top row: tape pill on the left, arrival countdown on the right.
+          Both fully inside the card, no rotation overflow. */}
+      <div className="mb-5 flex items-center justify-between gap-3 md:mb-7">
         <span
-          className="eyebrow-cond"
-          style={{ color: "var(--color-lit-grey)" }}
+          className="inline-flex items-center rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
+          style={{
+            fontFamily: "var(--font-cond)",
+            fontSize: 10,
+            boxShadow: "0 4px 10px rgba(0,0,0,0.08)",
+          }}
+        >
+          {tapeLabel}
+        </span>
+        <span
+          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           {arrivalCopy ?? <T en="Loading" es="Cargando" />}
         </span>
       </div>
 
-      {/* Mega date — month + day, with the day painted as stroked outline */}
-      <div className="relative">
-        <span
-          className="char-rise block font-display font-bold leading-[0.82] tracking-[-0.045em] text-[color:var(--color-lit-grey)]"
-          style={{ fontSize: "var(--display-mega)" }}
-        >
-          {month}
-        </span>
-        <span
-          className="char-rise block font-display font-bold leading-[0.82] tracking-[-0.045em]"
-          style={{
-            fontSize: "var(--display-mega)",
-            marginTop: "-0.05em",
-            color: "transparent",
-            WebkitTextStroke: "2px var(--color-lit-grey)",
-            animationDelay: "0.18s",
-          }}
-        >
-          {day}
-        </span>
+      {/* Main row: date column + seal column (seal hidden on small) */}
+      <div className="grid grid-cols-[1fr_auto] items-center gap-4 md:gap-6">
+        {/* Date column */}
+        <div className="min-w-0">
+          <span
+            className="char-rise block font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
+            style={{
+              fontSize: "clamp(3.6rem, 14vw, 6rem)",
+              color: skipped ? "var(--color-warm-gray-lt)" : undefined,
+            }}
+          >
+            {month}
+          </span>
+          <span
+            className="char-rise block font-display font-semibold leading-[0.85] tracking-[-0.04em]"
+            style={{
+              fontSize: "clamp(3.6rem, 14vw, 6rem)",
+              marginTop: "-0.05em",
+              color: "transparent",
+              WebkitTextStroke: "2px var(--color-lit-grey)",
+              animationDelay: "0.15s",
+            }}
+          >
+            {day}
+          </span>
+
+          <div
+            className="mt-3 font-semibold uppercase tracking-[0.28em] text-[color:var(--color-warm-gray)]"
+            style={{
+              fontFamily: "var(--font-cond)",
+              fontSize: 11,
+            }}
+          >
+            {weekday}
+            {skipped && (
+              <>
+                <span> · </span>
+                <T en="skipped" es="saltada" />
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Seal column — hidden below 480px, 110px sm, 160px md */}
+        <div className="hidden flex-shrink-0 [@media(min-width:480px)]:block">
+          <WaxSeal size={110} className="md:hidden" />
+          <WaxSeal size={160} className="hidden md:block" />
+        </div>
       </div>
 
-      <div className="mt-3 font-[var(--font-cond)] text-[12px] font-bold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]">
-        {weekday || ""}
-        {skipped && (
-          <>
-            <span> · </span>
-            <T en="skipped" es="saltada" />
-          </>
-        )}
-      </div>
-
-      {/* Meta row — Flavor + Plan, 2-col with editorial spacing */}
-      <div className="mt-6 grid grid-cols-2 gap-4 border-t border-[color:var(--color-lit-grey)]/15 pt-5">
+      {/* Meta row: Sabor | Tu plan, full-width grid below the divider */}
+      <div className="mt-7 grid grid-cols-2 gap-4 border-t border-[color:var(--color-lit-grey)]/15 pt-5 md:mt-10 md:pt-6">
         <MetaCell
           label={t({ en: "Flavor", es: "Sabor" })}
           value={flavor.toUpperCase()}
@@ -227,7 +240,7 @@ function MetaCell({
         className="mt-2 font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
         style={{
           fontFamily: "var(--font-display)",
-          fontSize: "clamp(20px, 5vw, 28px)",
+          fontSize: "clamp(18px, 4.5vw, 24px)",
         }}
       >
         {value}
