@@ -3,49 +3,51 @@
 import type { ReactNode } from "react";
 
 /**
- * Editorial section divider — Barlow Condensed eyebrow on the left, display
- * title underneath, optional right-aligned meta. Sits between Hub sections
- * to give the page a magazine cadence instead of one card flowing into the
- * next.
+ * Section title block. Renders the display-face title centred over its
+ * section. Per Juan 2026-05-18: NO eyebrow line above the title, NO rule
+ * below it, NO right-aligned meta — just the title.
  *
- * Sandwiches the section content visually with a thin grey rule.
+ * The eyebrow/meta props remain in the API so individual callers can
+ * opt back in later, but the Hub no longer uses them.
  */
 export function SectionDivider({
   eyebrow,
   title,
   meta,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string | ReactNode;
   meta?: string | ReactNode;
 }) {
   return (
-    <div className="mx-6 mt-10 mb-3 flex items-end justify-between gap-4 border-b border-[color:var(--color-lit-grey)]/15 pb-2 md:mx-0">
-      <div>
+    <div className="mx-6 mt-10 mb-4 md:mx-0">
+      {eyebrow && (
         <div
-          className="font-bold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
+          className="mb-1.5 font-bold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           {eyebrow}
         </div>
-        <div
-          className="mt-1.5 font-bold uppercase leading-[0.92] tracking-[-0.025em] text-[color:var(--color-lit-grey)]"
+      )}
+      <div className="flex items-end justify-between gap-4">
+        <h2
+          className="font-bold uppercase leading-[0.92] tracking-[-0.025em] text-[color:var(--color-lit-grey)]"
           style={{
             fontFamily: "var(--font-display)",
-            fontSize: "clamp(20px, 5.5vw, 28px)",
+            fontSize: "clamp(22px, 6vw, 30px)",
           }}
         >
           {title}
-        </div>
+        </h2>
+        {meta && (
+          <div
+            className="font-extrabold uppercase tracking-[0.28em] text-[color:var(--color-lit-grey)]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          >
+            {meta}
+          </div>
+        )}
       </div>
-      {meta && (
-        <div
-          className="font-extrabold uppercase tracking-[0.28em] text-[color:var(--color-lit-grey)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-        >
-          {meta}
-        </div>
-      )}
     </div>
   );
 }

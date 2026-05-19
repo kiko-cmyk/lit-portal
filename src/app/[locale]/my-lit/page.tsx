@@ -5,10 +5,8 @@ import { BottomNav, TopNav } from "@/components/BottomNav";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
-import { ImpactStats } from "@/components/ImpactStats";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
-import { SciencePanel } from "@/components/SciencePanel";
 import { SectionDivider } from "@/components/SectionDivider";
 import {
   CollectionPeekVisual,
@@ -223,13 +221,13 @@ export default function HubPage() {
             />
 
             <SectionDivider
-              eyebrow={t({ en: "Quick actions", es: "Acciones rápidas" })}
-              title={t({ en: "Manage", es: "Gestionar" })}
-              meta={`04 · ${t({ en: "shortcuts", es: "atajos" })}`}
+              title={t({
+                en: "Manage my subscription",
+                es: "Gestionar mi suscripción",
+              })}
             />
             <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
               <QuickActionButton
-                eyebrow="01"
                 icon={QAIcons.ChangePlan}
                 label={t({ en: "Change plan", es: "Cambiar plan" })}
                 sub={`${sub.boxCount} ${
@@ -241,7 +239,6 @@ export default function HubPage() {
                 disabled={sub.withinCutoff}
               />
               <QuickActionButton
-                eyebrow="02"
                 icon={QAIcons.Skip}
                 label={t({ en: "Skip next box", es: "Saltar próxima" })}
                 sub={t({
@@ -252,7 +249,6 @@ export default function HubPage() {
                 disabled={sub.withinCutoff}
               />
               <QuickActionButton
-                eyebrow="03"
                 icon={QAIcons.Flavor}
                 label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
                 sub={t({
@@ -262,7 +258,6 @@ export default function HubPage() {
                 comingSoon
               />
               <QuickActionButton
-                eyebrow="04"
                 icon={QAIcons.Extras}
                 label={t({ en: "Extras", es: "Extras" })}
                 sub={t({
@@ -274,10 +269,19 @@ export default function HubPage() {
             </section>
 
             <SectionDivider
-              eyebrow={t({ en: "The set", es: "La colección" })}
-              title={t({ en: "Collection", es: "Colección" })}
-              meta={`${String(collectionEarned).padStart(2, "0")} / 12`}
+              title={t({ en: "Upcoming", es: "Próximas entregas" })}
             />
+            <DeliveryCalendar
+              nextShipDate={nextShipDate}
+              upcoming={data.upcomingShipments}
+            />
+
+            <SectionDivider
+              title={t({ en: "Order history", es: "Historial" })}
+            />
+            <OrderHistory limit={10} />
+
+            <SectionDivider title={t({ en: "Collection", es: "Colección" })} />
             <div>
               <PeekCard
                 variant="collection"
@@ -312,31 +316,6 @@ export default function HubPage() {
                 visual={<CollectionPeekVisual earned={collectionEarned} />}
               />
             </div>
-
-            <SectionDivider
-              eyebrow={t({ en: "The calendar", es: "El calendario" })}
-              title={t({ en: "Upcoming", es: "Próximas" })}
-              meta={t({ en: "Scroll", es: "Desliza" })}
-            />
-            <DeliveryCalendar
-              nextShipDate={nextShipDate}
-              upcoming={data.upcomingShipments}
-            />
-
-            {/* "Tu impacto" — visible incluso a 0 boxes con copy zero-state. */}
-            <ImpactStats
-              boxesReceived={timeline.length}
-              memberSince={sub.createdAt}
-            />
-
-            <SectionDivider
-              eyebrow={t({ en: "The receipts", es: "Los recibos" })}
-              title={t({ en: "Order history", es: "Historial" })}
-            />
-            <OrderHistory limit={10} />
-
-            {/* Brand-education banner — pinned at the bottom. */}
-            <SciencePanel />
           </>
         )}
       </main>

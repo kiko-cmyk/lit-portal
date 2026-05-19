@@ -100,13 +100,10 @@ export function NextBoxHero({
         {tapeLabel}
       </span>
 
-      {/* Issue strip — Barlow Condensed all-caps. Eyebrow + status. */}
+      {/* Issue strip — eyebrow on the left, arrival countdown on the right. */}
       <div className="mb-4 flex items-baseline justify-between md:mb-5">
         <span className="eyebrow-cond">
-          <T en="My LIT" es="Mi LIT" />{" "}
-          <strong className="text-[color:var(--color-lit-grey)]">
-            <T en="Issue" es="Edición" /> #{shipDate ? shipDate.getMonth() + 1 : "—"}
-          </strong>
+          <T en="My LIT" es="Mi LIT" />
         </span>
         <span
           className="eyebrow-cond"

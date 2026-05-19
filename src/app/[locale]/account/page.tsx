@@ -110,7 +110,6 @@ export default function AccountPage() {
           <h1 className="font-display text-[48px] font-black uppercase leading-[0.85] tracking-[-0.03em] text-[color:var(--color-lit-grey)]">
             <T en="Account" es="Cuenta" />
           </h1>
-          <div className="mt-3 h-[3px] w-9 bg-[color:var(--color-lit-grey)]" />
         </div>
 
         <section className="mx-6 mb-4 flex items-center gap-3.5 rounded-[14px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
