@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
-import { useLang, useLangValue } from "@/lib/i18n";
+import { LangToggle, useLang, useLangValue } from "@/lib/i18n";
 import { portalHref, type PortalRoute } from "@/lib/portal-link";
 
 /**
@@ -135,6 +135,9 @@ export function TopNav() {
               </Link>
             );
           })}
+          {/* LangToggle siempre visible — el cliente lo quiere en el header
+              tanto en mobile como en desktop (Juan 2026-05-19). */}
+          <LangToggle />
         </div>
       </div>
     </nav>
