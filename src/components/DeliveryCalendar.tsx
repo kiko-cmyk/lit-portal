@@ -1,6 +1,6 @@
 "use client";
 
-import { T, useLangValue } from "@/lib/i18n";
+import { useLangValue } from "@/lib/i18n";
 import type { UpcomingShipment } from "@/lib/types";
 
 interface DeliveryCalendarProps {
@@ -104,22 +104,21 @@ function DateTile({
           : "border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] text-[color:var(--color-lit-grey)] hover:border-[color:var(--color-bold-yellow)]/45 hover:shadow-[0_12px_24px_-14px_rgba(50,55,67,0.3)]"
       }`}
     >
-      {/* Top: weekday OR "Próxima" tag for the next tile */}
-      {isNext ? (
-        <span
-          className="self-start rounded-full bg-[color:var(--color-lit-grey)] px-2 py-0.5 font-semibold uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
-        >
-          <T en="Next" es="Próxima" />
-        </span>
-      ) : (
-        <span
-          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-        >
-          {weekdayLong}
-        </span>
-      )}
+      {/* Top: weekday for every tile. The yellow fill alone signals which
+          one is next — per Juan 2026-05-18 round 5, no extra "Próxima"
+          pill needed, the colour does the job. */}
+      <span
+        className="font-semibold uppercase tracking-[0.22em]"
+        style={{
+          fontFamily: "var(--font-cond)",
+          fontSize: 10,
+          color: isNext
+            ? "var(--color-lit-grey)"
+            : "var(--color-warm-gray)",
+        }}
+      >
+        {weekdayLong}
+      </span>
 
       {/* Middle: day + month, medium display weight (no shouty mega) */}
       <div className="leading-none">
@@ -147,7 +146,7 @@ function DateTile({
         </span>
       </div>
 
-      {/* Bottom: muted year + weekday short on the next tile */}
+      {/* Bottom: muted year. */}
       <div className="flex items-baseline justify-between gap-2">
         <span
           className="font-semibold uppercase tracking-[0.2em]"
@@ -161,18 +160,6 @@ function DateTile({
         >
           {year}
         </span>
-        {isNext && (
-          <span
-            className="font-semibold uppercase tracking-[0.2em]"
-            style={{
-              fontFamily: "var(--font-cond)",
-              fontSize: 9,
-              color: "rgba(50, 55, 67, 0.7)",
-            }}
-          >
-            {weekdayLong}
-          </span>
-        )}
       </div>
     </div>
   );

@@ -67,7 +67,7 @@ export function NextBoxHero({
     ? t({ en: "Locked", es: "Cerrada" })
     : skipped
       ? t({ en: "Skipped", es: "Saltada" })
-      : t({ en: "Next box", es: "Próxima" });
+      : t({ en: "Next delivery", es: "Próxima entrega" });
 
   return (
     <section
@@ -102,18 +102,16 @@ export function NextBoxHero({
       </span>
 
       {/* Wax-seal brand badge — rotating rim, static "STAY LIT" centre.
-          Anchors the empty right side of the hero. Hidden on small mobile
-          where it would crash with the issue strip — appears at >=420px. */}
-      <div className="pointer-events-none absolute -right-2 -top-2 z-[2] hidden [@media(min-width:420px)]:block md:right-8 md:top-8">
-        <WaxSeal size={140} className="md:hidden" />
-        <WaxSeal size={200} className="hidden md:block" />
+          Sits middle-right of the hero, fully inside the card so it never
+          covers the issue strip nor the meta row. Hidden on tight mobile
+          (<420px) where there's no room. */}
+      <div className="pointer-events-none absolute right-5 top-1/2 z-[2] hidden -translate-y-1/2 [@media(min-width:420px)]:block md:right-10">
+        <WaxSeal size={130} className="md:hidden" />
+        <WaxSeal size={190} className="hidden md:block" />
       </div>
 
-      {/* Issue strip — eyebrow on the left, arrival countdown on the right. */}
-      <div className="mb-4 flex items-baseline justify-between md:mb-5">
-        <span className="eyebrow-cond">
-          <T en="My LIT" es="Mi LIT" />
-        </span>
+      {/* Issue strip — arrival countdown only (Juan: drop "Mi LIT" here). */}
+      <div className="mb-4 flex items-baseline justify-end md:mb-5">
         <span
           className="eyebrow-cond"
           style={{ color: "var(--color-lit-grey)" }}
@@ -226,8 +224,11 @@ function MetaCell({
         {label}
       </div>
       <div
-        className="mt-1.5 text-[13px] font-semibold leading-tight text-[color:var(--color-lit-grey)]"
-        style={{ fontFamily: "var(--font-body)", letterSpacing: "0.02em" }}
+        className="mt-2 font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
+        style={{
+          fontFamily: "var(--font-display)",
+          fontSize: "clamp(20px, 5vw, 28px)",
+        }}
       >
         {value}
       </div>

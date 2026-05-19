@@ -241,7 +241,14 @@ button:disabled,
   height: 70vw;
   max-width: 720px;
   max-height: 720px;
-  z-index: 0;
+  /* z-index: -1 keeps the blob between the body bg and the page content,
+     INSIDE the .mesh-bg isolated stacking context. Previously this was
+     z-index: 0 + a .mesh-bg > * { position: relative; z-index: 1 } rule,
+     which trapped overlays (PlanOverlay, SkipOverlay) by overriding their
+     `position: fixed` with `position: relative`. The overlays then rendered
+     at the bottom of the page flow instead of as viewport modals.
+     Audit fix 2026-05-18 round 5. */
+  z-index: -1;
   background: radial-gradient(
     circle at 50% 50%,
     rgba(235, 238, 98, 0.42) 0%,
@@ -250,10 +257,6 @@ button:disabled,
   filter: blur(50px);
   animation: mesh-drift 18s cubic-bezier(0.16, 0.84, 0.44, 1) infinite alternate;
   pointer-events: none;
-}
-.mesh-bg > * {
-  position: relative;
-  z-index: 1;
 }
 
 /* Marquee — slow horizontal ticker for brand claims. The track is
