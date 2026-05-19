@@ -79,14 +79,13 @@ export function SkipOverlay({
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
               <T en="Skip next box" es="Saltar próxima caja" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
-              <T en="Going somewhere" es="¿Te vas de viaje" />
-              <span className="text-[color:var(--color-bold-yellow)]">?</span>
+            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
+              <T en="Going somewhere" es="¿Te vas de viaje" />?
             </h1>
             <p className="mt-3 text-sm opacity-70">
               <T
-                en="Take a breather. Your next box jumps one cycle and we resume from there."
-                es="Toma aire. Tu próxima caja se salta un ciclo y retomamos desde ahí."
+                en="Your next box will skip one cycle and we'll resume from there."
+                es="Tu próxima caja se saltará un ciclo y retomaremos desde ahí."
               />
             </p>
 

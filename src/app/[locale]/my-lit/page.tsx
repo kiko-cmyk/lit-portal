@@ -258,8 +258,8 @@ export default function HubPage() {
                 icon={QAIcons.Skip}
                 label={t({ en: "Skip next box", es: "Saltar próxima" })}
                 sub={t({
-                  en: "Going somewhere? Skip one.",
-                  es: "¿Te vas? Salta una.",
+                  en: "Skip next delivery",
+                  es: "Saltar próxima entrega",
                 })}
                 onClick={() => setShowSkip(true)}
                 disabled={sub.withinCutoff}
@@ -277,8 +277,8 @@ export default function HubPage() {
                 icon={QAIcons.Extras}
                 label={t({ en: "Extras", es: "Extras" })}
                 sub={t({
-                  en: "One-time add to next box",
-                  es: "Añadir una vez a la caja",
+                  en: "Add an extra to my order",
+                  es: "Añadir un extra a mi pedido",
                 })}
                 comingSoon
               />

@@ -59,9 +59,11 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
                 </div>
               </div>
               {/* Status pill only — invoice download intentionally removed
-                  per Juan: customers don't need raw invoices from the portal. */}
+                  per Juan: customers don't need raw invoices from the portal.
+                  rounded-full per Juan 2026-05-19 round 7: same pill shape as
+                  the SOON tag in Collection. */}
               <span
-                className="rounded-[2px] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
+                className="rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
                 style={statusStyle(o.status)}
               >
                 {translateStatus(o.status, lang).toUpperCase()}

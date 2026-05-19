@@ -115,31 +115,35 @@ export function NextBoxHero({
         </span>
       </div>
 
-      {/* Main row: date column + seal column (seal hidden on small) */}
+      {/* Main row: date column + seal column (seal hidden on small).
+          Round 7 (2026-05-19): mes + día en la misma línea → el hero
+          ocupa menos alto. El día queda hueco (outline) como antes para
+          mantener el contraste editorial. */}
       <div className="grid grid-cols-[1fr_auto] items-center gap-4 md:gap-6">
         {/* Date column */}
         <div className="min-w-0">
-          <span
-            className="char-rise block font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
-            style={{
-              fontSize: "clamp(3.6rem, 14vw, 6rem)",
-              color: skipped ? "var(--color-warm-gray-lt)" : undefined,
-            }}
-          >
-            {month}
-          </span>
-          <span
-            className="char-rise block font-display font-semibold leading-[0.85] tracking-[-0.04em]"
-            style={{
-              fontSize: "clamp(3.6rem, 14vw, 6rem)",
-              marginTop: "-0.05em",
-              color: "transparent",
-              WebkitTextStroke: "2px var(--color-lit-grey)",
-              animationDelay: "0.15s",
-            }}
-          >
-            {day}
-          </span>
+          <div className="flex items-baseline gap-3 md:gap-4">
+            <span
+              className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
+              style={{
+                fontSize: "clamp(2.8rem, 10vw, 4.6rem)",
+                color: skipped ? "var(--color-warm-gray-lt)" : undefined,
+              }}
+            >
+              {month}
+            </span>
+            <span
+              className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em]"
+              style={{
+                fontSize: "clamp(2.8rem, 10vw, 4.6rem)",
+                color: "transparent",
+                WebkitTextStroke: "2px var(--color-lit-grey)",
+                animationDelay: "0.15s",
+              }}
+            >
+              {day}
+            </span>
+          </div>
 
           <div
             className="mt-3 font-semibold uppercase tracking-[0.28em] text-[color:var(--color-warm-gray)]"
@@ -158,10 +162,11 @@ export function NextBoxHero({
           </div>
         </div>
 
-        {/* Seal column — hidden below 480px, 110px sm, 160px md */}
+        {/* Seal column — hidden below 480px, 96px sm, 132px md.
+            Bajado un poco para acompañar al hero más estrecho. */}
         <div className="hidden flex-shrink-0 [@media(min-width:480px)]:block">
-          <WaxSeal size={110} className="md:hidden" />
-          <WaxSeal size={160} className="hidden md:block" />
+          <WaxSeal size={96} className="md:hidden" />
+          <WaxSeal size={132} className="hidden md:block" />
         </div>
       </div>
 
@@ -173,7 +178,7 @@ export function NextBoxHero({
           align="left"
         />
         <MetaCell
-          label={t({ en: "Your plan", es: "Tu plan" })}
+          label={t({ en: "My plan", es: "Mi plan" })}
           value={planLabel}
           align="right"
         />

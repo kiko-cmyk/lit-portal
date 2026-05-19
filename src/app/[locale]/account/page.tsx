@@ -796,7 +796,7 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <span
-                      className="rounded-[2px] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
+                      className="rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
                       style={{
                         background:
                           o.status === "delivered"

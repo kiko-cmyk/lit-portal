@@ -139,11 +139,10 @@ export function PlanOverlay({
         ) : (
           <>
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
-              <T en="Change plan" es="Cambiar plan" />
+              <T en="Change subscription" es="Cambiar suscripción" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
-              <T en="Your mix" es="Tu mezcla" />
-              <span className="text-[color:var(--color-bold-yellow)]">.</span>
+            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
+              <T en="My plan" es="Mi plan" />.
             </h1>
 
             {/* Box count picker */}
