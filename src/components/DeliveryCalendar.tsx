@@ -84,10 +84,10 @@ function DateTile({
 
   return (
     <div
-      className={`flex h-[124px] w-[88px] flex-shrink-0 flex-col items-center justify-between rounded-xl border px-2 py-3 [scroll-snap-align:start] ${
+      className={`flex h-[124px] w-[88px] flex-shrink-0 flex-col items-center justify-between rounded-xl border px-2 py-3 transition-all duration-200 ease-out hover:-translate-y-1 [scroll-snap-align:start] ${
         isNext
-          ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/30"
-          : "border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-sharp-white)]"
+          ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/30 hover:shadow-[0_10px_22px_-12px_rgba(235,238,98,0.55)]"
+          : "border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-sharp-white)] hover:border-[color:var(--color-bold-yellow)]/40 hover:shadow-[0_8px_18px_-12px_rgba(50,55,67,0.25)]"
       }`}
     >
       <div className="text-[9px] font-extrabold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">

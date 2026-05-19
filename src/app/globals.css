@@ -163,6 +163,98 @@ button:disabled,
   to   { transform: scale(1);   opacity: 1; }
 }
 
+/* ─── v2 polish keyframes (post-feedback 2026-05-18) ─── */
+
+/* Mesh drift — slow yellow blob that gives the page a heartbeat
+   without being kinetic. Applied as a fixed ::before layer on the
+   `.zone-cream` wrapper so the Hub + Account both share it. */
+@keyframes mesh-drift {
+  0%   { transform: translate(0, 0)   scale(1);    }
+  100% { transform: translate(-8%, 6%) scale(1.15); }
+}
+
+/* Entrance reveal — used on Hub sections via .reveal class +
+   IntersectionObserver toggling .is-in. */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+/* Skeleton shimmer for loading rows. Replace any spinner that
+   appears for >300ms with a .skel block. */
+@keyframes shimmer {
+  0%   { background-position: -100% 0; }
+  100% { background-position:  100% 0; }
+}
+
+/* Reveal helpers — set initial opacity to 0 and rely on
+   .is-in (added by IntersectionObserver) to fade in. Stagger
+   children with --reveal-delay. */
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 600ms cubic-bezier(0.16, 0.84, 0.44, 1),
+              transform 600ms cubic-bezier(0.16, 0.84, 0.44, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+.reveal.is-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.skel {
+  background: linear-gradient(
+    90deg,
+    rgba(50, 55, 67, 0.06) 0%,
+    rgba(50, 55, 67, 0.14) 50%,
+    rgba(50, 55, 67, 0.06) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: 12px;
+}
+
+/* Mesh-drift background helper. Apply to the page wrapper:
+   <div class="zone-cream mesh-bg"> ...
+   The yellow blob is positioned top-right and drifts slowly.
+   Sits below content (z-index: 0) but above the body bg. */
+.mesh-bg {
+  position: relative;
+  isolation: isolate;
+}
+.mesh-bg::before {
+  content: "";
+  position: fixed;
+  inset: -20% -25% auto auto;
+  width: 70vw;
+  height: 70vw;
+  max-width: 720px;
+  max-height: 720px;
+  z-index: 0;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(235, 238, 98, 0.42) 0%,
+    transparent 60%
+  );
+  filter: blur(50px);
+  animation: mesh-drift 18s cubic-bezier(0.16, 0.84, 0.44, 1) infinite alternate;
+  pointer-events: none;
+}
+.mesh-bg > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Respect users who don't want motion. */
+@media (prefers-reduced-motion: reduce) {
+  .mesh-bg::before { animation: none; }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
 .sheet-overlay {
   position: fixed;
   inset: 0;

@@ -5,8 +5,10 @@ import { BottomNav, TopNav } from "@/components/BottomNav";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
+import { ImpactStats } from "@/components/ImpactStats";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
+import { SciencePanel } from "@/components/SciencePanel";
 import {
   CollectionPeekVisual,
   PeekCard,
@@ -188,7 +190,7 @@ export default function HubPage() {
   const collectionEarned = Math.min(4, Math.floor(timeline.length));
 
   return (
-    <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       <header className="flex items-center justify-between px-6 pt-5 pb-3 md:hidden">
@@ -301,7 +303,21 @@ export default function HubPage() {
               upcoming={data.upcomingShipments}
             />
 
+            {/* "Tu impacto" — counter-up stats from data we already have.
+                Hidden for brand-new subs (no boxes received yet) to avoid
+                showing zeroes that read as "nothing happened". */}
+            {timeline.length > 0 && (
+              <ImpactStats
+                boxesReceived={timeline.length}
+                memberSince={sub.createdAt}
+              />
+            )}
+
             <OrderHistory limit={10} />
+
+            {/* Brand-education banner — pinned at the bottom so the
+                customer closes the page with the formula reinforced. */}
+            <SciencePanel />
           </>
         )}
       </main>

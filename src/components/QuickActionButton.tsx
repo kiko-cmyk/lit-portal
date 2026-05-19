@@ -41,7 +41,7 @@ export function QuickActionButton({
       className={
         comingSoon
           ? "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-3 py-3.5 text-left cursor-not-allowed"
-          : "group relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3 py-3.5 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/10"
+          : "group relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-[10px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3 py-3.5 text-left transition-all duration-200 ease-out hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)] hover:bg-[color:var(--color-bold-yellow)]/5 hover:shadow-[0_8px_18px_-12px_rgba(50,55,67,0.25)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/10 disabled:hover:shadow-none"
       }
     >
       {comingSoon && (
@@ -50,7 +50,7 @@ export function QuickActionButton({
         </span>
       )}
       <span
-        className={`h-5 w-5 ${comingSoon ? "text-[color:var(--color-warm-gray)]/60" : "text-[color:var(--color-lit-grey)]"}`}
+        className={`h-5 w-5 transition-transform duration-200 ${comingSoon ? "text-[color:var(--color-warm-gray)]/60" : "text-[color:var(--color-lit-grey)] group-hover:scale-[1.08]"}`}
       >
         {icon}
       </span>

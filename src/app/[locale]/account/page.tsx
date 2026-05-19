@@ -91,7 +91,7 @@ export default function AccountPage() {
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
   return (
-    <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       <header className="flex items-center justify-between px-6 pt-5 pb-1 md:hidden">
