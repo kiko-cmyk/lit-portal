@@ -219,41 +219,75 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
 
   // 3) If the cadence changed, also bump the subscription-level interval —
   // Seal stores it both per-item AND on the sub.
-  let intervalEditFailed: string | null = null;
+  //
+  // CRITICAL: this used to be wrapped in a try/catch that just logged the
+  // failure and continued. Result: Seal rejects the edit (e.g. transient
+  // hiccup right after add+remove), we log it, return the refreshed sub
+  // with the OLD delivery_interval, and the FE shows "all good" even
+  // though frequency didn't change. Juan hit this 2026-05-19: changed
+  // boxes from 1 to 4 + frequency from 45d to 15d, only boxes landed.
+  //
+  // New strategy: editSubscription propagates errors. We retry ONCE with
+  // a small delay (Seal occasionally needs a beat after add+remove for
+  // the sub to settle). On second failure we throw — the variant change
+  // already landed, so the customer needs to know the cadence didn't.
+  //
+  // Seal requires singular interval units ("1 month", "45 day", "3 month")
+  // — plurals are rejected with "interval format is invalid" (verified
+  // 2026-05-14, see reference_seal_api).
+  const intervalLabelByFrequency: Record<Frequency, string> = {
+    "15d": "15 day",
+    "1mo": "1 month",
+    "45d": "45 day",
+    "2mo": "2 month",
+    "3mo": "3 month",
+    "4mo": "4 month",
+    "5mo": "5 month",
+    "6mo": "6 month",
+  };
+  const expectedInterval = intervalLabelByFrequency[targetFrequency];
   if (planChanged) {
-    // Seal requires singular interval units ("1 month", "45 day", "3 month")
-    // — plurals are rejected with "interval format is invalid" (verified
-    // 2026-05-14). Sending these in tandem with add+remove also realigns
-    // each item's selling_plan_id to match the new cadence.
-    const intervalLabelByFrequency: Record<Frequency, string> = {
-      "15d": "15 day",
-      "1mo": "1 month",
-      "45d": "45 day",
-      "2mo": "2 month",
-      "3mo": "3 month",
-      "4mo": "4 month",
-      "5mo": "5 month",
-      "6mo": "6 month",
-    };
+    let firstErr: unknown = null;
     try {
       await seal.editSubscription(sealSubscriptionId, {
-        delivery_interval: intervalLabelByFrequency[targetFrequency],
-        billing_interval: intervalLabelByFrequency[targetFrequency],
+        delivery_interval: expectedInterval,
+        billing_interval: expectedInterval,
       });
-      log("seal-edit-interval-ok", { interval: intervalLabelByFrequency[targetFrequency] });
+      log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 1 });
     } catch (e) {
-      // Non-throwing. The add_items + remove_items already changed the active
-      // item's selling_plan_id (Seal applies cadence per-item too), so a
-      // failed sub-level edit means the new item ships at the right cadence
-      // but the sub field still reads the previous interval. We log and
-      // surface via the response so the FE can warn the customer instead of
-      // crashing the whole mutation — losing the variant swap that did land
-      // would be worse than a misaligned label.
-      intervalEditFailed = e instanceof Error ? e.message : String(e);
-      log("seal-edit-interval-failed", {
-        msg: intervalEditFailed,
-        interval: intervalLabelByFrequency[targetFrequency],
+      firstErr = e;
+      log("seal-edit-interval-retry", {
+        msg: e instanceof Error ? e.message : String(e),
+        interval: expectedInterval,
       });
+      // Give Seal ~700ms to settle after the add+remove churn, then retry.
+      // editSubscription with the same interval is idempotent so retry is
+      // safe even if the first call actually committed and just timed out.
+      await new Promise((r) => setTimeout(r, 700));
+      try {
+        await seal.editSubscription(sealSubscriptionId, {
+          delivery_interval: expectedInterval,
+          billing_interval: expectedInterval,
+        });
+        log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 2 });
+      } catch (e2) {
+        const msg = e2 instanceof Error ? e2.message : String(e2);
+        log("seal-edit-interval-failed-twice", {
+          firstMsg: firstErr instanceof Error ? firstErr.message : String(firstErr),
+          secondMsg: msg,
+          interval: expectedInterval,
+        });
+        // The variant change DID land (add+remove succeeded), but the
+        // cadence didn't. Tell the FE specifically — generic 502 means
+        // the customer is left thinking everything worked.
+        throw new ApiHttpError(
+          502,
+          variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
+          variantChanged
+            ? `Boxes updated but frequency change rejected by Seal: ${msg}`
+            : `Frequency change rejected by Seal: ${msg}`,
+        );
+      }
     }
   }
 
@@ -269,11 +303,62 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   if (!refreshed) {
     throw new ApiHttpError(500, "post_edit_fetch_failed", "Could not re-fetch Seal subscription after update");
   }
+
+  // VERIFY post-mutation state matches what we requested. Seal has been
+  // observed to return success:true on edits that didn't actually mutate,
+  // so trusting only the mutation responses isn't enough. If verification
+  // fails we surface a precise error code so the customer knows exactly
+  // what didn't change (and can retry).
+  const refreshedMainItem =
+    refreshed.items.find((it) => !it.is_one_time_item) ?? refreshed.items[0];
+  const actualInterval = (refreshed.delivery_interval ?? "").toLowerCase().trim();
+  const expectedNormalized = expectedInterval.toLowerCase().trim();
+  // Accept both "X day"/"X days" and "X month"/"X months" as a verification
+  // match: Seal stores singular on write but sometimes echoes plural on
+  // read for n > 1 (e.g. "3 months"). Strip trailing 's' before comparing.
+  const stripPlural = (s: string) => s.replace(/s\b/g, "").trim();
+  const intervalMatches = stripPlural(actualInterval) === stripPlural(expectedNormalized);
+  const variantMatches =
+    !variantChanged ||
+    refreshedMainItem?.variant_id === variantDetails.variantId;
+
+  if (!intervalMatches || !variantMatches) {
+    console.error("[plan-change] post-mutation verification failed", {
+      expectedInterval,
+      actualInterval: refreshed.delivery_interval,
+      expectedVariant: variantDetails.variantId,
+      actualVariant: refreshedMainItem?.variant_id,
+      intervalMatches,
+      variantMatches,
+    });
+    if (!intervalMatches && variantMatches) {
+      throw new ApiHttpError(
+        502,
+        variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
+        `Seal accepted the edit but delivery_interval is still "${refreshed.delivery_interval}" (expected "${expectedInterval}"). Try again.`,
+      );
+    }
+    if (intervalMatches && !variantMatches) {
+      throw new ApiHttpError(
+        502,
+        "variant_change_failed",
+        `Seal accepted add_items/remove_items but the sub still has variant ${refreshedMainItem?.variant_id} (expected ${variantDetails.variantId}).`,
+      );
+    }
+    throw new ApiHttpError(
+      502,
+      "plan_verification_failed",
+      `Sub state doesn't match expected after plan change.`,
+    );
+  }
+
   log("done", {
     items: refreshed.items.length,
     pendingAttempts: (refreshed.billing_attempts ?? []).filter(
       (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
     ).length,
+    finalInterval: refreshed.delivery_interval,
+    finalVariant: refreshedMainItem?.variant_id,
   });
   return mapToSubscription(refreshed, ctx.customerId);
 });

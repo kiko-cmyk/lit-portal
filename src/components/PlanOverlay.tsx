@@ -81,7 +81,40 @@ export function PlanOverlay({
             es: "Demasiado tarde, tu próxima caja se envía en 72h.",
           }),
         );
-      } else if (err.code === "gateway_timeout" || err.status === 504 || err.status === 502) {
+      } else if (err.code === "frequency_change_failed_partial") {
+        // The variant DID change (boxes updated) but the cadence didn't.
+        // Tell the customer specifically so they don't think everything
+        // worked. Suggest the precise retry: pulsar Guardar otra vez.
+        setError(
+          t({
+            en: "Boxes updated, but the frequency couldn't be changed. Press Save again to retry the frequency.",
+            es: "Las cajas se actualizaron pero la frecuencia no pudo cambiarse. Pulsa Guardar otra vez para reintentar la frecuencia.",
+          }),
+        );
+      } else if (err.code === "frequency_change_failed") {
+        setError(
+          t({
+            en: "Couldn't change the frequency. Try again in a moment.",
+            es: "No se pudo cambiar la frecuencia. Inténtalo de nuevo en un momento.",
+          }),
+        );
+      } else if (err.code === "variant_change_failed") {
+        setError(
+          t({
+            en: "Couldn't change the number of boxes. Try again in a moment.",
+            es: "No se pudo cambiar la cantidad de cajas. Inténtalo de nuevo en un momento.",
+          }),
+        );
+      } else if (err.code === "seal_inconsistent_state") {
+        // Both items present — Seal got into a state we couldn't safely
+        // roll back. Customer needs human help.
+        setError(
+          t({
+            en: "Something went wrong updating your plan. Please contact support so we can fix it.",
+            es: "Algo no fue bien actualizando tu plan. Por favor contáctanos y lo arreglamos.",
+          }),
+        );
+      } else if (err.code === "gateway_timeout" || err.status === 504) {
         // Vercel timed out / Shopify storefront fallback. Don't dump HTML
         // on the customer — friendly retry message instead.
         setError(
