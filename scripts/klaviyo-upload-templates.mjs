@@ -38,7 +38,7 @@ const EN = {
   nutriSodium: "SODIUM",
   nutriPotassium: "POTASSIUM",
   nutriMagnesium: "MAGNESIUM",
-  crewKicker: "— MY ACCOUNT",
+  crewKicker: "MY ACCOUNT",
   crewL1: "ACCESS",
   crewL2: "YOUR ACCOUNT",
   crewSub: "+10,000 people. Community. Hydration.",
@@ -70,7 +70,7 @@ const ES = {
   nutriSodium: "SODIO",
   nutriPotassium: "POTASIO",
   nutriMagnesium: "MAGNESIO",
-  crewKicker: "— ÁREA PERSONAL",
+  crewKicker: "ÁREA PERSONAL",
   crewL1: "ACCEDE",
   crewL2: "A TU CUENTA",
   crewSub: "+10.000 personas. Comunidad. Hidratación.",
@@ -153,9 +153,8 @@ function emailHtml(lang) {
     <div class="order-top">${t.orderLabelTop}</div>
   </div>
 
-  <!-- Hero -->
+  <!-- Hero — sin kicker 'CONFIRMADO' (Juan 2026-05-20). -->
   <div class="hero">
-    <span class="kicker-text">${t.kicker}</span>
     <h1 class="hero-h1">${t.heroL1}<br>${t.heroL2}<span class="yellow-square"></span></h1>
     <p class="welcome">${t.welcome}</p>
   </div>
