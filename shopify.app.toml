@@ -26,5 +26,6 @@ redirect_urls = [
   # Customer Account API OAuth callback. Added 2026-05-20: clientes
   # logueados en tracking.litsalt.com rebotan directo aqui en lugar
   # de quedarse en el dashboard de Shopify. Aterrizan en /apps/portal/mi-lit.
-  "https://litsalt.com/apps/portal/auth/callback"
+  # Path lleva /api/ porque el route vive en src/app/api/auth/callback/route.ts
+  "https://litsalt.com/apps/portal/api/auth/callback"
 ]

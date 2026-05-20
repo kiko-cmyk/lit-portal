@@ -29,7 +29,11 @@ const SHOPIFY_AUTHORIZE_URL =
 // app install client_id (hex format).
 const CLIENT_ID = process.env.SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID;
 
-const REDIRECT_URI = "https://litsalt.com/apps/portal/auth/callback";
+// IMPORTANT: this exact string must also be added to the "Callback URIs"
+// list in the Headless Sales Channel → Customer Account API panel. If
+// Shopify doesn't see it as a registered URI, the OAuth call fails with
+// "Las credenciales del cliente no son válidas".
+const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
 
 const DEFAULT_RETURN_TO = "/es/mi-lit";
 
