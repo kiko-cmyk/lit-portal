@@ -28,7 +28,7 @@ const EN = {
   welcome: 'Welcome, {{ first_name|default:"friend" }}. Your first box lands around {{ event.delivery_date|default:"soon" }}.',
   subLabel: "YOUR SUBSCRIPTION",
   planLabel: "PLAN",
-  planValue: '{{ event.box_count|default:1 }} BOX · {{ event.plan_label|default:"" }}',
+  planValue: '{{ event.box_count|default:1 }} BOX{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
   flavorLabel: "FLAVOR",
   flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
   shipsLabel: "SHIPS",
@@ -60,12 +60,12 @@ const ES = {
   welcome: 'Te damos la bienvenida, {{ first_name|default:"" }}. Tu primera caja llega sobre el {{ event.delivery_date|default:"pronto" }}.',
   subLabel: "TU SUSCRIPCIÓN",
   planLabel: "PLAN",
-  planValue: '{{ event.box_count|default:1 }} CAJA · {{ event.plan_label|default:"" }}',
+  planValue: '{{ event.box_count|default:1 }} CAJA{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
   flavorLabel: "SABOR",
   flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
   shipsLabel: "SALE",
   shipsValue: '{{ event.ship_date|default:"Pronto" }}',
-  landsLabel: "ATERRIZA",
+  landsLabel: "LLEGA",
   landsValue: '~{{ event.delivery_date|default:"Pronto" }}',
   nutriSodium: "SODIO",
   nutriPotassium: "POTASIO",
@@ -94,47 +94,48 @@ function emailHtml(lang) {
   body { margin: 0; padding: 0; background: #E9EBDE; font-family: 'Satoshi', 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #323743; -webkit-font-smoothing: antialiased; }
   .frame { width: 100%; max-width: 640px; margin: 0 auto; background: #E9EBDE; }
 
-  /* Logo + order */
-  .logo-bar { display: flex; justify-content: space-between; align-items: center; padding: 36px 32px 12px; }
-  .logo-img { height: 32px; width: auto; display: block; }
+  /* Logo + order — order goes BELOW logo on a new line so it never
+     looks glued to the wordmark. */
+  .logo-bar { padding: 40px 32px 20px; }
+  .logo-img { height: 32px; width: auto; display: block; margin-bottom: 14px; }
   .order-top { font-size: 10px; letter-spacing: 0.18em; font-weight: 900; color: #7A746A; }
 
-  /* Hero */
-  .hero { padding: 8px 32px 24px; }
-  .kicker-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
-  .kicker-line { width: 36px; height: 2px; background: #EBEE62; }
-  .kicker-text { font-size: 11px; letter-spacing: 0.25em; font-weight: 900; color: #323743; }
+  /* Hero — kicker is now plain text (no yellow line). */
+  .hero { padding: 0 32px 24px; }
+  .kicker-text { display: block; font-size: 11px; letter-spacing: 0.25em; font-weight: 900; color: #323743; margin-bottom: 16px; }
   .hero-h1 { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 92px; line-height: 0.85; letter-spacing: -0.04em; color: #323743; text-transform: uppercase; margin: 0; }
   .yellow-square { display: inline-block; width: 28px; height: 28px; background: #EBEE62; vertical-align: bottom; margin-left: 4px; margin-bottom: 8px; }
   .welcome { font-size: 14px; color: #323743; line-height: 1.5; margin-top: 22px; }
 
   /* Subscription card */
-  .sub-card { background: #F8F9F2; margin: 8px 32px 0; padding: 26px 24px; border-radius: 4px; }
-  .sub-label { font-size: 10px; letter-spacing: 0.22em; font-weight: 900; color: #323743; text-transform: uppercase; margin-bottom: 18px; }
+  .sub-card { background: #F8F9F2; margin: 8px 32px 0; padding: 28px 26px; border-radius: 6px; }
+  .sub-label { font-size: 10px; letter-spacing: 0.22em; font-weight: 900; color: #323743; text-transform: uppercase; margin-bottom: 22px; }
   .sub-grid { width: 100%; }
-  .sub-grid td { padding: 0 0 18px 0; vertical-align: top; }
-  .grid-key { font-size: 10px; letter-spacing: 0.18em; font-weight: 700; color: #7A746A; text-transform: uppercase; margin-bottom: 6px; }
+  .sub-grid td { padding: 0 0 20px 0; vertical-align: top; }
+  .sub-grid tr:last-child td { padding-bottom: 0; }
+  .grid-key { font-size: 10px; letter-spacing: 0.18em; font-weight: 700; color: #7A746A; text-transform: uppercase; margin-bottom: 8px; }
   .grid-val { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 18px; color: #323743; text-transform: uppercase; letter-spacing: -0.01em; }
-  .sub-divider { border-top: 1px dashed rgba(50,55,67,0.25); margin: 4px 0 22px; }
-  .box-visual { display: inline-block; background: #8B2640; width: 62px; height: 62px; position: relative; border-radius: 2px; }
-  .box-num { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 9px; color: #E9EBDE; letter-spacing: 0.15em; }
 
   /* Nutritional facts */
-  .nutri { background: #CFBFAD; margin: 18px 32px 0; padding: 30px 24px; border-radius: 4px; }
+  .nutri { background: #CFBFAD; margin: 18px 32px 0; padding: 30px 24px; border-radius: 6px; }
   .nutri-grid { width: 100%; }
   .nutri-cell { display: inline-block; width: 32%; vertical-align: top; }
   .nutri-num { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 38px; color: #323743; line-height: 1; letter-spacing: -0.02em; }
   .nutri-unit { font-size: 11px; font-weight: 700; color: #7A746A; vertical-align: top; margin-left: 1px; }
   .nutri-name { font-size: 10px; letter-spacing: 0.22em; font-weight: 700; color: #7A746A; text-transform: uppercase; margin-top: 8px; }
 
-  /* Crew photo block */
-  .crew { background: #1A1726; background-image: linear-gradient(180deg, rgba(15,14,26,0.25) 0%, rgba(15,14,26,0.85) 100%); position: relative; margin: 22px 32px 0; padding: 70px 24px 28px; border-radius: 4px; min-height: 340px; }
-  .crew-kicker { font-size: 11px; letter-spacing: 0.25em; font-weight: 900; color: #EBEE62; margin-bottom: 16px; }
+  /* Account banner — was .crew; renamed mentally but classes stay for
+     diff cleanliness. Auto-height (no min-height), padding cierra justo
+     bajo el subtítulo (Juan 2026-05-20). */
+  .crew { background: #1A1726; position: relative; margin: 22px 32px 0; padding: 36px 28px 32px; border-radius: 6px; }
+  .crew-kicker { font-size: 11px; letter-spacing: 0.25em; font-weight: 900; color: #EBEE62; margin-bottom: 14px; }
   .crew-h1 { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 50px; line-height: 0.9; letter-spacing: -0.03em; color: #E9EBDE; text-transform: uppercase; margin: 0; }
   .crew-h1 .ysq { display: inline-block; width: 14px; height: 14px; background: #EBEE62; vertical-align: bottom; margin-left: 2px; margin-bottom: 6px; }
-  .crew-sub { font-size: 13px; line-height: 1.55; color: rgba(245,240,221,0.85); margin-top: 18px; }
+  .crew-sub { font-size: 13px; line-height: 1.55; color: rgba(245,240,221,0.85); margin: 16px 0 0; }
 
-  /* CTA */
+  /* CTA — color inline en el <a> también, porque algunos clientes
+     (Gmail principalmente) descartan estilos del <style> y dejan el
+     azul de link. */
   .cta-wrap { padding: 22px 32px; }
   .cta-btn { display: block; width: 100%; background: #EBEE62; color: #323743; text-align: center; padding: 22px 0; font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 13px; letter-spacing: 0.22em; text-transform: uppercase; text-decoration: none; border-radius: 4px; }
 
@@ -146,7 +147,7 @@ function emailHtml(lang) {
 <body>
 <div class="frame">
 
-  <!-- Logo + order -->
+  <!-- Logo + order (order debajo del logo, con respiro) -->
   <div class="logo-bar">
     <img src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png" alt="LIT" class="logo-img" width="auto" height="32">
     <div class="order-top">${t.orderLabelTop}</div>
@@ -154,7 +155,7 @@ function emailHtml(lang) {
 
   <!-- Hero -->
   <div class="hero">
-    <div class="kicker-row"><span class="kicker-line"></span><span class="kicker-text">${t.kicker}</span></div>
+    <span class="kicker-text">${t.kicker}</span>
     <h1 class="hero-h1">${t.heroL1}<br>${t.heroL2}<span class="yellow-square"></span></h1>
     <p class="welcome">${t.welcome}</p>
   </div>
@@ -184,8 +185,6 @@ function emailHtml(lang) {
         </td>
       </tr>
     </table>
-    <div class="sub-divider"></div>
-    <div class="box-visual"><div class="box-num">01</div></div>
   </div>
 
   <!-- Nutritional -->
@@ -215,33 +214,38 @@ function emailHtml(lang) {
     <p class="crew-sub">${t.crewSub}</p>
   </div>
 
-  <!-- CTA -->
+  <!-- CTA — color del texto inline (Gmail strippea <style> tags). -->
   <div class="cta-wrap">
-    <a class="cta-btn" href="${t.ctaUrl}">${t.cta}</a>
+    <a class="cta-btn" href="${t.ctaUrl}" style="color:#323743;text-decoration:none;">
+      <span style="color:#323743;">${t.cta}</span>
+    </a>
   </div>
 
-  <!-- Footer: solo JOIN THE LIT MOVEMENT bar (per Juan 2026-05-20). -->
-  <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%" style="max-width:480px;margin:0 auto;">
-    <tr>
-      <td style="background:#323743;padding:24px 0 20px;text-align:center;">
-        <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;">
-          <tr>
-            <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-right:8px;white-space:nowrap;">JOIN THE</td>
-            <td style="vertical-align:middle;">
-              <img alt="LIT" src="https://d3k81ch9hvuctc.cloudfront.net/company/TFtcEn/images/54dcff58-73a9-459a-87cc-d0e1c1fc7c8f.png" width="60"/>
-            </td>
-            <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-left:8px;white-space:nowrap;">MOVEMENT</td>
-          </tr>
-        </table>
-        <p style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:8px;font-weight:400;color:#888;margin:12px 0 0;line-height:1.5;mso-line-height-rule:exactly;letter-spacing:0;">
-          LIT Hydration&reg; &mdash; Superior Hydration<br/>
-          {% unsubscribe '${t.footerUnsubscribe}' %} &middot; {% manage_preferences '${t.footerPreferences}' %}
-        </p>
-      </td>
-    </tr>
-  </table>
-
 </div>
+
+<!-- Footer: JOIN THE LIT MOVEMENT bar.
+     - Full-width (no max-width):  sale del frame de 640px para que la
+       barra oscura sea el último golpe visual del email a ancho total.
+     - Mismo color que el banner "ACCEDE A TU CUENTA" (#1A1726). -->
+<table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%" style="background:#1A1726;">
+  <tr>
+    <td style="background:#1A1726;padding:28px 24px 22px;text-align:center;">
+      <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;">
+        <tr>
+          <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-right:8px;white-space:nowrap;">JOIN THE</td>
+          <td style="vertical-align:middle;">
+            <img alt="LIT" src="https://d3k81ch9hvuctc.cloudfront.net/company/TFtcEn/images/54dcff58-73a9-459a-87cc-d0e1c1fc7c8f.png" width="60"/>
+          </td>
+          <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-left:8px;white-space:nowrap;">MOVEMENT</td>
+        </tr>
+      </table>
+      <p style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:9px;font-weight:400;color:rgba(245,240,221,0.5);margin:14px 0 0;line-height:1.55;mso-line-height-rule:exactly;letter-spacing:0;">
+        LIT Hydration&reg; &mdash; Superior Hydration<br/>
+        {% unsubscribe '${t.footerUnsubscribe}' %} &middot; {% manage_preferences '${t.footerPreferences}' %}
+      </p>
+    </td>
+  </tr>
+</table>
 </body>
 </html>`;
 }
