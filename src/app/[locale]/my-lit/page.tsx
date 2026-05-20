@@ -394,30 +394,95 @@ function SyncingBanner() {
   );
 }
 
+/**
+ * Estado para clientes sin suscripción activa. Cubre tres escenarios:
+ *   1. Compra one-shot (no eligieron selling plan).
+ *   2. Suscripción cancelada hace tiempo (ya no en post_cancel).
+ *   3. Cliente con cuenta pero sin pedidos (raro pero posible).
+ *
+ * En todos los casos asumimos que han hecho login → son clientes Shopify.
+ * Por eso el tono es de "gracias por estar aquí, pásate a suscripción y
+ * recibe automático" en vez del frío "descubre LIT" de antes.
+ *
+ * El CTA principal apunta a la PDP con el selling_plan por defecto pre-
+ * seleccionado para que el cliente caiga ya en suscripción mensual sin
+ * tener que toquetear el selector.
+ */
 function EmptyState() {
+  const lang = useLangValue();
   return (
-    <div className="zone-cream flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <header className="flex items-center justify-between px-6 pt-5 pb-3 md:px-12">
+    <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <LangToggle />
       </header>
-      <main className="flex flex-1 flex-col items-center justify-center px-8 pb-24 text-center">
-        <h1 className="font-display text-4xl font-black uppercase leading-none md:text-5xl">
-          <T en="No active subscription" es="Sin suscripción activa" />
-          <span className="text-[color:var(--color-bold-yellow)]">.</span>
-        </h1>
-        <p className="mt-4 max-w-sm text-sm opacity-70">
-          <T
-            en="Once you start your first LIT subscription, you'll see your hub here."
-            es="Cuando empieces tu suscripción a LIT, verás tu hub aquí."
-          />
-        </p>
-        <a
-          href="https://litsalt.com"
-          className="mt-8 rounded-sm bg-[color:var(--color-lit-grey)] px-6 py-3 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)]"
+      <main className="flex flex-1 flex-col items-center justify-center px-6 pt-[68px] pb-24 text-center md:mx-auto md:w-full md:max-w-2xl md:px-8 md:pt-[92px] md:pb-12">
+        <span
+          className="font-semibold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
-          <T en="Discover LIT" es="Descubre LIT" />
-        </a>
+          {lang === "es" ? "Tu cuenta LIT" : "Your LIT account"}
+        </span>
+
+        <h1
+          className="mt-4 font-display font-medium uppercase leading-[0.88] tracking-[-0.035em] text-[color:var(--color-lit-grey)]"
+          style={{ fontSize: "clamp(2.6rem, 9vw, 4.4rem)" }}
+        >
+          {lang === "es" ? (
+            <>
+              Gracias por
+              <br />
+              probar LIT
+              <span className="text-[color:var(--color-bold-yellow)]">.</span>
+            </>
+          ) : (
+            <>
+              Thanks for
+              <br />
+              trying LIT
+              <span className="text-[color:var(--color-bold-yellow)]">.</span>
+            </>
+          )}
+        </h1>
+
+        <p className="mt-6 max-w-md text-[14px] leading-[1.55] text-[color:var(--color-warm-gray)]">
+          {lang === "es" ? (
+            <>
+              Tu pedido está en marcha. Si te suscribes, recibirás LIT
+              automáticamente cada mes con hasta un{" "}
+              <strong className="text-[color:var(--color-lit-grey)]">
+                45% de descuento
+              </strong>{" "}
+              sobre el precio único, y podrás gestionar todo desde este portal.
+            </>
+          ) : (
+            <>
+              Your order is on the way. Subscribe and get LIT delivered
+              automatically every month with up to{" "}
+              <strong className="text-[color:var(--color-lit-grey)]">
+                45% off
+              </strong>{" "}
+              the one-time price, all managed from this portal.
+            </>
+          )}
+        </p>
+
+        <div className="mt-9 flex flex-col items-center gap-3">
+          <a
+            href="https://litsalt.com/products/lit-daily-hydration"
+            className="inline-flex items-center justify-center rounded-full bg-[color:var(--color-lit-grey)] px-7 py-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] transition-transform duration-200 ease-out hover:-translate-y-[2px]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
+          >
+            {lang === "es" ? "Activar mi suscripción" : "Start my subscription"}
+          </a>
+          <a
+            href="https://litsalt.com"
+            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
+          >
+            {lang === "es" ? "Volver a la tienda" : "Back to shop"}
+          </a>
+        </div>
       </main>
       <BottomNav />
     </div>
