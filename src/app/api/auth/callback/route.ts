@@ -20,8 +20,11 @@ import { NextResponse, type NextRequest } from "next/server";
  * firmado con SHOPIFY_API_SECRET dentro del propio param `state`.
  */
 
-const PORTAL_BASE = "https://litsalt.com/apps/portal";
-const FALLBACK_RETURN = "/es/mi-lit";
+// PORTAL_BASE no incluye /apps/portal porque safeReturn ya viene con la
+// ruta completa (LoginScreen lo construye con window.location.pathname,
+// que para un usuario en /apps/portal/es/mi-lit devuelve esa misma ruta).
+const PORTAL_BASE = "https://litsalt.com";
+const FALLBACK_RETURN = "/apps/portal/es/mi-lit";
 
 export async function GET(req: NextRequest) {
   const secret = process.env.SHOPIFY_API_SECRET;

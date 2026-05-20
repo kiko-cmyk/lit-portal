@@ -31,7 +31,10 @@ const CLIENT_ID = process.env.SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID;
 
 const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
 
-const DEFAULT_RETURN_TO = "/es/mi-lit";
+// Fallback con prefijo /apps/portal porque return_to viaja con la ruta
+// completa (LoginScreen pasa window.location.pathname, que ya incluye
+// el App Proxy mount prefix).
+const DEFAULT_RETURN_TO = "/apps/portal/es/mi-lit";
 
 const STATE_TTL_SECONDS = 600; // 10 min
 
