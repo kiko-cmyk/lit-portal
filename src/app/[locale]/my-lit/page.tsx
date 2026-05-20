@@ -449,20 +449,20 @@ function EmptyState() {
           {lang === "es" ? (
             <>
               Tu pedido está en marcha. Si te suscribes, recibirás LIT
-              automáticamente cada mes con hasta un{" "}
+              automáticamente cada mes con un{" "}
               <strong className="text-[color:var(--color-lit-grey)]">
-                45% de descuento
+                descuento desde el 25%
               </strong>{" "}
               sobre el precio único, y podrás gestionar todo desde este portal.
             </>
           ) : (
             <>
               Your order is on the way. Subscribe and get LIT delivered
-              automatically every month with up to{" "}
+              automatically every month with{" "}
               <strong className="text-[color:var(--color-lit-grey)]">
-                45% off
+                25% off or more
               </strong>{" "}
-              the one-time price, all managed from this portal.
+              vs the one-time price, all managed from this portal.
             </>
           )}
         </p>
