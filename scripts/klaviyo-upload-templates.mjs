@@ -1,9 +1,9 @@
 /**
  * Phase 1 — upload TWO confirmation email templates (EN + ES) to Klaviyo.
  *
- * Each template is clean HTML without conditional Liquid for language.
- * The flow uses a conditional split on `person.language_pref` to send the
- * right one. That keeps each template easy to preview/QA in the editor.
+ * Design fidelity: matches Diane's hi-fi (2026-05-11) — meta header bar,
+ * massive Clash Display headlines, yellow square period, burgundy box visual,
+ * tan nutritional block, dark crew photo section, yellow full-width CTA.
  *
  * Run: node scripts/klaviyo-upload-templates.mjs
  */
@@ -17,176 +17,230 @@ if (!KEY) throw new Error("KLAVIYO_PRIVATE_API_KEY not set");
 const REVISION = "2024-10-15";
 const API = "https://a.klaviyo.com/api";
 
-// ============================================================
-// Per-language copy
-// ============================================================
-
 const EN = {
-  title: "You're in.",
-  orderLabel: "Order",
-  kicker: "Confirmed",
+  htmlLang: "en",
+  subject: "You're in. Here's what's coming.",
+  preheader: "First box ships {{ event.ship_date|default:'soon' }}. Order #{{ event.order_number|default:'—' }}.",
+  orderLabelTop: "ORDER #LIT-{{ event.order_number|default:'00000' }}",
+  kicker: "CONFIRMED",
   heroL1: "YOU'RE",
   heroL2: "IN",
-  welcomePrefix: "Welcome,",
-  subscriptionLabel: "Your subscription",
-  boxLabel: "BOX",
-  sachetsLabel: "SACHETS",
-  flavor: "Flavor",
-  plan: "Plan",
-  ships: "Ships",
-  lands: "Lands",
-  whatsInside: "What's in a sachet",
-  sodium: "Sodium",
-  potassium: "Potassium",
-  magnesium: "Magnesium",
-  sugar: "Sugar",
-  cta: "Open your LIT account",
-  questions: "Questions?",
-  contact: "Contact us",
-  preferences: "Preferences",
-  unsubscribe: "Unsubscribe",
+  welcome: 'Welcome, {{ first_name|default:"friend" }}. Your first box lands around {{ event.delivery_date|default:"soon" }}.',
+  subLabel: "YOUR SUBSCRIPTION",
+  planLabel: "PLAN",
+  planValue: '{{ event.box_count|default:1 }} BOX · {{ event.plan_label|default:"" }}',
+  flavorLabel: "FLAVOR",
+  flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
+  shipsLabel: "SHIPS",
+  shipsValue: '{{ event.ship_date|default:"Soon" }}',
+  landsLabel: "LANDS",
+  landsValue: '~{{ event.delivery_date|default:"Soon" }}',
+  nutriSodium: "SODIUM",
+  nutriPotassium: "POTASSIUM",
+  nutriMagnesium: "MAGNESIUM",
+  crewKicker: "— THE CREW",
+  crewL1: "YOU'RE NOT",
+  crewL2: "ALONE IN THIS",
+  crewSub: "800+ subscribers. Same flavors. Same mornings. Same nights.",
+  cta: "OPEN MY LIT",
+  ctaUrl: "https://litsalt.com/apps/portal/my-lit",
+  footerMark: "Stay LIT",
+  contact: "CONTACT",
+  preferences: "PREFERENCES",
+  prefUrl: "https://litsalt.com/apps/portal/account",
+  unsubscribe: "UNSUBSCRIBE",
+  address: "LIT Salt SL · Calle Velázquez 12 · 28001 Madrid · España",
 };
 
 const ES = {
-  title: "Estás dentro.",
-  orderLabel: "Pedido",
-  kicker: "Confirmado",
+  htmlLang: "es",
+  subject: "Estás dentro. Esto es lo que viene.",
+  preheader: "Primera caja sale el {{ event.ship_date|default:'pronto' }}. Pedido #{{ event.order_number|default:'—' }}.",
+  orderLabelTop: "PEDIDO #LIT-{{ event.order_number|default:'00000' }}",
+  kicker: "CONFIRMADO",
   heroL1: "ESTÁS",
   heroL2: "DENTRO",
-  welcomePrefix: "Bienvenida,",
-  subscriptionLabel: "Tu suscripción",
-  boxLabel: "CAJA",
-  sachetsLabel: "SOBRES",
-  flavor: "Sabor",
-  plan: "Plan",
-  ships: "Sale",
-  lands: "Llega",
-  whatsInside: "Qué lleva un sobre",
-  sodium: "Sodio",
-  potassium: "Potasio",
-  magnesium: "Magnesio",
-  sugar: "Azúcar",
-  cta: "Abrir tu cuenta LIT",
-  questions: "¿Preguntas?",
-  contact: "Escríbenos",
-  preferences: "Preferencias",
-  unsubscribe: "Darme de baja",
+  welcome: 'Te damos la bienvenida, {{ first_name|default:"" }}. Tu primera caja aterriza sobre el {{ event.delivery_date|default:"pronto" }}.',
+  subLabel: "TU SUSCRIPCIÓN",
+  planLabel: "PLAN",
+  planValue: '{{ event.box_count|default:1 }} CAJA · {{ event.plan_label|default:"" }}',
+  flavorLabel: "SABOR",
+  flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
+  shipsLabel: "SALE",
+  shipsValue: '{{ event.ship_date|default:"Pronto" }}',
+  landsLabel: "ATERRIZA",
+  landsValue: '~{{ event.delivery_date|default:"Pronto" }}',
+  nutriSodium: "SODIO",
+  nutriPotassium: "POTASIO",
+  nutriMagnesium: "MAGNESIO",
+  crewKicker: "— THE CREW",
+  crewL1: "NO VAS",
+  crewL2: "A SOLAS",
+  crewSub: "+800 personas. Mismos sabores. Mismas mañanas. Mismas noches.",
+  cta: "ENTRAR A MI LIT",
+  ctaUrl: "https://litsalt.com/apps/portal/mi-lit",
+  footerMark: "Stay LIT",
+  contact: "CONTACTO",
+  preferences: "PREFERENCIAS",
+  prefUrl: "https://litsalt.com/apps/portal/cuenta",
+  unsubscribe: "DARSE DE BAJA",
+  address: "LIT Salt SL · Calle Velázquez 12 · 28001 Madrid · España",
 };
-
-// ============================================================
-// HTML builder
-// ============================================================
 
 function emailHtml(lang) {
   const t = lang === "es" ? ES : EN;
   return `<!DOCTYPE html>
-<html lang="${lang}">
+<html lang="${t.htmlLang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${t.title}</title>
+<title>${t.subject}</title>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@700,900&f[]=satoshi@500,700,900&display=swap" rel="stylesheet">
 <style>
-  body { margin: 0; padding: 0; background: #e6e6e4; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #323743; -webkit-font-smoothing: antialiased; }
-  .frame { width: 100%; max-width: 600px; margin: 40px auto 60px; background: #E9EBDE; border-radius: 8px; overflow: hidden; }
-  .header { padding: 32px 40px 16px; display: flex; justify-content: space-between; align-items: center; }
-  .logo { font-weight: 900; font-size: 24px; letter-spacing: 0.08em; color: #323743; font-family: 'Arial Black', sans-serif; }
-  .order-num { font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 700; color: #7A746A; }
-  .hero { padding: 20px 40px 40px; }
-  .kicker { font-size: 10px; letter-spacing: 0.35em; text-transform: uppercase; font-weight: 700; color: #7A746A; margin-bottom: 18px; }
-  .big { font-weight: 900; font-size: 88px; line-height: 0.82; letter-spacing: -0.045em; color: #323743; text-transform: uppercase; margin: 0 0 14px; font-family: 'Arial Black', sans-serif; }
-  .big .dot { color: #EBEE62; }
-  .welcome { font-weight: 900; font-size: 20px; letter-spacing: -0.01em; color: #7A746A; text-transform: uppercase; font-family: 'Arial Black', sans-serif; }
-  .order-card { background: #F8F9F2; border-radius: 14px; margin: 0 40px 24px; padding: 26px; }
-  .lead { font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 700; color: #7A746A; margin-bottom: 10px; }
-  .head { font-weight: 900; font-size: 30px; line-height: 1; color: #323743; text-transform: uppercase; margin: 0 0 20px; font-family: 'Arial Black', sans-serif; }
-  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding-top: 18px; border-top: 1px solid rgba(50,55,67,0.06); }
-  .label { font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; color: #7A746A; margin-bottom: 4px; }
-  .val { font-weight: 900; font-size: 18px; color: #323743; text-transform: uppercase; font-family: 'Arial Black', sans-serif; }
-  .section { padding: 0 40px; margin-bottom: 32px; }
-  .eyebrow { font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 700; color: #7A746A; margin-bottom: 14px; }
-  .nutri { background: #F8F9F2; border-radius: 14px; padding: 22px; }
-  .nutri-row { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 0; border-bottom: 1px solid rgba(50,55,67,0.06); }
-  .nutri-row:last-child { border-bottom: none; }
-  .nutri-name { font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 700; color: #323743; }
-  .nutri-val { font-weight: 900; font-size: 18px; color: #323743; font-family: 'Arial Black', sans-serif; }
-  .nutri-unit { font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #7A746A; margin-left: 4px; }
-  .cta-section { padding: 0 40px 32px; text-align: center; }
-  .cta-btn { display: inline-block; background: #323743; color: #EBEE62; padding: 18px 36px; font-size: 12px; font-weight: 900; letter-spacing: 0.2em; text-transform: uppercase; text-decoration: none; border-radius: 4px; }
-  .footer { padding: 30px 40px 36px; background: #F8F9F2; text-align: center; }
-  .mark { font-weight: 900; font-size: 13px; letter-spacing: 0.35em; color: #7A746A; text-transform: uppercase; margin-bottom: 16px; font-family: 'Arial Black', sans-serif; }
-  .meta { font-size: 11px; color: #7A746A; line-height: 1.7; }
-  .meta a { color: #323743; text-decoration: underline; }
+  body { margin: 0; padding: 0; background: #E9EBDE; font-family: 'Satoshi', 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #323743; -webkit-font-smoothing: antialiased; }
+  .frame { width: 100%; max-width: 640px; margin: 0 auto; background: #E9EBDE; }
+
+  /* Logo + order */
+  .logo-bar { display: flex; justify-content: space-between; align-items: center; padding: 36px 32px 12px; }
+  .logo-img { height: 32px; width: auto; display: block; }
+  .order-top { font-size: 10px; letter-spacing: 0.18em; font-weight: 900; color: #7A746A; }
+
+  /* Hero */
+  .hero { padding: 8px 32px 24px; }
+  .kicker-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .kicker-line { width: 36px; height: 2px; background: #EBEE62; }
+  .kicker-text { font-size: 11px; letter-spacing: 0.25em; font-weight: 900; color: #323743; }
+  .hero-h1 { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 92px; line-height: 0.85; letter-spacing: -0.04em; color: #323743; text-transform: uppercase; margin: 0; }
+  .yellow-square { display: inline-block; width: 28px; height: 28px; background: #EBEE62; vertical-align: bottom; margin-left: 4px; margin-bottom: 8px; }
+  .welcome { font-size: 14px; color: #323743; line-height: 1.5; margin-top: 22px; }
+
+  /* Subscription card */
+  .sub-card { background: #F8F9F2; margin: 8px 32px 0; padding: 26px 24px; border-radius: 4px; }
+  .sub-label { font-size: 10px; letter-spacing: 0.22em; font-weight: 900; color: #323743; text-transform: uppercase; margin-bottom: 18px; }
+  .sub-grid { width: 100%; }
+  .sub-grid td { padding: 0 0 18px 0; vertical-align: top; }
+  .grid-key { font-size: 10px; letter-spacing: 0.18em; font-weight: 700; color: #7A746A; text-transform: uppercase; margin-bottom: 6px; }
+  .grid-val { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 18px; color: #323743; text-transform: uppercase; letter-spacing: -0.01em; }
+  .sub-divider { border-top: 1px dashed rgba(50,55,67,0.25); margin: 4px 0 22px; }
+  .box-visual { display: inline-block; background: #8B2640; width: 62px; height: 62px; position: relative; border-radius: 2px; }
+  .box-num { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 9px; color: #E9EBDE; letter-spacing: 0.15em; }
+
+  /* Nutritional facts */
+  .nutri { background: #CFBFAD; margin: 18px 32px 0; padding: 30px 24px; border-radius: 4px; }
+  .nutri-grid { width: 100%; }
+  .nutri-cell { display: inline-block; width: 32%; vertical-align: top; }
+  .nutri-num { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 38px; color: #323743; line-height: 1; letter-spacing: -0.02em; }
+  .nutri-unit { font-size: 11px; font-weight: 700; color: #7A746A; vertical-align: top; margin-left: 1px; }
+  .nutri-name { font-size: 10px; letter-spacing: 0.22em; font-weight: 700; color: #7A746A; text-transform: uppercase; margin-top: 8px; }
+
+  /* Crew photo block */
+  .crew { background: #1A1726; background-image: linear-gradient(180deg, rgba(15,14,26,0.25) 0%, rgba(15,14,26,0.85) 100%); position: relative; margin: 22px 32px 0; padding: 70px 24px 28px; border-radius: 4px; min-height: 340px; }
+  .crew-kicker { font-size: 11px; letter-spacing: 0.25em; font-weight: 900; color: #EBEE62; margin-bottom: 16px; }
+  .crew-h1 { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 50px; line-height: 0.9; letter-spacing: -0.03em; color: #E9EBDE; text-transform: uppercase; margin: 0; }
+  .crew-h1 .ysq { display: inline-block; width: 14px; height: 14px; background: #EBEE62; vertical-align: bottom; margin-left: 2px; margin-bottom: 6px; }
+  .crew-sub { font-size: 13px; line-height: 1.55; color: rgba(245,240,221,0.85); margin-top: 18px; }
+
+  /* CTA */
+  .cta-wrap { padding: 22px 32px; }
+  .cta-btn { display: block; width: 100%; background: #EBEE62; color: #323743; text-align: center; padding: 22px 0; font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 13px; letter-spacing: 0.22em; text-transform: uppercase; text-decoration: none; border-radius: 4px; }
+
+  /* Footer */
+  .footer { padding: 24px 32px 36px; }
+  .footer-mark { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 22px; color: #323743; letter-spacing: -0.01em; margin-bottom: 4px; }
+  .footer-mark .dot { display: inline-block; width: 9px; height: 9px; background: #EBEE62; vertical-align: top; margin-top: 12px; margin-left: 2px; }
+  .footer-nav { font-size: 10px; letter-spacing: 0.22em; font-weight: 700; color: #323743; text-transform: uppercase; margin-top: 14px; }
+  .footer-nav a { color: #323743; text-decoration: none; margin-right: 18px; }
+  .footer-addr { font-size: 11px; color: #7A746A; margin-top: 16px; }
 </style>
 </head>
 <body>
 <div class="frame">
-  <div class="header">
-    <div class="logo">LIT</div>
-    <div class="order-num">${t.orderLabel} #{{ event.order_number|default:"—" }}</div>
+
+  <!-- Logo + order -->
+  <div class="logo-bar">
+    <img src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png" alt="LIT" class="logo-img" width="auto" height="32">
+    <div class="order-top">${t.orderLabelTop}</div>
   </div>
 
+  <!-- Hero -->
   <div class="hero">
-    <div class="kicker">${t.kicker}</div>
-    <h1 class="big">${t.heroL1}<br>${t.heroL2}<span class="dot">.</span></h1>
-    <div class="welcome">${t.welcomePrefix} {{ first_name|default:"" }}.</div>
+    <div class="kicker-row"><span class="kicker-line"></span><span class="kicker-text">${t.kicker}</span></div>
+    <h1 class="hero-h1">${t.heroL1}<br>${t.heroL2}<span class="yellow-square"></span></h1>
+    <p class="welcome">${t.welcome}</p>
   </div>
 
-  <div class="order-card">
-    <div class="lead">${t.subscriptionLabel}</div>
-    <h2 class="head">{{ event.box_count|default:1 }} ${t.boxLabel} · {{ event.sachets|default:30 }} ${t.sachetsLabel}</h2>
-    <div class="meta-grid">
-      <div>
-        <div class="label">${t.flavor}</div>
-        <div class="val">{{ event.flavor|default:"Lemon Drop" }}</div>
-      </div>
-      <div>
-        <div class="label">${t.plan}</div>
-        <div class="val">{{ event.plan_label|default:"" }}</div>
-      </div>
-      <div>
-        <div class="label">${t.ships}</div>
-        <div class="val">{{ event.ship_date|default:"Soon" }}</div>
-      </div>
-      <div>
-        <div class="label">${t.lands}</div>
-        <div class="val">{{ event.delivery_date|default:"Soon" }}</div>
-      </div>
-    </div>
+  <!-- Subscription card -->
+  <div class="sub-card">
+    <div class="sub-label">${t.subLabel}</div>
+    <table class="sub-grid" cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr>
+        <td width="50%">
+          <div class="grid-key">${t.planLabel}</div>
+          <div class="grid-val">${t.planValue}</div>
+        </td>
+        <td width="50%">
+          <div class="grid-key">${t.flavorLabel}</div>
+          <div class="grid-val">${t.flavorValue}</div>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <div class="grid-key">${t.shipsLabel}</div>
+          <div class="grid-val">${t.shipsValue}</div>
+        </td>
+        <td>
+          <div class="grid-key">${t.landsLabel}</div>
+          <div class="grid-val">${t.landsValue}</div>
+        </td>
+      </tr>
+    </table>
+    <div class="sub-divider"></div>
+    <div class="box-visual"><div class="box-num">01</div></div>
   </div>
 
-  <div class="section">
-    <div class="eyebrow">${t.whatsInside}</div>
-    <div class="nutri">
-      <div class="nutri-row">
-        <span class="nutri-name">${t.sodium}</span>
-        <span><span class="nutri-val">1,000</span><span class="nutri-unit">MG</span></span>
-      </div>
-      <div class="nutri-row">
-        <span class="nutri-name">${t.potassium}</span>
-        <span><span class="nutri-val">200</span><span class="nutri-unit">MG</span></span>
-      </div>
-      <div class="nutri-row">
-        <span class="nutri-name">${t.magnesium}</span>
-        <span><span class="nutri-val">60</span><span class="nutri-unit">MG</span></span>
-      </div>
-      <div class="nutri-row">
-        <span class="nutri-name">${t.sugar}</span>
-        <span><span class="nutri-val">0</span><span class="nutri-unit">G</span></span>
-      </div>
-    </div>
+  <!-- Nutritional -->
+  <div class="nutri">
+    <table class="nutri-grid" cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr>
+        <td width="33%" valign="top">
+          <div><span class="nutri-num">500</span><span class="nutri-unit">mg</span></div>
+          <div class="nutri-name">${t.nutriSodium}</div>
+        </td>
+        <td width="33%" valign="top">
+          <div><span class="nutri-num">150</span><span class="nutri-unit">mg</span></div>
+          <div class="nutri-name">${t.nutriPotassium}</div>
+        </td>
+        <td width="33%" valign="top">
+          <div><span class="nutri-num">60</span><span class="nutri-unit">mg</span></div>
+          <div class="nutri-name">${t.nutriMagnesium}</div>
+        </td>
+      </tr>
+    </table>
   </div>
 
-  <div class="cta-section">
-    <a class="cta-btn" href="https://litsalt.com/apps/portal/your-lit">${t.cta}</a>
+  <!-- Crew section -->
+  <div class="crew">
+    <div class="crew-kicker">${t.crewKicker}</div>
+    <h2 class="crew-h1">${t.crewL1}<br>${t.crewL2}<span class="ysq"></span></h2>
+    <p class="crew-sub">${t.crewSub}</p>
   </div>
 
+  <!-- CTA -->
+  <div class="cta-wrap">
+    <a class="cta-btn" href="${t.ctaUrl}">${t.cta}</a>
+  </div>
+
+  <!-- Footer -->
   <div class="footer">
-    <div class="mark">Stay LIT.</div>
-    <div class="meta">
-      ${t.questions} <a href="mailto:hello@litsalt.com">${t.contact}</a> · <a href="https://litsalt.com/apps/portal/account">${t.preferences}</a> · <a href="{% unsubscribe %}">${t.unsubscribe}</a>
+    <div class="footer-mark">${t.footerMark}<span class="dot"></span></div>
+    <div class="footer-nav">
+      <a href="mailto:hello@litsalt.com">${t.contact}</a>
+      <a href="${t.prefUrl}">${t.preferences}</a>
+      <a href="{% unsubscribe %}">${t.unsubscribe}</a>
     </div>
-    <div style="font-size: 10px; color: #B5AE9F; margin-top: 12px;">LIT · Madrid · 2026</div>
+    <div class="footer-addr">${t.address}</div>
   </div>
+
 </div>
 </body>
 </html>`;
@@ -197,23 +251,31 @@ const TEMPLATES = [
   { name: "LIT — Confirmation Email ES", html: emailHtml("es") },
 ];
 
-// ============================================================
-// Upsert helper
-// ============================================================
-
 async function upsertTemplate({ name, html }) {
-  const list = await fetch(
-    `${API}/templates/?filter=equals(name,"${encodeURIComponent(name)}")`,
-    {
+  // Paginate ALL templates and find by exact name match. The filter
+  // query syntax was unreliable, hence client-side filtering.
+  const allTemplates = [];
+  let cursor = null;
+  do {
+    const url = new URL(`${API}/templates/`);
+    url.searchParams.set("page[size]", "10");
+    if (cursor) url.searchParams.set("page[cursor]", cursor);
+    const r = await fetch(url, {
       headers: {
         Authorization: `Klaviyo-API-Key ${KEY}`,
         revision: REVISION,
         accept: "application/vnd.api+json",
       },
-    },
-  ).then((r) => r.json());
+    });
+    if (!r.ok) throw new Error(`LIST ${r.status}: ${await r.text()}`);
+    const data = await r.json();
+    allTemplates.push(...(data.data || []));
+    cursor = data.links?.next
+      ? new URL(data.links.next).searchParams.get("page[cursor]")
+      : null;
+  } while (cursor);
 
-  const existing = list.data?.[0];
+  const existing = allTemplates.find((t) => t.attributes?.name === name);
   const baseAttrs = { name, html, text: "Open in HTML mode for the full design." };
 
   if (existing) {
@@ -256,12 +318,5 @@ for (const t of TEMPLATES) {
   await upsertTemplate(t);
 }
 
-console.log("\nDone. Two templates uploaded — one per language.");
-console.log(`
-Next: in your Klaviyo flow, replace the single email step with a
-Conditional Split:
-  IF person.language_pref equals "es"
-     → Send "LIT — Confirmation Email ES"
-  ELSE
-     → Send "LIT — Confirmation Email EN"
-`);
+console.log("\n✓ Templates updated with Diane's hi-fi design.");
+console.log("  Re-fire test event: node scripts/fire-test-event.mjs");
