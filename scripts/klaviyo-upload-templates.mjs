@@ -31,10 +31,6 @@ const EN = {
   planValue: '{{ event.box_count|default:1 }} BOX{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
   flavorLabel: "FLAVOR",
   flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
-  shipsLabel: "SHIPS",
-  shipsValue: '{{ event.ship_date|default:"Soon" }}',
-  landsLabel: "LANDS",
-  landsValue: '~{{ event.delivery_date|default:"Soon" }}',
   nutriSodium: "SODIUM",
   nutriPotassium: "POTASSIUM",
   nutriMagnesium: "MAGNESIUM",
@@ -63,10 +59,6 @@ const ES = {
   planValue: '{{ event.box_count|default:1 }} CAJA{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
   flavorLabel: "SABOR",
   flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
-  shipsLabel: "SALE",
-  shipsValue: '{{ event.ship_date|default:"Pronto" }}',
-  landsLabel: "LLEGA",
-  landsValue: '~{{ event.delivery_date|default:"Pronto" }}',
   nutriSodium: "SODIO",
   nutriPotassium: "POTASIO",
   nutriMagnesium: "MAGNESIO",
@@ -173,16 +165,6 @@ function emailHtml(lang) {
           <div class="grid-val">${t.flavorValue}</div>
         </td>
       </tr>
-      <tr>
-        <td>
-          <div class="grid-key">${t.shipsLabel}</div>
-          <div class="grid-val">${t.shipsValue}</div>
-        </td>
-        <td>
-          <div class="grid-key">${t.landsLabel}</div>
-          <div class="grid-val">${t.landsValue}</div>
-        </td>
-      </tr>
     </table>
   </div>
 
@@ -220,31 +202,31 @@ function emailHtml(lang) {
     </a>
   </div>
 
-</div>
+  <!-- Footer: JOIN THE LIT MOVEMENT bar.
+       Vive DENTRO del .frame de 640px para tener el mismo ancho que el
+       resto del email (Juan 2026-05-20). Color #1A1726 = mismo que el
+       banner 'ACCEDE A TU CUENTA' para coherencia visual al cerrar. -->
+  <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%" style="background:#1A1726;margin-top:18px;">
+    <tr>
+      <td style="background:#1A1726;padding:28px 24px 22px;text-align:center;">
+        <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;">
+          <tr>
+            <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-right:8px;white-space:nowrap;">JOIN THE</td>
+            <td style="vertical-align:middle;">
+              <img alt="LIT" src="https://d3k81ch9hvuctc.cloudfront.net/company/TFtcEn/images/54dcff58-73a9-459a-87cc-d0e1c1fc7c8f.png" width="60"/>
+            </td>
+            <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-left:8px;white-space:nowrap;">MOVEMENT</td>
+          </tr>
+        </table>
+        <p style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:9px;font-weight:400;color:rgba(245,240,221,0.5);margin:14px 0 0;line-height:1.55;mso-line-height-rule:exactly;letter-spacing:0;">
+          LIT Hydration&reg; &mdash; Superior Hydration<br/>
+          {% unsubscribe '${t.footerUnsubscribe}' %} &middot; {% manage_preferences '${t.footerPreferences}' %}
+        </p>
+      </td>
+    </tr>
+  </table>
 
-<!-- Footer: JOIN THE LIT MOVEMENT bar.
-     - Full-width (no max-width):  sale del frame de 640px para que la
-       barra oscura sea el último golpe visual del email a ancho total.
-     - Mismo color que el banner "ACCEDE A TU CUENTA" (#1A1726). -->
-<table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%" style="background:#1A1726;">
-  <tr>
-    <td style="background:#1A1726;padding:28px 24px 22px;text-align:center;">
-      <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;">
-        <tr>
-          <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-right:8px;white-space:nowrap;">JOIN THE</td>
-          <td style="vertical-align:middle;">
-            <img alt="LIT" src="https://d3k81ch9hvuctc.cloudfront.net/company/TFtcEn/images/54dcff58-73a9-459a-87cc-d0e1c1fc7c8f.png" width="60"/>
-          </td>
-          <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-left:8px;white-space:nowrap;">MOVEMENT</td>
-        </tr>
-      </table>
-      <p style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:9px;font-weight:400;color:rgba(245,240,221,0.5);margin:14px 0 0;line-height:1.55;mso-line-height-rule:exactly;letter-spacing:0;">
-        LIT Hydration&reg; &mdash; Superior Hydration<br/>
-        {% unsubscribe '${t.footerUnsubscribe}' %} &middot; {% manage_preferences '${t.footerPreferences}' %}
-      </p>
-    </td>
-  </tr>
-</table>
+</div>
 </body>
 </html>`;
 }
