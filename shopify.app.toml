@@ -22,5 +22,9 @@ use_legacy_install_flow = false
 [auth]
 redirect_urls = [
   "https://lit-portal.vercel.app/api/auth/callback",
-  "https://lit-portal-drab.vercel.app/api/auth/shopify/callback"
+  "https://lit-portal-drab.vercel.app/api/auth/shopify/callback",
+  # Customer Account API OAuth callback. Added 2026-05-20: clientes
+  # logueados en tracking.litsalt.com rebotan directo aqui en lugar
+  # de quedarse en el dashboard de Shopify. Aterrizan en /apps/portal/mi-lit.
+  "https://litsalt.com/apps/portal/auth/callback"
 ]
