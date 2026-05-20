@@ -290,6 +290,35 @@ create table if not exists webhook_log (
 create index if not exists idx_webhook_log_topic on webhook_log(topic, received_at desc);
 
 -- ============================================================
+-- 5b. Auth sessions
+-- ============================================================
+-- Maps an opaque session_id (issued after Customer Account API OAuth)
+-- to a Shopify customer ID. Used by the portal API routes when the
+-- request can't be authenticated via App Proxy (`logged_in_customer_id`)
+-- — happens when the customer logged in through Customer Account API
+-- and lacks a storefront session cookie.
+--
+-- The FE stores `session_id` in localStorage and sends it as
+-- `Authorization: Bearer <session_id>` on every API call. Backend
+-- middleware (`withCustomer`) tries App Proxy first, then this table.
+
+create table if not exists auth_sessions (
+  session_id     text primary key,
+  customer_id    text not null,
+  email          text,
+  created_at     timestamptz not null default now(),
+  expires_at     timestamptz not null,
+  -- We DO NOT persist Shopify access_token / refresh_token. The portal
+  -- doesn't call Customer Account API directly — it uses Admin API
+  -- server-side with our app token. The session is just a customer_id
+  -- pointer with our own TTL semantics.
+  last_used_at   timestamptz not null default now()
+);
+
+create index if not exists idx_auth_sessions_customer on auth_sessions(customer_id);
+create index if not exists idx_auth_sessions_expires on auth_sessions(expires_at);
+
+-- ============================================================
 -- 6. RLS policies
 -- ============================================================
 -- Service role bypasses RLS; portal API routes always run with service role.
@@ -313,5 +342,6 @@ alter table customer_preferences   enable row level security;
 alter table cancellations          enable row level security;
 alter table email_logs             enable row level security;
 alter table webhook_log            enable row level security;
+alter table auth_sessions          enable row level security;
 
 -- No public policies — all access via service role from API routes.

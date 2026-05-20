@@ -4,28 +4,31 @@ import { useEffect } from "react";
 import { T } from "@/lib/i18n";
 
 /**
- * When unauthenticated, jump straight to Shopify Customer Accounts.
+ * When unauthenticated, kick off our Customer Account API OAuth flow
+ * via /api/auth/login. The flow:
  *
- * Background 2026-05-20: probamos OAuth Customer Account API via
- * /api/auth/login para evitar el bounce por tracking dashboard. Llegamos
- * a tener OAuth + JWT state + redirect correcto, pero descubrimos un
- * blocker arquitectónico: Customer Account API OAuth y la "storefront
- * session" que ve App Proxy son DOS sistemas distintos. Completar
- * OAuth no autentica al cliente para App Proxy → loop infinito.
+ *   1. Browser → /api/auth/login (builds Shopify OAuth URL + PKCE)
+ *   2. → tracking.litsalt.com/authentication/oauth/authorize (login UI,
+ *      Shopify-hosted but LIT-branded — the ONLY tracking surface the
+ *      customer ever sees, per [[feedback-no-tracking-portal]]).
+ *   3. Customer logs in.
+ *   4. → /api/auth/callback (token exchange + session insert)
+ *   5. → /es/auth/handoff?s=<session_id> (moves token to localStorage)
+ *   6. → /es/mi-lit
  *
- * Volvemos al /account/login original. El cliente termina en tracking
- * dashboard tras login. Vías futuras posibles:
- *   - Banner manual via UI Extension dentro del dashboard de tracking.
- *   - Refactor completo de auth: usar Customer Account API tokens en
- *     todos los API routes (4-5 días de trabajo).
+ * Customer NEVER sees tracking dashboard / orders / profile / anything
+ * beyond the LIT-branded login form. The auth_sessions table + bearer
+ * token + withCustomer hybrid is what makes this possible without
+ * relying on App Proxy's logged_in_customer_id (which Customer Account
+ * API OAuth doesn't set).
  */
-const LOGIN_BASE = "https://litsalt.com/account/login";
+const OAUTH_LOGIN = "/apps/portal/api/auth/login";
 
 export function LoginScreen() {
   useEffect(() => {
     const returnTo = window.location.pathname + window.location.search;
-    const url = new URL(LOGIN_BASE);
-    url.searchParams.set("return_url", returnTo);
+    const url = new URL(OAUTH_LOGIN, window.location.origin);
+    url.searchParams.set("return_to", returnTo);
     window.location.replace(url.toString());
   }, []);
 

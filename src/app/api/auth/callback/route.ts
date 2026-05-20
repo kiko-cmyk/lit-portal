@@ -1,37 +1,54 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase";
 
 /**
  * GET /apps/portal/api/auth/callback
  *
  * Shopify Customer Account API redirige aquí después del login con
- * `?code=<auth_code>&state=<jwt>`. Validamos la firma del JWT (state) y
- * redirigimos al portal.
+ * `?code=<auth_code>&state=<jwt>`. Lo que hacemos:
  *
- * No intercambiamos el `code` por un access token porque no llamamos al
- * Customer Account API desde nuestro frontend — toda la lectura/escritura
- * de la suscripción va por Admin API + Seal con auth server-side. El
- * efecto del login es que Shopify ha sembrado el cookie de sesión de
- * customer en *.litsalt.com, y el App Proxy verá `logged_in_customer_id`
- * cuando navegue a /apps/portal/mi-lit.
+ *   1. Validamos la firma del JWT (state) — incluye el code_verifier PKCE.
+ *   2. POST a `tracking.litsalt.com/authentication/oauth/token` con
+ *      grant_type=authorization_code + code + code_verifier → recibimos
+ *      access_token + id_token.
+ *   3. Decodificamos el id_token (JWT) para sacar el customer GID.
+ *      Extraemos el numeric customer_id (matching el formato que usa
+ *      App Proxy en `logged_in_customer_id`).
+ *   4. Insertamos una fila en `auth_sessions` con session_id aleatorio →
+ *      customer_id. Esto es nuestro propio session store, independiente
+ *      de la storefront session de Shopify (que ESTE flow no establece).
+ *   5. Redirigimos a /apps/portal/<locale>/auth/handoff?s=<session_id> —
+ *      una página cliente que mueve session_id de URL → localStorage y
+ *      sigue a /mi-lit. Todo API call posterior llevará el session_id
+ *      en Authorization: Bearer <session_id>.
  *
- * Por qué JWT y no cookies: Shopify App Proxy strippea Set-Cookie
- * headers. Para pasar contexto entre /login y /callback usamos un JWT
- * firmado con SHOPIFY_API_SECRET dentro del propio param `state`.
+ * Por qué no usamos cookies: Shopify App Proxy strippea Set-Cookie.
+ * localStorage es la única forma fiable de persistir el token cliente-
+ * side a través del round-trip por Shopify.
  */
 
-// PORTAL_BASE no incluye /apps/portal porque safeReturn ya viene con la
-// ruta completa (LoginScreen lo construye con window.location.pathname,
-// que para un usuario en /apps/portal/es/mi-lit devuelve esa misma ruta).
+const TOKEN_ENDPOINT =
+  "https://tracking.litsalt.com/authentication/oauth/token";
+const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
+
 const PORTAL_BASE = "https://litsalt.com";
 const FALLBACK_RETURN = "/apps/portal/es/mi-lit";
+const HANDOFF_PATH = "/apps/portal/es/auth/handoff";
+
+// 30 días — cliente queda logueado tanto como una sesión típica de
+// Shopify. Refrescamos last_used_at en cada request para no expulsar
+// usuarios activos.
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 export async function GET(req: NextRequest) {
   const secret = process.env.SHOPIFY_API_SECRET;
-  if (!secret) {
-    return new NextResponse("Server misconfigured: SHOPIFY_API_SECRET missing", {
-      status: 500,
-    });
+  const clientId = process.env.SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID;
+  if (!secret || !clientId) {
+    return new NextResponse(
+      "Server misconfigured: SHOPIFY_API_SECRET or SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID missing",
+      { status: 500 },
+    );
   }
 
   const url = new URL(req.url);
@@ -73,14 +90,103 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const safeReturn = isSafeRelativePath(payload.r) ? payload.r : FALLBACK_RETURN;
+  // ─────── 1) Token exchange ───────
+  let tokens: TokenResponse;
+  try {
+    const tokenBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: payload.v,
+    });
+    const tokenRes = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: tokenBody.toString(),
+    });
+    if (!tokenRes.ok) {
+      const body = await tokenRes.text().catch(() => "");
+      console.error("[oauth-callback] token exchange failed", {
+        status: tokenRes.status,
+        body: body.slice(0, 500),
+      });
+      return new NextResponse(
+        `Token exchange failed (HTTP ${tokenRes.status})`,
+        { status: 502 },
+      );
+    }
+    tokens = (await tokenRes.json()) as TokenResponse;
+  } catch (e) {
+    console.error("[oauth-callback] token exchange exception", e);
+    return new NextResponse("Token exchange network error", { status: 502 });
+  }
 
-  // We trust Shopify to have set the customer session cookie on the
-  // parent domain (.litsalt.com) during the login flow. When the browser
-  // navigates to /apps/portal/<safeReturn>, the App Proxy will see
-  // `logged_in_customer_id` automatically. No token exchange needed
-  // because we don't call Customer Account API from the FE.
-  return NextResponse.redirect(`${PORTAL_BASE}${safeReturn}`);
+  // ─────── 2) Decode id_token to recover customer identity ───────
+  let customerId: string;
+  let customerEmail: string | null = null;
+  try {
+    const claims = decodeJwtPayload(tokens.id_token);
+    // Shopify id_tokens carry the customer as a GID in `sub` —
+    // e.g. `gid://shopify/Customer/12345`. Other shops sometimes
+    // return just the numeric ID. Handle both.
+    const sub = String(claims.sub ?? "");
+    const numericMatch = sub.match(/(\d+)$/);
+    if (!numericMatch) {
+      throw new Error(`id_token sub has no numeric customer id: ${sub}`);
+    }
+    customerId = numericMatch[1];
+    if (typeof claims.email === "string") customerEmail = claims.email;
+  } catch (e) {
+    console.error("[oauth-callback] id_token decode failed", e);
+    return new NextResponse("Could not parse id_token", { status: 502 });
+  }
+
+  // ─────── 3) Create our own session in Supabase ───────
+  const sessionId = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
+  try {
+    const sb = supabaseAdmin();
+    const { error: insertErr } = await sb.from("auth_sessions").insert({
+      session_id: sessionId,
+      customer_id: customerId,
+      email: customerEmail,
+      expires_at: expiresAt.toISOString(),
+    });
+    if (insertErr) throw insertErr;
+  } catch (e) {
+    console.error("[oauth-callback] session insert failed", e);
+    return new NextResponse("Session storage failed", { status: 500 });
+  }
+
+  // ─────── 4) Hand off to client-side page that stores session ───────
+  // The handoff page lives under [locale]/auth/handoff. It reads `?s=`
+  // from the URL, writes to localStorage, then routes to the final
+  // destination. We can't set localStorage from a server redirect, so
+  // a one-page client bounce is the cleanest pattern.
+  const safeReturn = isSafeRelativePath(payload.r) ? payload.r : FALLBACK_RETURN;
+  const handoff = new URL(`${PORTAL_BASE}${HANDOFF_PATH}`);
+  handoff.searchParams.set("s", sessionId);
+  handoff.searchParams.set("to", safeReturn);
+
+  console.log("[oauth-callback] session issued", {
+    customerId,
+    email: customerEmail,
+    expires: expiresAt.toISOString(),
+  });
+
+  return NextResponse.redirect(handoff.toString());
+}
+
+interface TokenResponse {
+  access_token: string;
+  id_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  token_type: string;
 }
 
 interface StatePayload {
@@ -99,7 +205,6 @@ function verifyState(secret: string, token: string): StatePayload | null {
   const expectedSig = base64UrlEncode(
     crypto.createHmac("sha256", secret).update(data).digest(),
   );
-  // Constant-time compare
   const a = Buffer.from(sig, "utf8");
   const b = Buffer.from(expectedSig, "utf8");
   if (a.length !== b.length) return null;
@@ -121,6 +226,18 @@ function verifyState(secret: string, token: string): StatePayload | null {
   } catch {
     return null;
   }
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("Invalid JWT");
+  // We intentionally don't verify the id_token signature. The token came
+  // from a direct server-side POST to Shopify's token endpoint over HTTPS
+  // immediately before this call — the network path is the trust anchor.
+  // If we ever surface this to untrusted contexts we should verify via
+  // Shopify's JWKS.
+  const body = parts[1];
+  return JSON.parse(Buffer.from(body, "base64").toString("utf8"));
 }
 
 function base64UrlEncode(buf: Buffer): string {

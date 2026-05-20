@@ -100,6 +100,50 @@ export function requireCustomer(req: NextRequest): AppProxyContext & { customerI
   return ctx as AppProxyContext & { customerId: string };
 }
 
+/**
+ * Resolve customer identity for a request, trying TWO auth mechanisms:
+ *
+ *   1. App Proxy signature with `logged_in_customer_id` (legacy/standard
+ *      path — works when the customer logged in via /account/login and
+ *      has a storefront session cookie).
+ *
+ *   2. Bearer token in `Authorization` header (new path — works when
+ *      the customer logged in via our `/api/auth/login` Customer
+ *      Account API OAuth flow, which doesn't establish a storefront
+ *      session but issues an opaque session_id we stored in Supabase).
+ *
+ * For the Bearer path, the caller (withCustomer) must do the Supabase
+ * lookup — this function just returns the parsed token. We keep DB
+ * access OUT of shopify-app-proxy to avoid a circular Supabase
+ * dependency on this module.
+ *
+ * Returns `null` for the token if no Bearer header is present so the
+ * caller can decide: 401 if both fail, accept either if one succeeds.
+ */
+export function parseAuthRequest(req: NextRequest): {
+  appProxy: AppProxyContext;
+  bearerToken: string | null;
+} {
+  let appProxy: AppProxyContext;
+  try {
+    appProxy = verifyAppProxyRequest(req);
+  } catch {
+    // App Proxy signature missing/invalid — bearer path may still rescue.
+    appProxy = {
+      customerId: null,
+      shop: "",
+      pathPrefix: "/apps/portal",
+      timestamp: 0,
+    };
+  }
+  const auth = req.headers.get("authorization");
+  const bearerToken =
+    auth && auth.toLowerCase().startsWith("bearer ")
+      ? auth.slice(7).trim() || null
+      : null;
+  return { appProxy, bearerToken };
+}
+
 export class AppProxyAuthError extends Error {
   constructor(message: string) {
     super(message);

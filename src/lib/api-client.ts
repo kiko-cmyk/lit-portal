@@ -19,12 +19,43 @@ function withDevParams(path: string): string {
   return `${path}${sep}${extras.join("&")}`;
 }
 
+const SESSION_STORAGE_KEY = "lit_session";
+
+function getSessionToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(SESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Drop the session token (used on logout flows or when backend signals
+ * that the bearer session is invalid).
+ */
+export function clearSessionToken() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${BASE}${withDevParams(path)}`;
+  // Attach our own session token (issued after Customer Account API
+  // OAuth) as a Bearer credential. The backend's `withCustomer`
+  // middleware accepts EITHER this bearer token OR the legacy App
+  // Proxy `logged_in_customer_id`. Sending both is fine — backend
+  // prefers App Proxy when both are valid.
+  const sessionToken = getSessionToken();
   const res = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
       ...(init.headers ?? {}),
     },
   });
