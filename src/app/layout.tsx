@@ -17,16 +17,35 @@ const barlowCondensed = Barlow_Condensed({
   display: "swap",
 });
 
+// Vercel deploy URL. The portal HTML is served via Shopify App Proxy at
+// litsalt.com/apps/portal/*, but static assets (incl. favicon) must come
+// from the Vercel origin directly — otherwise <link rel="icon" href="/icon.png">
+// resolves to litsalt.com/icon.png (Shopify storefront), which 404s.
+// Same trick we already use for `assetPrefix` in next.config.ts.
+const VERCEL_ORIGIN =
+  process.env.ASSET_PREFIX_URL || "https://lit-portal-drab.vercel.app";
+
 export const metadata: Metadata = {
   // Per-page titles override this via each route's generateMetadata().
   title: { default: "LIT", template: "%s — LIT" },
   description: "Post-purchase portal for LIT Hydration subscribers.",
-  // Icons resuelven por convención de file-based metadata:
-  //   src/app/icon.png        → <link rel="icon">
-  //   src/app/apple-icon.png  → <link rel="apple-touch-icon">
-  // Antes apuntábamos al PNG ancho del logo en el CDN de Shopify, que
-  // estiraba el favicon. Ahora usamos la versión cuadrada 1920×1920 de
-  // /brand/logos/DARK-INDIGO.png copiada en src/app/.
+  icons: {
+    icon: [
+      {
+        url: `${VERCEL_ORIGIN}/icon.png`,
+        type: "image/png",
+        sizes: "any",
+      },
+    ],
+    apple: [
+      {
+        url: `${VERCEL_ORIGIN}/apple-icon.png`,
+        type: "image/png",
+        sizes: "any",
+      },
+    ],
+    shortcut: `${VERCEL_ORIGIN}/icon.png`,
+  },
 };
 
 export default function RootLayout({
