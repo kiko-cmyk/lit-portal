@@ -38,18 +38,20 @@ const EN = {
   nutriSodium: "SODIUM",
   nutriPotassium: "POTASSIUM",
   nutriMagnesium: "MAGNESIUM",
-  crewKicker: "— THE CREW",
-  crewL1: "YOU'RE NOT",
-  crewL2: "ALONE IN THIS",
-  crewSub: "800+ subscribers. Same flavors. Same mornings. Same nights.",
+  crewKicker: "— MY ACCOUNT",
+  crewL1: "ACCESS",
+  crewL2: "YOUR ACCOUNT",
+  crewSub: "+10,000 people. Community. Hydration.",
   cta: "OPEN MY LIT",
   ctaUrl: "https://litsalt.com/apps/portal/my-lit",
-  footerMark: "Stay LIT",
-  contact: "CONTACT",
-  preferences: "PREFERENCES",
+  // Footer (brand standard from /brand/email-assets/footer.html)
+  footerTitle: "BEHIND THE SCENES",
+  footerSub: "The day-to-day of what we're building.<br>Follow us, hear it first.",
+  footerIgCta: "MORE ON IG →",
+  footerMovement: "JOIN THE LIT MOVEMENT",
+  footerUnsubscribe: "Unsubscribe",
+  footerPreferences: "Manage preferences",
   prefUrl: "https://litsalt.com/apps/portal/account",
-  unsubscribe: "UNSUBSCRIBE",
-  address: "LIT Salt SL · Calle Velázquez 12 · 28001 Madrid · España",
 };
 
 const ES = {
@@ -60,7 +62,7 @@ const ES = {
   kicker: "CONFIRMADO",
   heroL1: "ESTÁS",
   heroL2: "DENTRO",
-  welcome: 'Te damos la bienvenida, {{ first_name|default:"" }}. Tu primera caja aterriza sobre el {{ event.delivery_date|default:"pronto" }}.',
+  welcome: 'Te damos la bienvenida, {{ first_name|default:"" }}. Tu primera caja llega sobre el {{ event.delivery_date|default:"pronto" }}.',
   subLabel: "TU SUSCRIPCIÓN",
   planLabel: "PLAN",
   planValue: '{{ event.box_count|default:1 }} CAJA · {{ event.plan_label|default:"" }}',
@@ -73,18 +75,20 @@ const ES = {
   nutriSodium: "SODIO",
   nutriPotassium: "POTASIO",
   nutriMagnesium: "MAGNESIO",
-  crewKicker: "— THE CREW",
-  crewL1: "NO VAS",
-  crewL2: "A SOLAS",
-  crewSub: "+800 personas. Mismos sabores. Mismas mañanas. Mismas noches.",
+  crewKicker: "— ÁREA PERSONAL",
+  crewL1: "ACCEDE",
+  crewL2: "A TU CUENTA",
+  crewSub: "+10.000 personas. Comunidad. Hidratación.",
   cta: "ENTRAR A MI LIT",
   ctaUrl: "https://litsalt.com/apps/portal/mi-lit",
-  footerMark: "Stay LIT",
-  contact: "CONTACTO",
-  preferences: "PREFERENCIAS",
+  // Footer (brand standard from /brand/email-assets/footer.html)
+  footerTitle: "DESDE DENTRO",
+  footerSub: "El día a día de lo que estamos armando.<br>Síguenos y entérate primero.",
+  footerIgCta: "VER MÁS EN IG →",
+  footerMovement: "JOIN THE LIT MOVEMENT",
+  footerUnsubscribe: "Cancelar suscripción",
+  footerPreferences: "Gestionar preferencias",
   prefUrl: "https://litsalt.com/apps/portal/cuenta",
-  unsubscribe: "DARSE DE BAJA",
-  address: "LIT Salt SL · Calle Velázquez 12 · 28001 Madrid · España",
 };
 
 function emailHtml(lang) {
@@ -144,13 +148,9 @@ function emailHtml(lang) {
   .cta-wrap { padding: 22px 32px; }
   .cta-btn { display: block; width: 100%; background: #EBEE62; color: #323743; text-align: center; padding: 22px 0; font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 13px; letter-spacing: 0.22em; text-transform: uppercase; text-decoration: none; border-radius: 4px; }
 
-  /* Footer */
-  .footer { padding: 24px 32px 36px; }
-  .footer-mark { font-family: 'Clash Display', 'Arial Black', sans-serif; font-weight: 900; font-size: 22px; color: #323743; letter-spacing: -0.01em; margin-bottom: 4px; }
-  .footer-mark .dot { display: inline-block; width: 9px; height: 9px; background: #EBEE62; vertical-align: top; margin-top: 12px; margin-left: 2px; }
-  .footer-nav { font-size: 10px; letter-spacing: 0.22em; font-weight: 700; color: #323743; text-transform: uppercase; margin-top: 14px; }
-  .footer-nav a { color: #323743; text-decoration: none; margin-right: 18px; }
-  .footer-addr { font-size: 11px; color: #7A746A; margin-top: 16px; }
+  /* Footer is rendered as inline-styled <table>s (brand standard from
+     /brand/email-assets/footer.html) — no .footer CSS classes needed
+     since Klaviyo / email clients prefer inline styles for safety. */
 </style>
 </head>
 <body>
@@ -230,16 +230,40 @@ function emailHtml(lang) {
     <a class="cta-btn" href="${t.ctaUrl}">${t.cta}</a>
   </div>
 
-  <!-- Footer -->
-  <div class="footer">
-    <div class="footer-mark">${t.footerMark}<span class="dot"></span></div>
-    <div class="footer-nav">
-      <a href="mailto:hello@litsalt.com">${t.contact}</a>
-      <a href="${t.prefUrl}">${t.preferences}</a>
-      <a href="{% unsubscribe %}">${t.unsubscribe}</a>
-    </div>
-    <div class="footer-addr">${t.address}</div>
-  </div>
+  <!-- Footer: BEHIND THE SCENES (Instagram block) -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F8F9F2; padding: 40px 24px; text-align: center; font-family: 'Barlow', Helvetica, Arial, sans-serif;">
+    <tr>
+      <td>
+        <h2 style="font-family: 'Barlow Condensed', 'Barlow', Helvetica, sans-serif; font-size: 28px; font-weight: 700; color: #323743; letter-spacing: 2px; margin: 0 0 8px;">${t.footerTitle}</h2>
+        <p style="font-size: 14px; color: #323743; margin: 0 0 24px; line-height: 1.5;">${t.footerSub}</p>
+        <a href="https://www.instagram.com/litsalt/" style="display: inline-block; background-color: #ebee62; color: #323743; font-family: 'Barlow Condensed', 'Barlow', Helvetica, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 1px; text-decoration: none; padding: 12px 32px; border-radius: 24px;">${t.footerIgCta}</a>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Footer: JOIN THE LIT MOVEMENT (dark bar) -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #323743; padding: 32px 24px; text-align: center; font-family: 'Barlow', Helvetica, Arial, sans-serif;">
+    <tr>
+      <td>
+        <img src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-bold-yellow.png" alt="LIT" width="80" style="margin-bottom: 16px;">
+        <p style="font-family: 'Barlow Condensed', 'Barlow', Helvetica, sans-serif; font-size: 16px; font-weight: 700; color: #F8F9F2; letter-spacing: 2px; margin: 0 0 16px;">
+          JOIN THE <span style="color: #ebee62;">LIT</span> MOVEMENT
+        </p>
+        <p style="margin: 0 0 24px;">
+          <a href="https://www.instagram.com/litsalt/" style="color: #cfbfad; text-decoration: none; font-size: 13px; margin: 0 8px;">Instagram</a>
+          <span style="color: #cfbfad;">·</span>
+          <a href="https://www.tiktok.com/@litsalt" style="color: #cfbfad; text-decoration: none; font-size: 13px; margin: 0 8px;">TikTok</a>
+          <span style="color: #cfbfad;">·</span>
+          <a href="https://litsalt.com" style="color: #cfbfad; text-decoration: none; font-size: 13px; margin: 0 8px;">Web</a>
+        </p>
+        <p style="font-size: 11px; color: #cfbfad; margin: 0; line-height: 1.6;">
+          LIT Hydration® — Superior Hydration<br>
+          <a href="{% unsubscribe %}" style="color: #cfbfad; text-decoration: underline;">${t.footerUnsubscribe}</a>
+          · <a href="${t.prefUrl}" style="color: #cfbfad; text-decoration: underline;">${t.footerPreferences}</a>
+        </p>
+      </td>
+    </tr>
+  </table>
 
 </div>
 </body>
