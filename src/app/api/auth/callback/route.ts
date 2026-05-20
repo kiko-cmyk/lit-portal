@@ -155,6 +155,9 @@ export async function GET(req: NextRequest) {
       customer_id: customerId,
       email: customerEmail,
       expires_at: expiresAt.toISOString(),
+      // Persist the id_token so /api/auth/logout can use it as
+      // `id_token_hint` to skip Shopify's "are you sure?" interstitial.
+      id_token: tokens.id_token,
     });
     if (insertErr) throw insertErr;
   } catch (e) {

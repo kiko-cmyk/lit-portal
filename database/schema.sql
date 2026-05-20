@@ -312,7 +312,12 @@ create table if not exists auth_sessions (
   -- doesn't call Customer Account API directly — it uses Admin API
   -- server-side with our app token. The session is just a customer_id
   -- pointer with our own TTL semantics.
-  last_used_at   timestamptz not null default now()
+  last_used_at   timestamptz not null default now(),
+  -- id_token is the OIDC id_token returned by Shopify during the OAuth
+  -- callback. We persist it solely to pass as `id_token_hint` to the
+  -- Shopify logout endpoint — without it the logout shows an
+  -- interstitial "are you sure?" page that we want to skip.
+  id_token       text
 );
 
 create index if not exists idx_auth_sessions_customer on auth_sessions(customer_id);
