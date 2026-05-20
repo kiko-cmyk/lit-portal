@@ -44,14 +44,9 @@ const EN = {
   crewSub: "+10,000 people. Community. Hydration.",
   cta: "OPEN MY LIT",
   ctaUrl: "https://litsalt.com/apps/portal/my-lit",
-  // Footer (brand standard from /brand/email-assets/footer.html)
-  footerTitle: "BEHIND THE SCENES",
-  footerSub: "The day-to-day of what we're building.<br>Follow us, hear it first.",
-  footerIgCta: "MORE ON IG →",
-  footerMovement: "JOIN THE LIT MOVEMENT",
+  // Footer: solo JOIN THE LIT MOVEMENT (per Juan 2026-05-20).
   footerUnsubscribe: "Unsubscribe",
-  footerPreferences: "Manage preferences",
-  prefUrl: "https://litsalt.com/apps/portal/account",
+  footerPreferences: "Preferences",
 };
 
 const ES = {
@@ -81,14 +76,9 @@ const ES = {
   crewSub: "+10.000 personas. Comunidad. Hidratación.",
   cta: "ENTRAR A MI LIT",
   ctaUrl: "https://litsalt.com/apps/portal/mi-lit",
-  // Footer (brand standard from /brand/email-assets/footer.html)
-  footerTitle: "DESDE DENTRO",
-  footerSub: "El día a día de lo que estamos armando.<br>Síguenos y entérate primero.",
-  footerIgCta: "VER MÁS EN IG →",
-  footerMovement: "JOIN THE LIT MOVEMENT",
+  // Footer: solo JOIN THE LIT MOVEMENT (per Juan 2026-05-20).
   footerUnsubscribe: "Cancelar suscripción",
-  footerPreferences: "Gestionar preferencias",
-  prefUrl: "https://litsalt.com/apps/portal/cuenta",
+  footerPreferences: "Preferencias",
 };
 
 function emailHtml(lang) {
@@ -230,36 +220,22 @@ function emailHtml(lang) {
     <a class="cta-btn" href="${t.ctaUrl}">${t.cta}</a>
   </div>
 
-  <!-- Footer: BEHIND THE SCENES (Instagram block) -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F8F9F2; padding: 40px 24px; text-align: center; font-family: 'Barlow', Helvetica, Arial, sans-serif;">
+  <!-- Footer: solo JOIN THE LIT MOVEMENT bar (per Juan 2026-05-20). -->
+  <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%" style="max-width:480px;margin:0 auto;">
     <tr>
-      <td>
-        <h2 style="font-family: 'Barlow Condensed', 'Barlow', Helvetica, sans-serif; font-size: 28px; font-weight: 700; color: #323743; letter-spacing: 2px; margin: 0 0 8px;">${t.footerTitle}</h2>
-        <p style="font-size: 14px; color: #323743; margin: 0 0 24px; line-height: 1.5;">${t.footerSub}</p>
-        <a href="https://www.instagram.com/litsalt/" style="display: inline-block; background-color: #ebee62; color: #323743; font-family: 'Barlow Condensed', 'Barlow', Helvetica, sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 1px; text-decoration: none; padding: 12px 32px; border-radius: 24px;">${t.footerIgCta}</a>
-      </td>
-    </tr>
-  </table>
-
-  <!-- Footer: JOIN THE LIT MOVEMENT (dark bar) -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #323743; padding: 32px 24px; text-align: center; font-family: 'Barlow', Helvetica, Arial, sans-serif;">
-    <tr>
-      <td>
-        <img src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-bold-yellow.png" alt="LIT" width="80" style="margin-bottom: 16px;">
-        <p style="font-family: 'Barlow Condensed', 'Barlow', Helvetica, sans-serif; font-size: 16px; font-weight: 700; color: #F8F9F2; letter-spacing: 2px; margin: 0 0 16px;">
-          JOIN THE <span style="color: #ebee62;">LIT</span> MOVEMENT
-        </p>
-        <p style="margin: 0 0 24px;">
-          <a href="https://www.instagram.com/litsalt/" style="color: #cfbfad; text-decoration: none; font-size: 13px; margin: 0 8px;">Instagram</a>
-          <span style="color: #cfbfad;">·</span>
-          <a href="https://www.tiktok.com/@litsalt" style="color: #cfbfad; text-decoration: none; font-size: 13px; margin: 0 8px;">TikTok</a>
-          <span style="color: #cfbfad;">·</span>
-          <a href="https://litsalt.com" style="color: #cfbfad; text-decoration: none; font-size: 13px; margin: 0 8px;">Web</a>
-        </p>
-        <p style="font-size: 11px; color: #cfbfad; margin: 0; line-height: 1.6;">
-          LIT Hydration® — Superior Hydration<br>
-          <a href="{% unsubscribe %}" style="color: #cfbfad; text-decoration: underline;">${t.footerUnsubscribe}</a>
-          · <a href="${t.prefUrl}" style="color: #cfbfad; text-decoration: underline;">${t.footerPreferences}</a>
+      <td style="background:#323743;padding:24px 0 20px;text-align:center;">
+        <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;">
+          <tr>
+            <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-right:8px;white-space:nowrap;">JOIN THE</td>
+            <td style="vertical-align:middle;">
+              <img alt="LIT" src="https://d3k81ch9hvuctc.cloudfront.net/company/TFtcEn/images/54dcff58-73a9-459a-87cc-d0e1c1fc7c8f.png" width="60"/>
+            </td>
+            <td style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#ebee62;letter-spacing:2px;line-height:1;mso-line-height-rule:exactly;vertical-align:middle;padding-left:8px;white-space:nowrap;">MOVEMENT</td>
+          </tr>
+        </table>
+        <p style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:8px;font-weight:400;color:#888;margin:12px 0 0;line-height:1.5;mso-line-height-rule:exactly;letter-spacing:0;">
+          LIT Hydration&reg; &mdash; Superior Hydration<br/>
+          {% unsubscribe '${t.footerUnsubscribe}' %} &middot; {% manage_preferences '${t.footerPreferences}' %}
         </p>
       </td>
     </tr>
