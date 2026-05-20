@@ -185,94 +185,25 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   });
 
   // Always write the canonical selling_plan_id for the target frequency.
-  // The customer's cadence is preserved (no change requested) or set to
-  // the new frequency (change requested). Legacy IDs are not propagated.
   const effectiveSellingPlan = targetSellingPlanNumeric;
 
-  // 1) Add the new item. Preserve the current quantity (LIT model: always 1).
-  // `price` is REQUIRED by Seal — verified 2026-05-14, returns
-  // "Item is missing price value." otherwise. We pass Shopify's variant
-  // price as the per-unit value (memory: `price` × `quantity` = total).
-  try {
-    await seal.addItems(sealSubscriptionId, [{
-      productId: variantDetails.productId,
-      variantId: variantDetails.variantId,
-      quantity: 1, // LIT model: always 1, box count encoded in variant
-      title: variantDetails.title,
-      sku: variantDetails.sku,
-      taxable: variantDetails.taxable,
-      requiresShipping: variantDetails.requiresShipping,
-      price: variantDetails.price,
-      sellingPlanId: effectiveSellingPlan,
-    }]);
-    log("seal-add-items-ok");
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    log("seal-add-items-failed", { msg });
-    throw new ApiHttpError(502, "seal_add_items_failed", msg);
-  }
-
-  // 2) Remove the original item by its Seal item ID.
-  // Compensating action (post-audit 2026-05-18 [CRIT]): if remove fails after
-  // add succeeded, the sub is left with BOTH items and the customer would be
-  // charged for both at the next billing. We immediately try to roll back the
-  // add by locating the newly-added item and removing it, then surface the
-  // failure as `seal_inconsistent_state` so the FE can warn the customer to
-  // contact support if the compensation also fails.
-  try {
-    await seal.removeItems(sealSubscriptionId, [mainItemNumericId]);
-    log("seal-remove-items-ok");
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    log("seal-remove-items-failed", { msg });
-    let compensated = false;
-    try {
-      const afterAdd = await seal.getSubscription(sealSubscriptionId);
-      const added = (afterAdd?.items ?? []).find(
-        (it) =>
-          !it.is_one_time_item &&
-          it.id !== mainItemNumericId &&
-          it.variant_id === variantDetails.variantId,
-      );
-      if (added?.id) {
-        await seal.removeItems(sealSubscriptionId, [added.id]);
-        compensated = true;
-        log("seal-compensate-remove-ok", { addedItemId: added.id });
-      } else {
-        log("seal-compensate-skipped-no-added-item-found");
-      }
-    } catch (rollbackErr) {
-      log("seal-compensate-remove-failed", {
-        msg: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
-      });
-    }
-    throw new ApiHttpError(
-      502,
-      compensated ? "seal_remove_items_failed" : "seal_inconsistent_state",
-      compensated
-        ? `${msg} (rolled back add)`
-        : `${msg} (could NOT roll back add — subscription has duplicate items, contact support)`,
-    );
-  }
-
-  // 3) If the cadence changed, also bump the subscription-level interval —
-  // Seal stores it both per-item AND on the sub.
+  // Mutation order (REORDERED 2026-05-20 Juan):
+  //   Before: add_items → remove_items → editSubscription
+  //     Problem: when both vary, Seal often silently no-op'd the third
+  //     mutation (editSubscription) — Seal is busy regenerating
+  //     billing_attempts after add+remove and the edit fails or is dropped.
+  //     Juan reproduced this 2026-05-19: variant change applied but
+  //     frequency didn't, no error surfaced because verify timed out
+  //     waiting for Seal to re-stabilise.
+  //   After: editSubscription → add_items → remove_items
+  //     Edit runs while the sub is still in a clean, stable state. The
+  //     subsequent add+remove operate on the post-edit cadence; per
+  //     reference_seal_api, Seal auto-aligns each item's selling_plan_id
+  //     to match the active interval, so the new item lands correctly.
   //
-  // CRITICAL: this used to be wrapped in a try/catch that just logged the
-  // failure and continued. Result: Seal rejects the edit (e.g. transient
-  // hiccup right after add+remove), we log it, return the refreshed sub
-  // with the OLD delivery_interval, and the FE shows "all good" even
-  // though frequency didn't change. Juan hit this 2026-05-19: changed
-  // boxes from 1 to 4 + frequency from 45d to 15d, only boxes landed.
-  //
-  // New strategy: editSubscription propagates errors. We retry ONCE with
-  // a small delay (Seal occasionally needs a beat after add+remove for
-  // the sub to settle). On second failure we throw — the variant change
-  // already landed, so the customer needs to know the cadence didn't.
-  //
-  // Seal requires singular interval units ("1 month", "45 day", "3 month")
-  // — plurals are rejected with "interval format is invalid" (verified
-  // 2026-05-14, see reference_seal_api).
+  // Plus: a 500 ms delay between each Seal mutation. Seal's billing_attempts
+  // regenerator needs ~300-500 ms to settle between calls; without this
+  // pause we've seen the third mutation get silently dropped.
   const intervalLabelByFrequency: Record<Frequency, string> = {
     "15d": "15 day",
     "1mo": "1 month",
@@ -284,14 +215,15 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     "6mo": "6 month",
   };
   const expectedInterval = intervalLabelByFrequency[targetFrequency];
+
+  // ───── Step 1: change delivery_interval FIRST (if needed) ─────
+  //
+  // Send ONLY delivery_interval. We used to send billing_interval too,
+  // but reference_seal_api documents only delivery_interval as editable
+  // — Seal silently no-ops the whole edit when an undocumented field
+  // is present (Juan 2026-05-19 root cause). Dropping billing_interval
+  // makes the edit land cleanly even in combination with later mutations.
   if (planChanged) {
-    // Only send delivery_interval. We used to send billing_interval too,
-    // but reference_seal_api documents only delivery_interval as the
-    // editable field for cadence — Seal may silently no-op the whole
-    // edit when an undocumented field is present. Juan 2026-05-19:
-    // edit returned success:true but Seal didn't actually change the
-    // interval; the customer saw old cadence after reloading. Dropping
-    // billing_interval is our best lead.
     let firstErr: unknown = null;
     try {
       await seal.editSubscription(sealSubscriptionId, {
@@ -317,14 +249,92 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
           secondMsg: msg,
           interval: expectedInterval,
         });
+        // Variant hasn't been touched yet — clean abort, sub unchanged.
         throw new ApiHttpError(
           502,
-          variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
-          variantChanged
-            ? `Boxes updated but frequency change rejected by Seal: ${msg}`
-            : `Frequency change rejected by Seal: ${msg}`,
+          "frequency_change_failed",
+          `Frequency change rejected by Seal: ${msg}`,
         );
       }
+    }
+    // Pause so Seal can regenerate billing_attempts before the next call.
+    if (variantChanged) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  // ───── Step 2: swap the variant (add new, remove old) ─────
+  //
+  // We do this AFTER the edit so the new item Seal creates is already
+  // aligned to the target cadence. Per reference_seal_api, Seal sets the
+  // item's selling_plan_id to match the sub's current delivery_interval
+  // regardless of what we pass in `selling_plan_id`. Doing the edit
+  // first guarantees the right plan.
+  if (variantChanged) {
+    // 2a. Add the new item.
+    try {
+      await seal.addItems(sealSubscriptionId, [{
+        productId: variantDetails.productId,
+        variantId: variantDetails.variantId,
+        quantity: 1, // LIT model: always 1, box count encoded in variant
+        title: variantDetails.title,
+        sku: variantDetails.sku,
+        taxable: variantDetails.taxable,
+        requiresShipping: variantDetails.requiresShipping,
+        price: variantDetails.price,
+        sellingPlanId: effectiveSellingPlan,
+      }]);
+      log("seal-add-items-ok");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("seal-add-items-failed", { msg });
+      // If the edit landed but add failed, the sub has the new cadence
+      // but old variant. The customer can retry box change separately.
+      throw new ApiHttpError(
+        502,
+        planChanged ? "variant_change_failed_after_interval" : "seal_add_items_failed",
+        msg,
+      );
+    }
+
+    // Pause so Seal can index the new item before the remove call.
+    await new Promise((r) => setTimeout(r, 500));
+
+    // 2b. Remove the old item.
+    try {
+      await seal.removeItems(sealSubscriptionId, [mainItemNumericId]);
+      log("seal-remove-items-ok");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("seal-remove-items-failed", { msg });
+      let compensated = false;
+      try {
+        const afterAdd = await seal.getSubscription(sealSubscriptionId);
+        const added = (afterAdd?.items ?? []).find(
+          (it) =>
+            !it.is_one_time_item &&
+            it.id !== mainItemNumericId &&
+            it.variant_id === variantDetails.variantId,
+        );
+        if (added?.id) {
+          await seal.removeItems(sealSubscriptionId, [added.id]);
+          compensated = true;
+          log("seal-compensate-remove-ok", { addedItemId: added.id });
+        } else {
+          log("seal-compensate-skipped-no-added-item-found");
+        }
+      } catch (rollbackErr) {
+        log("seal-compensate-remove-failed", {
+          msg: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+      }
+      throw new ApiHttpError(
+        502,
+        compensated ? "seal_remove_items_failed" : "seal_inconsistent_state",
+        compensated
+          ? `${msg} (rolled back add)`
+          : `${msg} (could NOT roll back add — subscription has duplicate items, contact support)`,
+      );
     }
   }
 
