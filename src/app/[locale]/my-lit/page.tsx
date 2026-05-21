@@ -354,10 +354,22 @@ export default function HubPage() {
             // expiry. El banner se mantendrá hasta que esa fecha pase
             // o hasta que el cliente pulse Deshacer.
             markSkipped(true, newDate);
+            // Al saltar:
+            //   - nextShipDate avanza un ciclo
+            //   - el primer elemento de upcoming queda "consumido" — se
+            //     convierte en el nuevo nextShipDate (o cerca). Si no lo
+            //     quitamos, el calendario muestra el día duplicado (la
+            //     entrega que ahora es nextShipDate aparece TAMBIÉN como
+            //     primera upcoming) hasta que el cliente refresque.
+            // Seal regenera los attempts en background; lanzamos el
+            // silent re-poll para alinear la lista a la verdad de Seal
+            // sin romper la UX inmediata.
             setData({
               ...data,
               subscription: { ...sub, nextShipDate: newDate },
+              upcomingShipments: data.upcomingShipments.slice(1),
             });
+            setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
           }}
         />
       )}

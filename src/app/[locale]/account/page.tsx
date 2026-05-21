@@ -311,6 +311,8 @@ export default function AccountPage() {
           customer={customer}
           subscription={subscription}
           onClose={() => setCancelOpen(false)}
+          onPivotToSkip={() => setSkipOpen(true)}
+          onPivotToPlan={() => setPlanOpen(true)}
         />
       )}
       {planOpen && subscription && (

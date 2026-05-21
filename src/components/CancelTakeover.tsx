@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { T, useLang } from "@/lib/i18n";
+import { T, useLang, useLangValue } from "@/lib/i18n";
 import type {
   CancelStep1Response,
   CancelStep4Response,
@@ -21,10 +21,17 @@ export function CancelTakeover({
   customer,
   subscription,
   onClose,
+  onPivotToSkip,
+  onPivotToPlan,
 }: {
   customer: CustomerProfile;
   subscription: Subscription | null;
   onClose: () => void;
+  /** Callbacks que cierran el takeover Y abren los overlays equivalentes
+   * en el padre. Sin esto, el step 2 cerraba la cancelación pero no abría
+   * nada — el cliente clicaba "Saltar próxima" y no pasaba nada. */
+  onPivotToSkip?: () => void;
+  onPivotToPlan?: () => void;
 }) {
   const [step, setStep] = useState<Step>(1);
   const [stats, setStats] = useState<CancelStep1Response["data"] | null>(null);
@@ -68,7 +75,14 @@ export function CancelTakeover({
         )}
         {step === 2 && (
           <Step2
-            onAlternative={onClose}
+            onSkipClick={() => {
+              onClose();
+              onPivotToSkip?.();
+            }}
+            onPlanClick={() => {
+              onClose();
+              onPivotToPlan?.();
+            }}
             onContinue={() => setStep(3)}
             onBack={() => setStep(1)}
           />
@@ -93,7 +107,6 @@ export function CancelTakeover({
         {step === 4 && (
           <Step4
             subscription={subscription}
-            stats={stats}
             onConfirm={async () => {
               const res = await api<CancelStep4Response>("/api/subscription/cancel", {
                 method: "POST",
@@ -136,20 +149,13 @@ function Step1({
         <T en="you've built" es="has construido" />
         <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
+      {/* Drops y Cards omitidos en MVP — no estamos awardando ninguno
+          de los dos así que mostrar siempre 0 ofende. Reintroducir
+          cuando launchemos drops + collection. (Juan 2026-05-21) */}
       <div className="mt-10 grid grid-cols-2 gap-4">
         <Stat
           label={t({ en: "Boxes received", es: "Cajas recibidas" })}
           value={stats?.boxes ?? 0}
-          loading={loading}
-        />
-        <Stat
-          label={t({ en: "Cards collected", es: "Cartas coleccionadas" })}
-          value={stats?.cards ?? 0}
-          loading={loading}
-        />
-        <Stat
-          label={t({ en: "Drops stacked", es: "Drops acumulados" })}
-          value={stats?.drops ?? 0}
           loading={loading}
         />
         <Stat
@@ -179,11 +185,13 @@ function Step1({
 }
 
 function Step2({
-  onAlternative,
+  onSkipClick,
+  onPlanClick,
   onContinue,
   onBack,
 }: {
-  onAlternative: () => void;
+  onSkipClick: () => void;
+  onPlanClick: () => void;
   onContinue: () => void;
   onBack: () => void;
 }) {
@@ -201,21 +209,21 @@ function Step2({
           labelEs="Saltar la próxima"
           subEn="Take a breather. Resume any time."
           subEs="Toma aire. Reanuda cuando quieras."
-          onClick={onAlternative}
+          onClick={onSkipClick}
         />
         <Alternative
           labelEn="Change your plan"
           labelEs="Cambia tu plan"
           subEn="Fewer boxes, longer cadence, your call."
           subEs="Menos cajas, más espaciadas, tú decides."
-          onClick={onAlternative}
+          onClick={onPlanClick}
         />
         <Alternative
           labelEn="New flavors in June"
           labelEs="Sabores nuevos en junio"
           subEn="Hold tight, Salty Peach is coming."
           subEs="Aguanta, Salty Peach está al caer."
-          onClick={onAlternative}
+          disabled
         />
       </div>
       <div className="mt-10 flex justify-between">
@@ -240,18 +248,38 @@ function Alternative({
   subEn,
   subEs,
   onClick,
+  disabled,
 }: {
   labelEn: string;
   labelEs: string;
   subEn: string;
   subEs: string;
-  onClick: () => void;
+  onClick?: () => void;
+  /** Estado deshabilitado: gris, no clicable. Útil para alternativas
+   * teóricas que no podemos ejecutar (ej. "Nuevos sabores en junio" —
+   * no hay un endpoint real para reservar el sabor futuro). */
+  disabled?: boolean;
 }) {
+  if (disabled) {
+    return (
+      <div
+        aria-disabled
+        className="block w-full rounded-2xl border border-[color:var(--color-brisky-cream)]/8 bg-[color:var(--color-darker-indigo)]/40 px-5 py-4 text-left opacity-50"
+      >
+        <div className="font-display text-lg font-black uppercase">
+          <T en={labelEn} es={labelEs} />
+        </div>
+        <div className="mt-1 text-xs opacity-60">
+          <T en={subEn} es={subEs} />
+        </div>
+      </div>
+    );
+  }
   return (
     <button
       type="button"
       onClick={onClick}
-      className="block w-full rounded-2xl border border-[color:var(--color-brisky-cream)]/15 bg-[color:var(--color-darker-indigo)] px-5 py-4 text-left"
+      className="block w-full rounded-2xl border border-[color:var(--color-brisky-cream)]/15 bg-[color:var(--color-darker-indigo)] px-5 py-4 text-left transition-colors hover:border-[color:var(--color-bold-yellow)]/40"
     >
       <div className="font-display text-lg font-black uppercase">
         <T en={labelEn} es={labelEs} />
@@ -343,41 +371,52 @@ function Step3({
 
 function Step4({
   subscription,
-  stats,
   onConfirm,
   onBack,
 }: {
   subscription: Subscription | null;
-  stats: CancelStep1Response["data"] | null;
-  onConfirm: () => void;
+  onConfirm: () => Promise<void>;
   onBack: () => void;
 }) {
   const t = useLang();
+  const lang = useLangValue();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dateLocale = lang === "es" ? "es-ES" : "en-US";
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="Your last box" es="Tu última caja" />
+        <T en="Confirm" es="Confirmar" />
         <br />
-        <T en="still ships" es="aún se envía" />
+        <T en="cancellation" es="cancelación" />
         <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
+      <p className="mt-6 text-sm opacity-70 max-w-md">
+        <T
+          en="Your last shipment still goes out. No more charges after that."
+          es="Tu próximo envío saldrá igualmente. No habrá más cobros después."
+        />
+      </p>
       <div className="mt-8 space-y-3 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5 text-sm">
         <Detail
-          label={t({ en: "Current box ships", es: "Sale la caja actual" })}
+          label={t({ en: "Next delivery", es: "Próximo envío" })}
           value={
             subscription?.nextShipDate
-              ? new Date(subscription.nextShipDate).toLocaleDateString("en", {
-                  month: "short",
+              ? new Date(subscription.nextShipDate).toLocaleDateString(dateLocale, {
+                  weekday: "long",
                   day: "numeric",
+                  month: "long",
                 })
               : "—"
           }
         />
         <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
-        <Detail label={t({ en: "Drops held 90 days", es: "Drops retenidos 90 días" })} value={stats?.drops ?? 0} />
-        <Detail label={t({ en: "Cards (yours to keep)", es: "Cartas (son tuyas)" })} value={stats?.cards ?? 0} />
       </div>
+      {error && (
+        <div className="mt-4 rounded-sm bg-red-50/10 border border-[color:var(--color-danger)]/40 px-4 py-3 text-xs text-[#ff9b9b]">
+          {error}
+        </div>
+      )}
       <div className="mt-10 flex items-center justify-between">
         <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
           ← <T en="Back" es="Atrás" />
@@ -387,8 +426,18 @@ function Step4({
           disabled={busy}
           onClick={async () => {
             setBusy(true);
+            setError(null);
             try {
               await onConfirm();
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              console.error("[cancel-step4] failed", e);
+              setError(
+                t({
+                  en: `Couldn't cancel: ${msg}. Try again or contact us.`,
+                  es: `No se pudo cancelar: ${msg}. Inténtalo de nuevo o escríbenos.`,
+                }),
+              );
             } finally {
               setBusy(false);
             }
