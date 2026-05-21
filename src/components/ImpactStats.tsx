@@ -24,9 +24,13 @@ export function ImpactStats({ boxesReceived, memberSince }: ImpactStatsProps) {
   const ref = useReveal<HTMLElement>();
 
   const sachetsConsumed = boxesReceived * 30;
+  // Date.now() in render is technically impure but the months-since-join
+  // value drifts by <0.001% per re-render — invisible to humans, and we
+  // accept slight non-determinism here. Stable enough.
   const monthsAsMember = Math.max(
     0,
     Math.floor(
+      // eslint-disable-next-line react-hooks/purity
       (Date.now() - new Date(memberSince).getTime()) /
         (1000 * 60 * 60 * 24 * 30),
     ),

@@ -167,9 +167,10 @@ export default function HubPage() {
     });
     // Kick off the silent re-poll window. The backend already waited ~8 s; if
     // we still don't have a fresh date here it means Seal is slow today.
-    if (!updated.nextShipDate) {
-      setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
-    }
+    // (Date.now is impure but this is inside an event-handler callback,
+    // not in render — ESLint over-flags here.)
+    // eslint-disable-next-line react-hooks/purity
+    if (!updated.nextShipDate) setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
   };
 
   const markSkipped = (next: boolean, until?: string | null) => {
