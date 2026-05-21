@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { T, useLang } from "@/lib/i18n";
+import { T, useLang, useLangValue } from "@/lib/i18n";
 import type {
   CancelStep1Response,
   CancelStep4Response,
@@ -379,8 +379,26 @@ function Step4({
   onBack: () => void;
 }) {
   const t = useLang();
+  const lang = useLangValue();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Si el próximo envío está dentro de la ventana de 72h, ya está
+  // "bloqueado" para envío y Seal lo procesará pese a cancelar. El
+  // cliente lo recibe igualmente y la sub se cierra después.
+  // Si está fuera de los 72h, la cancelación es realmente inmediata —
+  // no sale más nada.
+  const willShipNext = !!subscription?.withinCutoff && !!subscription?.nextShipDate;
+  const dateLocale = lang === "es" ? "es-ES" : "en-US";
+  const nextDateLabel =
+    willShipNext && subscription?.nextShipDate
+      ? new Date(subscription.nextShipDate).toLocaleDateString(dateLocale, {
+          weekday: "long",
+          day: "numeric",
+          month: "long",
+        })
+      : null;
+
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
@@ -390,15 +408,32 @@ function Step4({
         <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <p className="mt-6 text-sm opacity-70 max-w-md">
-        <T
-          en="Cancellation is immediate. No more shipments and no more charges."
-          es="La cancelación es inmediata. No habrá más envíos ni cobros."
-        />
+        {willShipNext ? (
+          <T
+            en="Your next shipment is already within 72h, so it'll go out. After that, no more shipments and no more charges."
+            es="Tu próximo envío ya está dentro de las 72h, así que saldrá igualmente. Después, no habrá más envíos ni cobros."
+          />
+        ) : (
+          <T
+            en="Cancellation is immediate. No more shipments and no more charges."
+            es="La cancelación es inmediata. No habrá más envíos ni cobros."
+          />
+        )}
       </p>
       <div className="mt-8 space-y-3 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5 text-sm">
+        {willShipNext && nextDateLabel && (
+          <Detail
+            label={t({ en: "Last shipment", es: "Último envío" })}
+            value={nextDateLabel}
+          />
+        )}
         <Detail
           label={t({ en: "Status", es: "Estado" })}
-          value={t({ en: "Cancelled on confirm", es: "Cancelada al confirmar" })}
+          value={
+            willShipNext
+              ? t({ en: "Cancels after last shipment", es: "Cancela tras último envío" })
+              : t({ en: "Cancelled on confirm", es: "Cancelada al confirmar" })
+          }
         />
         <Detail
           label={t({ en: "Next billing", es: "Próximo cobro" })}
