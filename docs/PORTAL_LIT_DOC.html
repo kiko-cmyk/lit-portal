@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Portal LIT — Documentación técnica</title>
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow:wght@400;500;700;900&family=Barlow+Condensed:wght@500;700;900&family=JetBrains+Mono:wght@400;700&display=swap");
+
+  :root {
+    --cream: #F8F9F2;
+    --grey:  #323743;
+    --yellow:#EBEE62;
+    --warm:  #757575;
+    --line:  rgba(50,55,67,0.12);
+    --soft:  rgba(50,55,67,0.06);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0;
+    font-family: "Barlow", system-ui, sans-serif;
+    color: var(--grey);
+    background: var(--cream);
+    font-size: 11pt;
+    line-height: 1.55;
+  }
+
+  @page { size: A4; margin: 18mm 16mm 22mm 16mm; }
+  @page :first { margin: 0; }
+
+  /* ─── Generic page wrapper ─── */
+  .page { padding: 0; max-width: 178mm; margin: 0 auto; }
+  section { page-break-inside: avoid; }
+
+  /* ─── Headings ─── */
+  h1, h2, h3, h4 {
+    font-family: "Archivo Black", "Barlow Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: -0.01em;
+    color: var(--grey);
+    margin: 0;
+  }
+  h1 { font-size: 32pt; line-height: 0.95; letter-spacing: -0.02em; }
+  h2 { font-size: 20pt; line-height: 1.0; margin: 14mm 0 4mm; padding-top: 6mm; border-top: 2px solid var(--grey); }
+  h3 { font-size: 13pt; line-height: 1.1; margin: 8mm 0 2mm; }
+  h4 { font-size: 10.5pt; letter-spacing: 0.08em; margin: 5mm 0 1.5mm; font-family: "Barlow Condensed", sans-serif; font-weight: 900; }
+  h2 .num { color: var(--yellow); margin-right: 4mm; display: inline-block; background: var(--grey); padding: 0 3mm; }
+
+  p { margin: 0 0 3mm; }
+  strong { font-weight: 900; }
+  em { font-style: italic; color: var(--warm); }
+  a { color: var(--grey); text-decoration: underline; }
+  code, kbd {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 9pt;
+    background: var(--soft);
+    padding: 0.5mm 1.5mm;
+    border-radius: 1mm;
+  }
+  pre {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 8.5pt;
+    background: var(--grey);
+    color: var(--cream);
+    padding: 4mm 5mm;
+    border-radius: 2mm;
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    line-height: 1.4;
+    margin: 3mm 0;
+  }
+  pre .y { color: var(--yellow); }
+  pre .c { color: #8b9099; font-style: italic; }
+
+  ul, ol { padding-left: 6mm; margin: 0 0 4mm; }
+  li { margin-bottom: 1mm; }
+
+  /* ─── Cover ─── */
+  .cover {
+    height: 297mm;
+    background: var(--grey);
+    color: var(--cream);
+    padding: 25mm 22mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    page-break-after: always;
+  }
+  .cover .eyebrow {
+    font-family: "Barlow Condensed", sans-serif;
+    font-weight: 900;
+    letter-spacing: 0.32em;
+    font-size: 10pt;
+    color: var(--yellow);
+    text-transform: uppercase;
+  }
+  .cover h1 {
+    color: var(--cream);
+    font-size: 76pt;
+    line-height: 0.85;
+    margin-top: 6mm;
+  }
+  .cover h1 .dot { color: var(--yellow); }
+  .cover .sub {
+    font-size: 16pt;
+    color: rgba(248,249,242,0.7);
+    margin-top: 8mm;
+    max-width: 130mm;
+    line-height: 1.25;
+  }
+  .cover .meta {
+    border-top: 2px solid rgba(235,238,98,0.4);
+    padding-top: 6mm;
+    display: flex;
+    justify-content: space-between;
+    font-family: "Barlow Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 9pt;
+    color: rgba(248,249,242,0.7);
+  }
+  .cover .meta b { color: var(--cream); font-weight: 900; }
+
+  /* ─── Page header (after cover) ─── */
+  .page-content { padding: 0 18mm; }
+  .toc {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: toc;
+    columns: 1;
+  }
+  .toc li {
+    counter-increment: toc;
+    border-bottom: 1px solid var(--line);
+    padding: 3mm 0;
+    display: flex;
+    justify-content: space-between;
+    font-family: "Barlow Condensed", sans-serif;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 11pt;
+  }
+  .toc li::before {
+    content: counter(toc, decimal-leading-zero);
+    color: var(--yellow);
+    background: var(--grey);
+    padding: 0 2mm;
+    margin-right: 4mm;
+    font-family: "Archivo Black", sans-serif;
+  }
+  .toc .page-num { color: var(--warm); font-weight: 500; }
+
+  /* ─── Pull quotes / callouts ─── */
+  .callout {
+    background: var(--yellow);
+    color: var(--grey);
+    padding: 5mm 6mm;
+    border-radius: 2mm;
+    margin: 4mm 0;
+    border-left: 4mm solid var(--grey);
+  }
+  .callout .label {
+    font-family: "Barlow Condensed", sans-serif;
+    font-weight: 900;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    font-size: 8.5pt;
+    margin-bottom: 1.5mm;
+    display: block;
+  }
+  .callout.dark { background: var(--grey); color: var(--cream); border-left-color: var(--yellow); }
+  .callout.dark .label { color: var(--yellow); }
+  .callout.gotcha { background: #FFF3D6; border-left-color: #B8860B; }
+  .callout.gotcha .label { color: #6B5300; }
+
+  /* ─── Tables ─── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 3mm 0;
+    font-size: 9.5pt;
+  }
+  th, td {
+    text-align: left;
+    padding: 2.5mm 3mm;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    background: var(--grey);
+    color: var(--cream);
+    font-family: "Barlow Condensed", sans-serif;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 8.5pt;
+  }
+  tr:nth-child(even) td { background: var(--soft); }
+
+  /* ─── Diagram block ─── */
+  .diagram {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 8pt;
+    background: var(--soft);
+    padding: 5mm;
+    border-radius: 2mm;
+    line-height: 1.5;
+    white-space: pre;
+    margin: 3mm 0;
+    border: 1px solid var(--line);
+    overflow-x: hidden;
+  }
+
+  /* ─── Surface card ─── */
+  .surface {
+    border: 1px solid var(--line);
+    border-radius: 3mm;
+    padding: 5mm 6mm 5mm;
+    margin: 4mm 0;
+    background: white;
+    page-break-inside: avoid;
+  }
+  .surface h3 {
+    color: var(--grey);
+    margin-top: 0;
+  }
+  .surface .url {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 8.5pt;
+    color: var(--warm);
+    margin-bottom: 2.5mm;
+  }
+  .surface .meta-row {
+    display: flex;
+    gap: 4mm;
+    flex-wrap: wrap;
+    margin: 2mm 0 3mm;
+    font-family: "Barlow Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 8.5pt;
+  }
+  .surface .meta-row span {
+    background: var(--grey);
+    color: var(--yellow);
+    padding: 0.5mm 2mm;
+    border-radius: 1mm;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+
+  /* Print page-breaks */
+  .page-break { page-break-before: always; }
+
+  /* Footer */
+  .footer-note {
+    margin-top: 10mm;
+    padding-top: 4mm;
+    border-top: 1px solid var(--line);
+    font-size: 8.5pt;
+    color: var(--warm);
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<!-- ─────────────── COVER ─────────────── -->
+<div class="cover">
+  <div>
+    <div class="eyebrow">Portal de Cliente · LIT®</div>
+    <h1>Documentación<br>del Portal<span class="dot">.</span></h1>
+    <p class="sub">Cómo está construido el portal post-purchase de LIT, qué hace cada superficie, y las decisiones técnicas detrás del producto.</p>
+  </div>
+  <div class="meta">
+    <div>Versión <b>1.0</b></div>
+    <div>Fecha <b>21 de mayo, 2026</b></div>
+    <div>Branch <b>feat/master-spec-rewrite</b></div>
+  </div>
+</div>
+
+<!-- ─────────────── TOC ─────────────── -->
+<div class="page-content">
+<h2><span class="num">00</span>ÍNDICE</h2>
+<ol class="toc">
+  <li><span>Resumen ejecutivo</span><span class="page-num">P. 3</span></li>
+  <li><span>Stack y arquitectura</span><span class="page-num">P. 4</span></li>
+  <li><span>Autenticación y sesiones</span><span class="page-num">P. 6</span></li>
+  <li><span>Superficies del portal</span><span class="page-num">P. 8</span></li>
+  <li><span>Integraciones</span><span class="page-num">P. 14</span></li>
+  <li><span>Decisiones difíciles y aprendizajes</span><span class="page-num">P. 16</span></li>
+  <li><span>Backlog y próximos pasos</span><span class="page-num">P. 18</span></li>
+</ol>
+</div>
+
+<!-- ─────────────── 1. EXECUTIVE SUMMARY ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">01</span>Resumen ejecutivo</h2>
+
+<p>El <strong>Portal de Cliente de LIT</strong> es la nueva área privada donde el suscriptor gestiona su caja: cambia el plan, salta envíos, modifica la dirección, añade extras a la próxima caja, y, llegado el caso, cancela. Sustituye al portal genérico de <em>tracking</em> que venía por defecto con la herramienta de suscripciones (Seal).</p>
+
+<div class="callout">
+  <span class="label">El por qué</span>
+  El portal antiguo era una página técnica, fea, con muchos enlaces, y vivía en un dominio distinto (<code>tracking.litsalt.com</code>) — rompía la marca. Construir uno propio significa que el cliente <strong>jamás sale de <code>litsalt.com</code></strong>, ve la identidad LIT en todo momento, y nosotros controlamos cada flujo (cancelaciones, win-back, recompensas) en lugar de depender de lo que Seal nos ofrezca.
+</div>
+
+<h3>¿Qué consigue el cliente?</h3>
+<ul>
+  <li><strong>Ver su próxima caja</strong> con la fecha exacta, el sabor, y cuántos sobres recibirá.</li>
+  <li><strong>Saltar una entrega</strong> en un click si se va de viaje, sin tener que escribir a soporte.</li>
+  <li><strong>Cambiar el plan</strong> (cajas + frecuencia) con precio dinámico — ve el descuento por volumen en vivo.</li>
+  <li><strong>Modificar dirección y método de pago</strong> sin tener que llamar a nadie.</li>
+  <li><strong>Cancelar</strong> con un flujo en 4 pasos que muestra alternativas (saltar, cambiar plan) antes de la decisión final.</li>
+  <li><strong>Ver historial</strong> de pedidos, calendario de próximas entregas, y, en fase 2, su colección de cartas y recompensas Drops.</li>
+</ul>
+
+<h3>¿Qué consigue LIT?</h3>
+<ul>
+  <li><strong>Reducción de tickets a soporte</strong> — la mayoría de "skip mi caja" / "cambiar plan" pasan a self-service.</li>
+  <li><strong>Marca consistente</strong> de extremo a extremo. Misma tipografía, mismo idioma, mismo trato.</li>
+  <li><strong>Recuperación de cancelaciones</strong> integrada en el propio flujo de cancel — antes el cliente cancelaba sin que LIT tuviera oportunidad de ofrecer alternativas.</li>
+  <li><strong>Telemetría limpia</strong>: cada acción se loguea en Klaviyo (cancellation reason, skip, plan change) para alimentar flujos automáticos de retención.</li>
+</ul>
+
+<h3>Estado actual</h3>
+<p>El portal está <strong>desplegado en producción</strong> en <code>litsalt.com/apps/portal/*</code>. Los flujos críticos (login OAuth, ver suscripción, saltar, cambiar plan, cambiar dirección, cancelar) están funcionando end-to-end. Pendiente principal: <strong>Fase 2</strong> con Collection (cartas), Drops automation (recompensas) y el switcher de sabores cuando haya catálogo.</p>
+</div>
+
+<!-- ─────────────── 2. STACK ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">02</span>Stack y arquitectura</h2>
+
+<h3>2.1 El stack en una frase</h3>
+<p><strong>Next.js 16 (App Router)</strong> alojado en <strong>Vercel</strong>, servido al cliente vía <strong>Shopify App Proxy</strong>, con <strong>Supabase Postgres</strong> como base de datos, e integrado contra <strong>Seal Subscriptions</strong>, <strong>Shopify Admin API</strong> y <strong>Klaviyo</strong>.</p>
+
+<h3>2.2 Diagrama de alto nivel</h3>
+<div class="diagram">
+       Cliente final (navegador)
+              │
+              │ https://litsalt.com/apps/portal/*
+              ▼
+   ┌───────────────────────────────┐
+   │     Shopify (App Proxy)       │  ← firma HMAC + adjunta logged_in_customer_id
+   └───────────────────────────────┘
+              │
+              │ proxy transparente
+              ▼
+   ┌───────────────────────────────┐
+   │      Vercel (Next.js 16)      │
+   │   • App Router pages /[locale]│
+   │   • Route handlers /api/*     │
+   │   • Server Components         │
+   └───────────────────────────────┘
+        │           │          │
+        ▼           ▼          ▼
+   ┌─────────┐  ┌────────┐  ┌──────────────┐
+   │ Supabase│  │  Seal  │  │ Shopify Admin│
+   │ Postgres│  │  API   │  │  GraphQL     │
+   └─────────┘  └────────┘  └──────────────┘
+        │                          │
+        └──────► Klaviyo ◄─────────┘
+            (eventos marketing)
+</div>
+
+<h3>2.3 Por qué este stack</h3>
+<table>
+  <thead><tr><th>Pieza</th><th>Decisión</th><th>Por qué</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Next.js + App Router</strong></td><td>vs SPA pura</td><td>Server components para precargar datos sensibles sin exponer tokens al bundle. SSR para SEO mínimo y first-paint rápido.</td></tr>
+    <tr><td><strong>Shopify App Proxy</strong></td><td>vs subdominio propio</td><td>El cliente nunca sale de litsalt.com — no hay corte de marca ni segundo login. Shopify firma cada request con HMAC y nos adjunta el <code>logged_in_customer_id</code>.</td></tr>
+    <tr><td><strong>Vercel</strong></td><td>vs Hetzner/VPS</td><td>Despliegue continuo desde GitHub, edge functions, zero-config. El portal escala con tráfico de mañana sin tocar infra.</td></tr>
+    <tr><td><strong>Supabase</strong></td><td>vs Neon (que usamos para LIT-Agents)</td><td>Postgres gestionado + Auth + tipos en tiempo real. Nos da una DB sin operarla y un panel para ops review de cancellations.</td></tr>
+    <tr><td><strong>Seal Subscriptions</strong></td><td>—</td><td>Es el motor de suscripciones que ya teníamos antes del portal. El portal habla con su Merchant API.</td></tr>
+    <tr><td><strong>Customer Account API</strong></td><td>vs Classic Accounts</td><td>OAuth moderno con PKCE; sustituye el login viejo. Soporta el flujo de "venir desde un email" sin re-loguear.</td></tr>
+  </tbody>
+</table>
+
+<h3>2.4 Estructura del repo</h3>
+<pre><span class="c">portal-cliente-web/lit-portal/</span>
+├── <span class="y">src/app/</span>
+│   ├── [locale]/             <span class="c"># páginas /es/* y /en/*</span>
+│   │   ├── mi-lit/           <span class="c"># Hub (home del portal)</span>
+│   │   ├── cuenta/           <span class="c"># Account</span>
+│   │   ├── collection/       <span class="c"># Cartas (fase 2)</span>
+│   │   ├── the-world/        <span class="c"># Eventos/historias (fase 2)</span>
+│   │   └── auth/handoff/     <span class="c"># Transferencia de session_id</span>
+│   └── api/                  <span class="c"># Route handlers (mutations + reads)</span>
+│       ├── auth/             <span class="c"># OAuth login/callback/logout</span>
+│       ├── subscription/     <span class="c"># Plan, skip, cancel, extras, address</span>
+│       ├── hub/dashboard     <span class="c"># Resumen agregado del Hub</span>
+│       └── webhooks/         <span class="c"># Seal + Shopify webhooks</span>
+├── <span class="y">src/components/</span>      <span class="c"># Overlays (PlanOverlay, SkipOverlay…), Hero, etc.</span>
+├── <span class="y">src/lib/</span>             <span class="c"># Clients: seal, shopify-admin, klaviyo, supabase, cutoff, just-skipped</span>
+├── <span class="y">database/</span>
+│   ├── schema.sql            <span class="c"># Schema Postgres canónico</span>
+│   └── migrations/           <span class="c"># Diff migrations aplicadas en prod</span>
+├── <span class="y">scripts/</span>             <span class="c"># Upload templates Klaviyo, debug, etc.</span>
+└── <span class="y">docs/</span>                <span class="c"># Este documento + spec + auditoría</span>
+</pre>
+</div>
+
+<!-- ─────────────── 3. AUTH ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">03</span>Autenticación y sesiones</h2>
+
+<p>El portal soporta <strong>dos mecanismos de autenticación</strong> simultáneos, que conviven en el middleware <code>withCustomer</code>. Cualquiera de los dos vale para identificar al cliente. Esto es así porque la mayoría de los clientes entrarán vía un enlace en un email de Shopify (App Proxy auth), pero también queremos permitir login directo desde la web (OAuth).</p>
+
+<h3>3.1 Vía A: App Proxy (passive)</h3>
+<p>Cuando Shopify reenvía una request a Vercel, añade <code>logged_in_customer_id</code> como parámetro de query y firma toda la URL con HMAC usando el secret de la app. Nuestro middleware verifica esa firma y, si es válida, identifica al cliente sin más pasos.</p>
+
+<div class="callout dark">
+  <span class="label">Ventaja</span>
+  Es transparente para el cliente. Si está logueado en la storefront de Shopify (cookie de Shopify), cuando hace click en cualquier enlace al portal entra ya identificado, sin pasar por una pantalla de login.
+</div>
+
+<h3>3.2 Vía B: OAuth con Customer Account API (active)</h3>
+<p>Cuando no hay sesión de Shopify (entró directo a la URL del portal sin venir de Shopify), redirigimos al cliente al login de Shopify (Customer Account API), hacemos un flujo OAuth con PKCE, y al volver del callback creamos un <strong>session_id opaco</strong> en nuestra tabla <code>auth_sessions</code> en Supabase. El FE guarda ese session_id en localStorage y lo manda en cada request en el header <code>X-LIT-Session</code>.</p>
+
+<h3>3.3 Diagrama del OAuth flow</h3>
+<div class="diagram">
+   Cliente                Portal (Vercel)              Shopify
+     │                         │                         │
+     │  GET /apps/portal/...   │                         │
+     ├────────────────────────►│                         │
+     │                         │ no proxy auth, no token │
+     │                         │                         │
+     │   redirect /login       │                         │
+     │◄────────────────────────┤                         │
+     │                         │                         │
+     │  → /authorize (PKCE,    │                         │
+     │     code_verifier,      │                         │
+     │     state=signed JWT)   │                         │
+     ├──────────────────────────────────────────────────►│
+     │                                                   │
+     │   login + consent                                 │
+     │◄──────────────────────────────────────────────────┤
+     │                                                   │
+     │   ?code=... &state=...                            │
+     ├─────────────────►/api/auth/callback ─────────────►│
+     │                         │  exchange code→tokens   │
+     │                         │◄────────────────────────┤
+     │                         │                         │
+     │                         │ crea row auth_sessions  │
+     │                         │ con session_id opaco    │
+     │                         │                         │
+     │  redirect /handoff?s=… │                         │
+     │◄────────────────────────┤                         │
+     │   (handoff page mueve   │                         │
+     │   session_id a          │                         │
+     │   localStorage)         │                         │
+     │                         │                         │
+     │  Authorization mediante                           │
+     │  X-LIT-Session header                             │
+     │  desde aquí en adelante │                         │
+</div>
+
+<h3>3.4 Por qué <code>X-LIT-Session</code> y no <code>Authorization: Bearer</code></h3>
+<div class="callout gotcha">
+  <span class="label">Gotcha descubierto el 2026-05-21</span>
+  Shopify App Proxy <strong>intercepta el header <code>Authorization</code></strong> en peticiones POST/PATCH/DELETE y NO las reenvía al upstream. En su lugar, devuelve un 500 con el HTML del tema (la home de la tienda), lo cual hace que el FE crea que el endpoint está roto. Headers custom <code>X-*</code> pasan sin tocarlos. Migramos a <code>X-LIT-Session</code> y todas las mutations volvieron a funcionar.
+</div>
+
+<h3>3.5 Logout</h3>
+<p>El endpoint <code>/api/auth/logout</code> borra la fila de <code>auth_sessions</code> en Supabase, devuelve la URL de logout OIDC de Shopify para invalidar también la sesión storefront, y el FE limpia su <code>localStorage</code> antes de redirigir.</p>
+</div>
+
+<!-- ─────────────── 4. SURFACES ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">04</span>Superficies del portal</h2>
+
+<p>El portal está dividido en superficies, cada una con una URL y una responsabilidad clara. Todas comparten el mismo header móvil fijo, las mismas tipografías (Archivo Black para títulos, Barlow para body) y los mismos colores brand (cream <code>#F8F9F2</code>, lit-grey <code>#323743</code>, bold-yellow <code>#EBEE62</code>).</p>
+
+<div class="surface">
+  <h3>4.1 Mi LIT (Hub)</h3>
+  <div class="url">/apps/portal/[es|en]/mi-lit</div>
+  <div class="meta-row"><span>HOME</span><span>POST-LOGIN</span><span>RUTA PRIMARIA</span></div>
+  <p>Pantalla principal del cliente. Lo primero que ve después de loguearse. Estructura:</p>
+  <ul>
+    <li><strong>Hero "Next Box"</strong> — fecha grande del próximo envío, sabor, plan. Tiene 4 variantes según el estado: <code>default</code>, <code>skipped</code> (saltaste el anterior, este es el próximo), <code>locked</code> (dentro de 24h del envío, no se puede tocar), <code>new</code> (es tu primera caja).</li>
+    <li><strong>Quick Actions</strong> — 4 botones rápidos: Cambiar plan, Saltar próxima, Cambiar sabor (Fase 2), Extras (Fase 2). Cada uno abre su overlay correspondiente.</li>
+    <li><strong>Calendar de próximas entregas</strong> — muestra las próximas 5-6 fechas que Seal tiene pre-agendadas.</li>
+    <li><strong>Mini Collection grid</strong> — preview de la colección de cartas (Fase 2).</li>
+    <li><strong>Order history</strong> — últimos 10 pedidos completados, con su tracking si está disponible.</li>
+  </ul>
+</div>
+
+<div class="surface">
+  <h3>4.2 Cuenta</h3>
+  <div class="url">/apps/portal/[es|en]/cuenta</div>
+  <div class="meta-row"><span>ACCOUNT</span><span>SETTINGS</span></div>
+  <p>Misma información que Mi LIT pero formateada como ficha: datos personales (nombre, email, teléfono), suscripción actual (cajas, frecuencia, sabor, próxima fecha), dirección, método de pago, historial completo de pedidos. Incluye la sección "Cambiar cajas o frecuencia" como acceso rápido al plan overlay y, al final, la <strong>Danger Zone</strong> con "Cerrar sesión" y "Cancelar suscripción".</p>
+  <p>Tras el último deploy, los Quick Actions de Cuenta funcionan exactamente igual que los de Mi LIT (mismas reglas de disabled, mismo banner amarillo "Saltaste la entrega anterior — Deshacer" cuando hay un skip activo).</p>
+</div>
+
+<div class="surface">
+  <h3>4.3 Skip overlay</h3>
+  <div class="meta-row"><span>OVERLAY</span><span>MUTATION</span></div>
+  <p>Bottom-sheet en móvil, modal centrado en desktop. Muestra "¿Te vas de viaje?", la fecha de envío actual, y un único botón "Confirmar saltar". Al confirmar:</p>
+  <ol>
+    <li>POST <code>/api/subscription/skip</code> con <code>sealSubscriptionId</code> en el body (fast-path).</li>
+    <li>Backend valida ownership en Supabase, hace un GET dirigido a Seal por ID (sin paginar), comprueba ventana de cutoff (24h), llama <code>skipBillingAttempt</code>.</li>
+    <li>FE recibe la nueva fecha, marca <code>justSkipped</code> en localStorage con expiry hasta esa fecha, dispara evento Klaviyo.</li>
+  </ol>
+</div>
+
+<div class="surface">
+  <h3>4.4 Plan overlay</h3>
+  <div class="meta-row"><span>OVERLAY</span><span>MUTATION</span></div>
+  <p>Selector de cajas (1 a 6) + selector de frecuencia (15d hasta 6 meses). Muestra precio dinámico desde Shopify, con compareAtPrice tachado si aplica descuento. Si hay un skip activo, muestra banner amarillo: <em>"Al cambiar el plan, tu salto de caja se deshará"</em>. Al guardar:</p>
+  <ol>
+    <li>Si cambia la <strong>frecuencia</strong>: <code>seal.editSubscription(delivery_interval)</code> primero.</li>
+    <li>Si cambia el <strong>nº de cajas</strong>: <code>seal.addItems</code> con la nueva variant, luego <code>removeItems</code> de la antigua. Seal no permite swap directo.</li>
+    <li>Pausas de 500ms entre mutations porque Seal regenera <code>billing_attempts</code> en background y la siguiente mutation puede ser silenciosamente ignorada si llega demasiado pronto.</li>
+    <li>Verificación post-mutation con AbortController de 4s. Si timed out, devuelve respuesta sintética y el FE arranca un re-poll silencioso de 60s.</li>
+  </ol>
+</div>
+
+<div class="surface">
+  <h3>4.5 Cancel takeover (full-screen)</h3>
+  <div class="meta-row"><span>FULL SCREEN</span><span>MULTI-STEP</span><span>WIN-BACK</span></div>
+  <p>No es un overlay, es un takeover oscuro a pantalla completa que ocupa toda la viewport. 4 pasos:</p>
+  <ol>
+    <li><strong>Stats</strong> — "Has recibido N cajas y llevas M meses en LIT". Reconocer el viaje del cliente antes de proponer salirse.</li>
+    <li><strong>Alternativas</strong> — botones para Saltar próxima caja, Cambiar plan, o "Nuevos sabores próximamente" (disabled). Pivotan al overlay correspondiente sin cerrar el takeover.</li>
+    <li><strong>Motivo</strong> — selector de razón (caro / demasiado producto / no lo uso suficiente / pausa / otro) + free text opcional.</li>
+    <li><strong>Confirmación</strong> — muestra "Cancelación inmediata" o "Cancela tras último envío" según si está dentro de 24h del próximo envío. Botón final "Cancelar suscripción".</li>
+  </ol>
+  <p>Al confirmar: marca cancellation row en Supabase como <code>committing</code>, llama Seal <code>cancelSubscription</code>, promueve a <code>confirmed</code>, dispara Klaviyo event, y muestra el done state. El botón "Volver a LIT" del done state hace <strong>logout completo</strong> (borra session, redirige a <code>litsalt.com</code>) — el cliente no vuelve al portal con estado stale.</p>
+</div>
+
+<div class="surface">
+  <h3>4.6 Login / EmptyState</h3>
+  <div class="url">/apps/portal/[es|en]/mi-lit (sin auth)</div>
+  <div class="meta-row"><span>FALLBACK</span></div>
+  <p>Si el cliente entra sin sesión, ve la <strong>LoginScreen</strong> con CTA a OAuth. Si entra autenticado pero no tiene una suscripción activa (one-shot buyer, cancelado), ve el <strong>EmptyState</strong>: "Gracias por probar LIT" + CTA a la página de suscripción con descuento "desde el 25%".</p>
+</div>
+
+<div class="surface">
+  <h3>4.7 Address overlay</h3>
+  <div class="meta-row"><span>OVERLAY</span><span>MUTATION</span></div>
+  <p>Formulario para cambiar la dirección de envío. PATCH a <code>/api/subscription/address</code>, que llama a <code>seal.updateShippingAddress</code>. Aplica cutoff de 24h: si el próximo envío está demasiado cerca, no se permite el cambio.</p>
+</div>
+
+<div class="surface">
+  <h3>4.8 Payment method</h3>
+  <div class="meta-row"><span>EMAIL-ONLY</span></div>
+  <p>Decisión locked 2026-05-19: el cambio de método de pago es <strong>100% email-only</strong>. Botón "Cambiar método de pago" dispara <code>customerPaymentMethodSendUpdateEmail</code> de Shopify Admin API, que envía un enlace seguro al email del cliente. El portal muestra confirmación "Te hemos enviado un enlace a tu correo, vuelve aquí al terminar". <strong>Sin Stripe, sin pasarela nueva</strong> — Shopify ya tiene el método y la pasarela.</p>
+</div>
+</div>
+
+<!-- ─────────────── 5. INTEGRATIONS ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">05</span>Integraciones</h2>
+
+<h3>5.1 Seal Subscriptions</h3>
+<p>El portal lee y muta el estado de las suscripciones únicamente a través de la <strong>Merchant API de Seal</strong>. Endpoints usados:</p>
+<table>
+  <thead><tr><th>Acción</th><th>Endpoint Seal</th><th>Notas</th></tr></thead>
+  <tbody>
+    <tr><td>Listar subs por email</td><td>GET <code>/subscriptions?page=N</code></td><td>Sin filtro server-side, hay que paginar. Hasta 33 páginas para cuentas grandes.</td></tr>
+    <tr><td>Sub por ID</td><td>GET <code>/subscription?id=X</code></td><td>Endpoint singular que sí honra el filtro, evita la paginación. Descubierto 2026-05-21.</td></tr>
+    <tr><td>Cambiar intervalo</td><td>PUT <code>/subscription</code> action=edit</td><td>Solo <code>delivery_interval</code>, NO mandar <code>billing_interval</code> (Seal silenciosamente no aplica el cambio).</td></tr>
+    <tr><td>Cambiar variant</td><td>add_items + remove_items</td><td>No hay endpoint de swap. Hay que añadir nuevo + quitar viejo.</td></tr>
+    <tr><td>Saltar billing attempt</td><td>PUT <code>/subscription-billing-attempt</code> action=skip</td><td>Retornar 200 con <code>success: false</code> es posible — hay que chequear el body.</td></tr>
+    <tr><td>Cancelar / reactivar</td><td>PUT <code>/subscription</code> action=cancel|reactivate</td><td>Cancel es INMEDIATO (Seal pone <code>cancelled_on</code> en el momento).</td></tr>
+  </tbody>
+</table>
+
+<h3>5.2 Shopify Admin API</h3>
+<p>Usada para datos del cliente y operaciones que Seal no expone:</p>
+<ul>
+  <li><strong>Lookup de email</strong> por <code>customer_id</code> (App Proxy nos da el ID, pero Seal indexa por email).</li>
+  <li><strong>Actualizar customer</strong> (nombre, teléfono, language pref).</li>
+  <li><strong>Catalog de extras</strong> — productos con tag <code>add-to-box</code> que se pueden añadir a la siguiente caja.</li>
+  <li><strong>Send payment method update email</strong> via <code>customerPaymentMethodSendUpdateEmail</code>.</li>
+  <li><strong>Order history</strong> — últimos pedidos del cliente para el historial.</li>
+</ul>
+
+<h3>5.3 Klaviyo</h3>
+<p>Cada acción importante dispara un evento custom en Klaviyo, que alimenta flujos de marketing y win-back automatizados. Eventos actuales:</p>
+<ul>
+  <li><code>subscription_skip</code></li>
+  <li><code>subscription_cancelled</code> (con reason, freeText, cancelCount, lastShipDate, dropsHeldUntil)</li>
+  <li><code>welcome_to_portal</code> (al crear sesión OAuth por primera vez)</li>
+</ul>
+<p>Las plantillas de email viven en Klaviyo y se sincronizan con el repo mediante <code>scripts/klaviyo-upload-templates.mjs</code>. Hay dos plantillas welcome (ES <code>VXC2NN</code>, EN <code>SCE2Q2</code>) con CTA al portal.</p>
+
+<h3>5.4 Supabase</h3>
+<p>Tablas principales:</p>
+<table>
+  <thead><tr><th>Tabla</th><th>Propósito</th></tr></thead>
+  <tbody>
+    <tr><td><code>auth_sessions</code></td><td>session_id ↔ customer_id, expiry, id_token para logout OIDC.</td></tr>
+    <tr><td><code>subscriptions</code></td><td>Cache de mapping customer_id ↔ seal_subscription_id. Evita el scan de 33 páginas en cada request.</td></tr>
+    <tr><td><code>cancellations</code></td><td>Multi-step cancel: pending → committing → confirmed. Permite detectar cancels colgados que no terminaron de aplicarse.</td></tr>
+    <tr><td><code>customer_preferences</code></td><td>cancel_count, language_pref, last_cancelled_at — para lógica de "second cancel = reset Drops inmediato".</td></tr>
+    <tr><td><code>drops_balances</code> / <code>drops_events</code></td><td>Saldo de Drops y log de cada evento (Fase 2).</td></tr>
+    <tr><td><code>webhook_log</code></td><td>Idempotency log de webhooks Shopify y Seal.</td></tr>
+  </tbody>
+</table>
+
+<h3>5.5 Shopify App Proxy</h3>
+<p>Configurado en <code>shopify.app.toml</code>:</p>
+<pre>[app_proxy]
+url    = "<span class="y">https://lit-portal-drab.vercel.app</span>"
+subpath = "portal"
+prefix  = "apps"</pre>
+<p>Cualquier request a <code>litsalt.com/apps/portal/*</code> se reenvía con HMAC + <code>logged_in_customer_id</code> + <code>shop</code> + <code>timestamp</code>. El middleware <code>verifyAppProxyRequest</code> valida la firma antes de procesar.</p>
+</div>
+
+<!-- ─────────────── 6. GOTCHAS ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">06</span>Decisiones difíciles y aprendizajes</h2>
+
+<p>Esta sección documenta las decisiones no obvias y los gotchas que aprendimos por las malas, para que no se repitan ni se olviden.</p>
+
+<h3>6.1 Shopify App Proxy sustituye 5xx con HTML del storefront</h3>
+<div class="callout gotcha">
+  <span class="label">El gotcha</span>
+  Cuando el upstream (Vercel) devuelve un HTTP 5xx, App Proxy <strong>NO reenvía esa respuesta al cliente</strong>. En su lugar, renderiza el HTML del tema de la tienda con la URL solicitada como canonical. El cliente recibe ~50KB de markup del storefront con status 500, pero <code>content-type: text/html</code> y headers de Shopify (<code>powered-by: Shopify</code>, <code>server-timing: theme;desc=...</code>).
+</div>
+<p>Esto hizo que un error real (constraint CHECK violado en la tabla <code>cancellations</code>) pareciera un problema de routing, de Authorization header, de timeout — todo equivocado. <strong>Diagnóstico:</strong> hacer bypass del proxy y hablar directo con Vercel (<code>curl https://lit-portal-drab.vercel.app/...</code>) para ver el error JSON real.</p>
+
+<h3>6.2 Seal regenera <code>billing_attempts</code> en cada cambio de plan</h3>
+<p>Cualquier <code>editSubscription</code> en Seal (cambiar cajas, frecuencia, dirección, items) hace que regenere la lista de <code>billing_attempts</code> desde cero. <strong>Cualquier skip aplicado previamente se borra silenciosamente.</strong> El portal mitiga esto:</p>
+<ul>
+  <li>El FE limpia el flag <code>justSkipped</code> de localStorage cuando hay un plan change exitoso, para no mostrar un banner que miente.</li>
+  <li>El PlanOverlay avisa al usuario con un banner amarillo si hay un skip activo y va a cambiar el plan.</li>
+</ul>
+
+<h3>6.3 Eventual consistency en Seal</h3>
+<p>Después de una mutation, un GET inmediato puede devolver datos stale (el attempt aparece como pendiente cuando ya está marcado skipped). Solución en el código:</p>
+<ul>
+  <li>El skip endpoint <strong>computa el nuevo nextShipDate localmente</strong> en lugar de re-fetchear, porque sabe qué attempt se marcó.</li>
+  <li>El plan endpoint tiene un re-poll con AbortController y timeout de 4s.</li>
+  <li>El FE arranca un re-poll silencioso de 60s tras un plan change.</li>
+</ul>
+
+<h3>6.4 Carácter "—" (em-dash) prohibido en todo el copy</h3>
+<p>Hard rule de marca: ningún copy de LIT (portal + emails + ads) puede llevar un em-dash. Usar coma o punto. Esto es una preferencia del founder y se ha mantenido consistente.</p>
+
+<h3>6.5 La ventana de cutoff es 24h, antes era 72h</h3>
+<p>Decidido el 2026-05-21: el operador interno necesita al menos 24h para procesar cambios antes del envío. Antes eran 72h, que bloqueaba demasiados cambios que sí se podían atender. Se aplica a skip, plan, address, extras.</p>
+
+<h3>6.6 Cancel es IMMEDIATE en Seal</h3>
+<p>El comportamiento por defecto de Seal cancel pone <code>cancelled_on</code> al instante, no después del último envío. El portal lo refleja en el copy de confirmación: <em>"Cancelación inmediata. No habrá más envíos ni cobros"</em>, excepto si el próximo envío está dentro de 24h y ya se ha procesado, en cuyo caso ese último sí sale.</p>
+
+<h3>6.7 Schema migration aplicada en prod</h3>
+<p>La constraint <code>cancellations_status_check</code> originalmente solo permitía <code>pending</code> y <code>confirmed</code>. Se añadió <code>committing</code> como estado intermedio (entre que se llama a Seal y se confirma el éxito) — pero la migration nunca se ejecutó hasta el 2026-05-21. Como resultado, durante semanas <strong>nadie podía cancelar</strong>. Ahora la migration vive en <code>database/migrations/</code> y el schema canónico se mantiene sincronizado.</p>
+
+<h3>6.8 El cliente JAMÁS ve <code>tracking.litsalt.com</code></h3>
+<p>Regla dura del portal: el cliente final no puede ver, en ningún momento, el portal de tracking antiguo. Todo el flujo de su cuenta vive dentro de <code>litsalt.com/apps/portal/*</code>. Si hay que cambiar método de pago, se hace por email. Si hay que cancelar, se hace en el takeover. Si hay un error, se muestra inline. El portal viejo "dejará de existir" para el cliente final.</p>
+</div>
+
+<!-- ─────────────── 7. BACKLOG ─────────────── -->
+<div class="page-content page-break">
+<h2><span class="num">07</span>Backlog y próximos pasos</h2>
+
+<h3>7.1 Fase 2 (post-launch)</h3>
+<table>
+  <thead><tr><th>Feature</th><th>Estado</th><th>Notas</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Collection</strong> (cartas)</td><td>Stub UI</td><td>Mini grid en Hub renderiza placeholders. Falta backend (drops_events, card unlocks).</td></tr>
+    <tr><td><strong>Drops automation</strong></td><td>Schema OK</td><td>Tablas listas (<code>drops_balances</code>, <code>drops_events</code>). Falta: trigger por box shipped, referral, monthly streak, etc.</td></tr>
+    <tr><td><strong>Inner Circle</strong> (tier reward)</td><td>Stub</td><td>TierPill aparece si <code>tier_earned</code>. Falta evento de earn + reward unlock.</td></tr>
+    <tr><td><strong>Flavor switcher</strong></td><td>Disabled</td><td>QA muestra "Próximamente". Activar cuando haya catálogo con &gt;1 sabor.</td></tr>
+    <tr><td><strong>Extras catalog</strong></td><td>API lista</td><td>Backend completo (POST /api/subscription/extras). UI marca como "Próximamente" hasta que Shopify tenga productos con tag <code>add-to-box</code>.</td></tr>
+    <tr><td><strong>The World</strong> (eventos)</td><td>Schema</td><td>Tablas events/moments/stories listas. Falta admin tool para crear contenido.</td></tr>
+    <tr><td><strong>Barcelona waitlist</strong></td><td>API lista</td><td>Endpoint funciona, falta UI en The World.</td></tr>
+  </tbody>
+</table>
+
+<h3>7.2 Hardening pendiente (de la auditoría)</h3>
+<p>La auditoría de seguridad del 2026-05-21 (documento separado en <code>docs/SECURITY_AUDIT_2026-05-21.md</code>) identificó 13 hallazgos críticos/altos. Los 3 más prioritarios:</p>
+<ol>
+  <li><strong>Stop the bleeding</strong>: quitar logs de tokens, dejar de devolver stack traces al cliente, mover <code>session_id</code> del query string al URL fragment en el handoff.</li>
+  <li><strong>Apretar ownership end-to-end</strong>: <code>verifyOwnershipFast</code> debe filtrar también por <code>seal_subscription_id</code>; validar <code>mainItemId ∈ sub.items</code> antes de remove; bloquear cambio de email desde el portal.</li>
+  <li><strong>Reparar la auth crypto</strong>: verificar id_token vía Shopify JWKS, validar timestamp de App Proxy (±60s), derivar keys separadas para HMAC y JWT state, fix logout para leer X-LIT-Session.</li>
+</ol>
+
+<h3>7.3 Mejoras de DX y ops</h3>
+<ul>
+  <li><strong>Rate limiting</strong> en mutations críticas (token bucket por customer).</li>
+  <li><strong>Dashboard ops</strong> para ver cancellations stuck en <code>committing</code> y resolverlas manualmente.</li>
+  <li><strong>Sentry o equivalent</strong> para tracking de errores en producción (hoy solo hay <code>console.log</code> a Vercel logs).</li>
+  <li><strong>E2E tests con Playwright</strong> para los flujos críticos (skip, plan change, cancel).</li>
+  <li><strong>Webhook log replay</strong> tool para reprocesar eventos Shopify/Seal que fallaron.</li>
+</ul>
+
+<h3>7.4 Tareas conocidas que el founder hará manualmente</h3>
+<ul>
+  <li>Cambiar el link del icono del header en el storefront de <code>/account</code> a <code>/apps/portal/mi-lit</code> (Juan lo hace en Shopify Liquid editor).</li>
+  <li>Cambiar el CTA del email de Order Confirmation de Shopify para que apunte al portal en vez de a <code>tracking.litsalt.com</code> (Vía B "stand-by").</li>
+  <li>Configurar el filtro de Klaviyo flow del welcome email para que solo dispare con pedidos de suscripción, no one-shot.</li>
+</ul>
+
+<div class="callout dark" style="margin-top: 10mm;">
+  <span class="label">En resumen</span>
+  El portal está vivo, los flujos críticos funcionan end-to-end, y el cliente puede gestionar su suscripción sin tocar el portal antiguo. Queda hardening de seguridad (priorizado en el doc anexo), Fase 2 de Collection/Drops/Inner Circle (schema listo, falta UI + triggers) y unas tareas operacionales del founder. La base es sólida para lanzar a clientes reales después del hardening.
+</div>
+
+<p class="footer-note">Documento generado el 2026-05-21. Fuente: branch <code>feat/master-spec-rewrite</code> commit <code>97837d6</code>. Para detalles de seguridad ver <code>docs/SECURITY_AUDIT_2026-05-21.md</code>. Para spec original ver <code>portal-cliente-web/lit-portal/MASTER_SPEC.md</code> (si existe en el repo).</p>
+</div>
+
+</body>
+</html>
