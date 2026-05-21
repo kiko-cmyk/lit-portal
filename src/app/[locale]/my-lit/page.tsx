@@ -22,6 +22,7 @@ import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref } from "@/lib/portal-link";
 import type {
   CustomerProfile,
@@ -34,28 +35,7 @@ import type {
 // en sessionStorage (se perdía al cerrar pestaña). Ahora en localStorage
 // con la fecha del próximo envío como expiry — el banner se queda
 // hasta que el siguiente envío salga, momento en el que ya no aplica.
-// Juan 2026-05-19.
-const JUST_SKIPPED_KEY = "lit:just-skipped";
-
-interface JustSkippedRecord {
-  until: string; // ISO ship date — banner se auto-limpia tras esto.
-}
-
-function readJustSkipped(): JustSkippedRecord | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(JUST_SKIPPED_KEY);
-    if (!raw) return null;
-    const rec = JSON.parse(raw) as JustSkippedRecord;
-    if (!rec.until || Date.now() > new Date(rec.until).getTime()) {
-      window.localStorage.removeItem(JUST_SKIPPED_KEY);
-      return null;
-    }
-    return rec;
-  } catch {
-    return null;
-  }
-}
+// Juan 2026-05-19. Helper extraído a @/lib/just-skipped 2026-05-21.
 
 // Window during which the Hub silently re-polls /api/hub/dashboard after a
 // plan change, waiting for Seal to finish regenerating billing_attempts.
@@ -160,6 +140,13 @@ export default function HubPage() {
   };
 
   const handlePlanUpdated = (updated: Subscription) => {
+    // Seal regenerates billing_attempts on every plan change, which wipes
+    // any previously-applied skip. The localStorage `justSkipped` flag would
+    // otherwise outlive the actual skip and lie to the customer (banner
+    // shown, but real Seal date is the non-skipped one). Clear it here.
+    // Juan 2026-05-21: this is exactly the bug that made him think a skip
+    // had been reverted after a plan change.
+    markSkipped(false);
     setData((prev) => {
       if (!prev) return prev;
       // Preserve the previous nextShipDate when Seal hasn't finished
@@ -187,14 +174,10 @@ export default function HubPage() {
 
   const markSkipped = (next: boolean, until?: string | null) => {
     setJustSkipped(next);
-    if (typeof window === "undefined") return;
     if (next && until) {
-      window.localStorage.setItem(
-        JUST_SKIPPED_KEY,
-        JSON.stringify({ until } satisfies JustSkippedRecord),
-      );
+      writeJustSkipped(until);
     } else {
-      window.localStorage.removeItem(JUST_SKIPPED_KEY);
+      clearJustSkipped();
     }
   };
 

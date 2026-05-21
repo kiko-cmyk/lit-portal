@@ -22,6 +22,7 @@ import {
   useLangValue,
   usePageTitle,
 } from "@/lib/i18n";
+import { clearJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import type {
   CustomerProfile,
   OrderHistoryItem,
@@ -319,16 +320,25 @@ export default function AccountPage() {
         <PlanOverlay
           subscription={subscription}
           onClose={() => setPlanOpen(false)}
-          onUpdated={(updated) => setSubscription(updated)}
+          onUpdated={(updated) => {
+            // Plan change wipes Seal's billing_attempts → the localStorage
+            // skip flag would lie about an undoable skip that no longer
+            // exists. Same fix as in the Hub. Juan 2026-05-21.
+            clearJustSkipped();
+            setSubscription(updated);
+          }}
         />
       )}
       {skipOpen && subscription && (
         <SkipOverlay
           subscription={subscription}
           onClose={() => setSkipOpen(false)}
-          onSkipped={(newDate) =>
-            setSubscription({ ...subscription, nextShipDate: newDate })
-          }
+          onSkipped={(newDate) => {
+            // Persist the "just-skipped" flag so the Hub picks it up next
+            // time the customer navigates back (banner + skipped hero).
+            writeJustSkipped(newDate);
+            setSubscription({ ...subscription, nextShipDate: newDate });
+          }}
         />
       )}
       {addressOpen && subscription && (

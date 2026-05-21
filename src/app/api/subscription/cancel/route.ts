@@ -1,17 +1,50 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { awardDrops } from "@/lib/drops";
 import { klaviyo } from "@/lib/klaviyo";
-import { seal } from "@/lib/seal";
+import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CancelStep1Response, CancelStep4Response, CancellationReason } from "@/lib/types";
+
+/**
+ * Confirms the FE-supplied seal subscription id actually belongs to this
+ * customer per the Supabase mapping. ~50 ms vs the 5-10 s Seal scan.
+ * Returns false on any miss/error so the caller falls back to the slow
+ * pagination path.
+ */
+async function verifyOwnershipFast(
+  sealSubscriptionId: number,
+  shopifyCustomerId: string,
+): Promise<boolean> {
+  try {
+    const sb = supabaseAdmin();
+    const { data } = await sb
+      .from("subscriptions")
+      .select("seal_subscription_id")
+      .eq("customer_id", shopifyCustomerId)
+      .maybeSingle();
+    if (!data?.seal_subscription_id) return false;
+    return String(data.seal_subscription_id) === String(sealSubscriptionId);
+  } catch {
+    return false;
+  }
+}
 
 interface CancelBody {
   step: 1 | 2 | 3 | 4;
   primaryReason?: CancellationReason;
   freeText?: string;
   effectiveAfterNextDelivery?: boolean;
+  /**
+   * Fast-path: when the FE passes the seal subscription id from its cached
+   * dashboard state, skip the 33-page Seal pagination scan that used to
+   * dominate this route. We still verify ownership against Supabase.
+   * Reason: step 4 timed out on Vercel (Juan 2026-05-21 incident — HTTP 500
+   * + storefront HTML fallback because Seal scan + cancel exceeded the
+   * function budget on a busy account).
+   */
+  sealSubscriptionId?: number | string;
 }
 
 const HOLD_DAYS = 90;
@@ -130,13 +163,35 @@ export const POST = withCustomer(async (req, ctx) => {
   if (body.step === 4) {
     const url = new URL(req.url);
     const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
-    const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
-    if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
-    const subs = await seal.getSubscriptionsByEmail(email);
-    const sub = subs.find((s) => s.status === "ACTIVE");
-    if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
-    assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step4");
+    // Fast-path: id-from-body + Supabase ownership check + targeted Seal GET.
+    // Slow-path (fallback): paginated email scan, kept for older clients.
+    // Juan 2026-05-21: fast-path added to keep step 4 inside Vercel's budget.
+    let sub: SealSubscription | null = null;
+    let email: string | null = null;
+    if (body.sealSubscriptionId !== undefined) {
+      const owns = await verifyOwnershipFast(
+        Number(body.sealSubscriptionId),
+        ctx.customerId,
+      );
+      if (owns) {
+        sub = await seal.getSubscriptionById(Number(body.sealSubscriptionId));
+        if (sub) {
+          email = sub.email ?? null;
+          assertSubscriptionBelongsToCustomer(sub, email ?? "", "subscription/cancel:step4-fast");
+        }
+      }
+    }
+    if (!sub) {
+      email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
+      if (!email) throw new ApiHttpError(404, "customer_not_found", "");
+      const subs = await seal.getSubscriptionsByEmail(email);
+      sub = subs.find((s) => s.status === "ACTIVE") ?? null;
+      if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
+      assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step4");
+    }
+    if (!email) email = sub.email ?? null;
+    if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
     // 1. Read current state
     const { data: prefs } = await sb

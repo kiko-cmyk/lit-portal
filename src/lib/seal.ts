@@ -165,6 +165,37 @@ class SealClient {
     return matches;
   }
 
+  /**
+   * Fetch a single subscription by id WITHOUT pagination.
+   *
+   * Re-discovered 2026-05-21: the SINGULAR `/subscription?id=X` endpoint
+   * (not the plural `/subscriptions` list) honours the `id` query param
+   * and returns just that subscription's payload. Costs ~1 round-trip
+   * instead of the 33-page scan `getSubscription` does. Use this when
+   * you already know the id (fast-path callers from /plan, /cancel, etc).
+   */
+  async getSubscriptionById(id: number, signal?: AbortSignal): Promise<SealSubscription | null> {
+    const params = new URLSearchParams({
+      id: String(id),
+      "with-items": "true",
+      "with-billing-attempts": "true",
+    });
+    try {
+      const res = await this.req<{ success?: boolean; payload?: SealSubscription }>(
+        `/subscription?${params.toString()}`,
+        { signal },
+      );
+      const sub = res?.payload;
+      if (!sub || !sub.id) return null;
+      // Defensive: ensure Seal actually returned the requested one.
+      if (Number(sub.id) !== Number(id)) return null;
+      return sub;
+    } catch (e) {
+      if ((e as { name?: string }).name === "AbortError") throw e;
+      return null;
+    }
+  }
+
   async getSubscription(id: number, signal?: AbortSignal): Promise<SealSubscription | null> {
     // Seal silently ignores `?id=` (verified 2026-04-27, re-confirmed
     // 2026-05-14 — passing id=12635109 returned the first sub of page 1
@@ -260,17 +291,23 @@ class SealClient {
     time = "13:00",
     timezone = "+00:00",
   ): Promise<void> {
-    await this.req("/subscription-billing-attempt", {
-      method: "PUT",
-      body: JSON.stringify({
-        action: "reschedule",
-        id: attemptId,
-        subscription_id: subscriptionId,
-        date,
-        time,
-        timezone,
-      }),
-    });
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription-billing-attempt",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          action: "reschedule",
+          id: attemptId,
+          subscription_id: subscriptionId,
+          date,
+          time,
+          timezone,
+        }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal reschedule rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
   }
 
   /**
@@ -373,19 +410,37 @@ class SealClient {
   /**
    * Skip a specific billing attempt.
    * Per reference_seal_api.md: action="skip" needs id + subscription_id.
+   *
+   * Seal returns HTTP 200 with `{success: false, message}` when it rejects
+   * the action (same pattern as `editSubscription`). We must surface that
+   * as an error — otherwise the portal claims "Saltado" while Seal didn't
+   * actually skip anything (Juan 2026-05-21 audit, after a skip apparently
+   * vanished post-plan-change).
    */
   async skipBillingAttempt(attemptId: number, subscriptionId: number): Promise<void> {
-    await this.req("/subscription-billing-attempt", {
-      method: "PUT",
-      body: JSON.stringify({ action: "skip", id: attemptId, subscription_id: subscriptionId }),
-    });
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription-billing-attempt",
+      {
+        method: "PUT",
+        body: JSON.stringify({ action: "skip", id: attemptId, subscription_id: subscriptionId }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal skip rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
   }
 
   async unskipBillingAttempt(attemptId: number, subscriptionId: number): Promise<void> {
-    await this.req("/subscription-billing-attempt", {
-      method: "PUT",
-      body: JSON.stringify({ action: "unskip", id: attemptId, subscription_id: subscriptionId }),
-    });
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription-billing-attempt",
+      {
+        method: "PUT",
+        body: JSON.stringify({ action: "unskip", id: attemptId, subscription_id: subscriptionId }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal unskip rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
   }
 
   /**
@@ -433,10 +488,16 @@ class SealClient {
    * with explicit user confirmation.
    */
   async cancelSubscription(subscriptionId: number, _opts: { reason?: string } = {}): Promise<void> {
-    await this.req("/subscription", {
-      method: "PUT",
-      body: JSON.stringify({ action: "cancel", id: subscriptionId }),
-    });
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({ action: "cancel", id: subscriptionId }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal cancel rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
   }
 
   /**
@@ -445,10 +506,16 @@ class SealClient {
    * after reactivate; populated within seconds).
    */
   async reactivateSubscription(subscriptionId: number): Promise<void> {
-    await this.req("/subscription", {
-      method: "PUT",
-      body: JSON.stringify({ action: "reactivate", id: subscriptionId }),
-    });
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({ action: "reactivate", id: subscriptionId }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal reactivate rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
   }
 
   /**

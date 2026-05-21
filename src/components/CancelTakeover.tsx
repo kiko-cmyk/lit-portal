@@ -115,6 +115,10 @@ export function CancelTakeover({
                   primaryReason: reason,
                   freeText,
                   effectiveAfterNextDelivery: true,
+                  // Fast-path: lets the backend skip the 33-page Seal
+                  // pagination scan that caused the step 4 timeout
+                  // (Juan 2026-05-21).
+                  sealSubscriptionId: subscription?.sealSubscriptionId,
                 }),
               });
               setDone(res);
@@ -458,14 +462,35 @@ function Step4({
             try {
               await onConfirm();
             } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e);
+              const err = e as { code?: string; status?: number; message?: string };
               console.error("[cancel-step4] failed", e);
-              setError(
-                t({
-                  en: `Couldn't cancel: ${msg}. Try again or contact us.`,
-                  es: `No se pudo cancelar: ${msg}. Inténtalo de nuevo o escríbenos.`,
-                }),
-              );
+              // Map the few error codes we actually care about to friendly
+              // localized copy. Anything else falls back to a generic
+              // retry message — we never dump the raw English error text
+              // (e.g. "The service didn't respond in time…") into the
+              // Spanish UI, which is what happened pre-2026-05-21.
+              if (err.code === "gateway_timeout" || err.status === 504) {
+                setError(
+                  t({
+                    en: "The service is taking longer than usual. Wait a moment and try again.",
+                    es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
+                  }),
+                );
+              } else if (err.code === "seal_cancel_failed") {
+                setError(
+                  t({
+                    en: "Couldn't cancel right now. Try again in a moment or contact us.",
+                    es: "No se pudo cancelar ahora. Inténtalo de nuevo en un momento o escríbenos.",
+                  }),
+                );
+              } else {
+                setError(
+                  t({
+                    en: "Couldn't cancel. Try again or contact us.",
+                    es: "No se pudo cancelar. Inténtalo de nuevo o escríbenos.",
+                  }),
+                );
+              }
             } finally {
               setBusy(false);
             }
