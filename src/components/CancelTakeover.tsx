@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { T, useLang, useLangValue } from "@/lib/i18n";
+import { T, useLang } from "@/lib/i18n";
 import type {
   CancelStep1Response,
   CancelStep4Response,
@@ -379,10 +379,8 @@ function Step4({
   onBack: () => void;
 }) {
   const t = useLang();
-  const lang = useLangValue();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dateLocale = lang === "es" ? "es-ES" : "en-US";
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
@@ -393,24 +391,19 @@ function Step4({
       </h1>
       <p className="mt-6 text-sm opacity-70 max-w-md">
         <T
-          en="Your last shipment still goes out. No more charges after that."
-          es="Tu próximo envío saldrá igualmente. No habrá más cobros después."
+          en="Cancellation is immediate. No more shipments and no more charges."
+          es="La cancelación es inmediata. No habrá más envíos ni cobros."
         />
       </p>
       <div className="mt-8 space-y-3 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5 text-sm">
         <Detail
-          label={t({ en: "Next delivery", es: "Próximo envío" })}
-          value={
-            subscription?.nextShipDate
-              ? new Date(subscription.nextShipDate).toLocaleDateString(dateLocale, {
-                  weekday: "long",
-                  day: "numeric",
-                  month: "long",
-                })
-              : "—"
-          }
+          label={t({ en: "Status", es: "Estado" })}
+          value={t({ en: "Cancelled on confirm", es: "Cancelada al confirmar" })}
         />
-        <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
+        <Detail
+          label={t({ en: "Next billing", es: "Próximo cobro" })}
+          value={t({ en: "None", es: "Ninguno" })}
+        />
       </div>
       {error && (
         <div className="mt-4 rounded-sm bg-red-50/10 border border-[color:var(--color-danger)]/40 px-4 py-3 text-xs text-[#ff9b9b]">
