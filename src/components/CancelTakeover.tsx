@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api-client";
+import { api, clearSessionToken } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import type {
   CancelStep1Response,
@@ -508,7 +508,27 @@ function Step4({
   );
 }
 
-function DoneState({ onClose }: { done: CancelStep4Response; onClose: () => void }) {
+function DoneState({ onClose: _onClose }: { done: CancelStep4Response; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  // After cancel, "Back to LIT" should DROP the user out of the portal
+  // entirely, not just close the takeover — otherwise they land back on
+  // /cuenta with stale state showing the sub still active (Juan
+  // 2026-05-21 incident). Flow: clear our session, best-effort logout
+  // on backend, then hard redirect to the LIT homepage.
+  const handleExit = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+    } catch (e) {
+      console.warn("[cancel-done] logout failed, exiting anyway", e);
+    } finally {
+      clearSessionToken();
+      window.location.replace("https://litsalt.com/");
+    }
+  };
+
   return (
     <>
       <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-7xl">
@@ -526,10 +546,15 @@ function DoneState({ onClose }: { done: CancelStep4Response; onClose: () => void
       </p>
       <button
         type="button"
-        onClick={onClose}
-        className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+        onClick={handleExit}
+        disabled={busy}
+        className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
       >
-        <T en="Back to LIT" es="Volver a LIT" />
+        {busy ? (
+          <T en="Closing…" es="Cerrando…" />
+        ) : (
+          <T en="Back to LIT" es="Volver a LIT" />
+        )}
       </button>
     </>
   );
