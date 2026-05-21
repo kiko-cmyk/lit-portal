@@ -22,7 +22,7 @@ import {
   useLangValue,
   usePageTitle,
 } from "@/lib/i18n";
-import { clearJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
+import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import type {
   CustomerProfile,
   OrderHistoryItem,
@@ -41,6 +41,12 @@ export default function AccountPage() {
   const [planOpen, setPlanOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
+  // Mirror Mi LIT: an active skip drives the "Saltada" indicator next
+  // to the Skip QA + an undo affordance. Persisted in localStorage so
+  // it survives navigation between Mi LIT y Cuenta.
+  const [justSkipped, setJustSkipped] = useState<boolean>(
+    () => readJustSkipped() !== null,
+  );
   const t = useLang();
   const lang = useLangValue();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
@@ -91,6 +97,22 @@ export default function AccountPage() {
     .join("") || "L";
 
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
+
+  const handleUndoSkip = async () => {
+    if (!subscription) return;
+    try {
+      await api("/api/subscription/skip/undo", { method: "POST" });
+      // Re-pull canonical state. Seal's eventual consistency means we
+      // can't trust local state to be exact; the user wanted Hub-parity,
+      // so this mirrors Mi LIT's refetch-after-mutation pattern.
+      const fresh = await api<Subscription>("/api/subscription");
+      setSubscription(fresh);
+      clearJustSkipped();
+      setJustSkipped(false);
+    } catch (e) {
+      console.error("[account] undo skip failed", e);
+    }
+  };
 
   return (
     <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
@@ -162,7 +184,9 @@ export default function AccountPage() {
             icon={QAIcons.ChangePlan}
             label={t({ en: "Plan", es: "Plan" })}
             onClick={() => subscription && setPlanOpen(true)}
-            disabled={!subscription}
+            // Match Mi LIT: disable when within 24h of next ship so the
+            // user doesn't hit a backend cutoff_passed error.
+            disabled={!subscription || subscription.withinCutoff}
           />
           <CompactAction
             icon={QAIcons.Skip}
@@ -181,6 +205,31 @@ export default function AccountPage() {
             comingSoon
           />
         </section>
+
+        {justSkipped && subscription?.nextShipDate && (
+          <div className="mx-6 mb-5 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
+            <span className="text-[12px] text-[color:var(--color-lit-grey)]">
+              <T
+                en="You skipped the previous delivery. Next box ships on"
+                es="Saltaste la entrega anterior. La próxima sale el"
+              />{" "}
+              <strong>
+                {new Date(subscription.nextShipDate).toLocaleDateString(
+                  dateLocale,
+                  { day: "numeric", month: "long" },
+                )}
+              </strong>
+              .
+            </span>
+            <button
+              type="button"
+              onClick={handleUndoSkip}
+              className="text-[10px] font-extrabold uppercase tracking-[0.15em] underline"
+            >
+              <T en="Undo" es="Deshacer" />
+            </button>
+          </div>
+        )}
 
         {subscription && (
           <Section title={t({ en: "My subscription", es: "Mi suscripción" })}>
@@ -330,6 +379,7 @@ export default function AccountPage() {
             // skip flag would lie about an undoable skip that no longer
             // exists. Same fix as in the Hub. Juan 2026-05-21.
             clearJustSkipped();
+            setJustSkipped(false);
             setSubscription(updated);
           }}
         />
@@ -342,6 +392,7 @@ export default function AccountPage() {
             // Persist the "just-skipped" flag so the Hub picks it up next
             // time the customer navigates back (banner + skipped hero).
             writeJustSkipped(newDate);
+            setJustSkipped(true);
             setSubscription({ ...subscription, nextShipDate: newDate });
           }}
         />
