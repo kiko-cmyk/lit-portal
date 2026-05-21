@@ -35,7 +35,13 @@ export function SkipOverlay({
     setBusy(true);
     setError(null);
     try {
-      const res = await api<SkipResponse>("/api/subscription/skip", { method: "POST" });
+      const res = await api<SkipResponse>("/api/subscription/skip", {
+        method: "POST",
+        // Fast-path: lets the backend skip the 33-page Seal scan that
+        // bumped into proxy timeouts on cold starts (Juan 2026-05-21
+        // reported first-click skip from Cuenta failing, second click ok).
+        body: JSON.stringify({ sealSubscriptionId: subscription.sealSubscriptionId }),
+      });
       setDone(res);
       onSkipped(res.newNextShipDate);
     } catch (e) {

@@ -1,27 +1,55 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
-import { getNextBillingAttempt, seal } from "@/lib/seal";
+import { getNextBillingAttempt, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import type { SkipResponse } from "@/lib/types";
 
 // POST /apps/portal/api/subscription/skip
 // Skips the next pending billing attempt of the customer's active subscription.
 // Enforces 24h cutoff. After skip, the new "next" becomes the attempt after
 // the skipped one — surfaced in newNextShipDate.
+//
+// Body (optional): { sealSubscriptionId } — when present, takes the fast-path
+// (Supabase ownership + targeted Seal GET) and skips the 33-page pagination
+// scan. Added 2026-05-21 after Juan reported first-click skip from Cuenta
+// failing on cold start — the slow path was bumping into Vercel/proxy timeouts.
 export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
-  const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
-  if (!email) {
-    throw new ApiHttpError(404, "customer_not_found", `No email for Shopify customer ${ctx.customerId}`);
+
+  const body = (await req.json().catch(() => ({}))) as {
+    sealSubscriptionId?: number | string;
+  };
+
+  let sub: SealSubscription | null = null;
+  let email: string | null = null;
+
+  if (body.sealSubscriptionId !== undefined) {
+    const owns = await verifyOwnershipFast(Number(body.sealSubscriptionId), ctx.customerId);
+    if (owns) {
+      sub = await seal.getSubscriptionById(Number(body.sealSubscriptionId));
+      if (sub) {
+        email = sub.email ?? null;
+        assertSubscriptionBelongsToCustomer(sub, email ?? "", "subscription/skip:fast");
+      }
+    }
   }
 
-  const subs = await seal.getSubscriptionsByEmail(email);
-  const sub = subs.find((s) => s.status === "ACTIVE");
-  if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active subscription for ${email}`);
-  assertSubscriptionBelongsToCustomer(sub, email, "subscription/skip");
+  if (!sub) {
+    email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
+    if (!email) {
+      throw new ApiHttpError(404, "customer_not_found", `No email for Shopify customer ${ctx.customerId}`);
+    }
+    const subs = await seal.getSubscriptionsByEmail(email);
+    sub = subs.find((s) => s.status === "ACTIVE") ?? null;
+    if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active subscription for ${email}`);
+    assertSubscriptionBelongsToCustomer(sub, email, "subscription/skip");
+  }
+  if (!email) email = sub.email ?? null;
+  if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
   const next = getNextBillingAttempt(sub);
   if (!next) throw new ApiHttpError(400, "no_pending_attempt", "Subscription has no upcoming billing attempt");

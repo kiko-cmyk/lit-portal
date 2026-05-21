@@ -4,32 +4,9 @@ import { klaviyo } from "@/lib/klaviyo";
 import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CancelStep1Response, CancelStep4Response, CancellationReason } from "@/lib/types";
-
-/**
- * Confirms the FE-supplied seal subscription id actually belongs to this
- * customer per the Supabase mapping. ~50 ms vs the 5-10 s Seal scan.
- * Returns false on any miss/error so the caller falls back to the slow
- * pagination path.
- */
-async function verifyOwnershipFast(
-  sealSubscriptionId: number,
-  shopifyCustomerId: string,
-): Promise<boolean> {
-  try {
-    const sb = supabaseAdmin();
-    const { data } = await sb
-      .from("subscriptions")
-      .select("seal_subscription_id")
-      .eq("customer_id", shopifyCustomerId)
-      .maybeSingle();
-    if (!data?.seal_subscription_id) return false;
-    return String(data.seal_subscription_id) === String(sealSubscriptionId);
-  } catch {
-    return false;
-  }
-}
 
 interface CancelBody {
   step: 1 | 2 | 3 | 4;
