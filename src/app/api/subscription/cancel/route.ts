@@ -138,6 +138,47 @@ export const POST = withCustomer(async (req, ctx) => {
 
   // ───── Step 4: FINAL COMMIT ─────
   if (body.step === 4) {
+    // IDEMPOTENCY CHECK (audit 2026-05-21):
+    // If there's a recent (<10 min) cancellation row for this customer
+    // already in `committing` or `confirmed` status, return that row's
+    // cached response instead of re-running Seal + DB writes. Prevents:
+    //   - double-increment of cancel_count
+    //   - double-fire of Klaviyo `subscription_cancelled` event
+    //   - double drops-reset on second+ cancel
+    // Typical trigger: FE times out waiting for Seal but the cancel
+    // actually went through (Vercel returned 504, customer retries).
+    const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
+    const { data: recentCancel } = await sb
+      .from("cancellations")
+      .select("id, status, effective_last_ship_date, drops_release_at, cancel_count_at_event, started_at")
+      .eq("customer_id", ctx.customerId)
+      .in("status", ["committing", "confirmed"])
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (
+      recentCancel &&
+      new Date(recentCancel.started_at).getTime() > Date.now() - IDEMPOTENCY_WINDOW_MS
+    ) {
+      console.log("[cancel] idempotency short-circuit", {
+        customerId: ctx.customerId,
+        cancellationId: recentCancel.id,
+        status: recentCancel.status,
+      });
+      const cached: CancelStep4Response = {
+        cancelled: true,
+        // effective_last_ship_date is a `date` column → no time component.
+        // Append midnight UTC for the FE Date() parser to be happy.
+        lastShipDate: recentCancel.effective_last_ship_date
+          ? `${recentCancel.effective_last_ship_date}T00:00:00.000Z`
+          : "",
+        dropsHeldUntil: (recentCancel.drops_release_at as string | null) ?? null,
+        cardsKept: 0,
+        cancelCount: recentCancel.cancel_count_at_event ?? 0,
+      };
+      return cached;
+    }
+
     const url = new URL(req.url);
     const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
 
@@ -276,9 +317,13 @@ export const POST = withCustomer(async (req, ctx) => {
         .eq("id", cancellationId);
     }
 
-    // 6. Trigger Klaviyo event — flows can react with confirmation + schedule win-back
+    // 6. Trigger Klaviyo event — flows can react with confirmation + schedule win-back.
+    // cancellationId pasa como property para que el flow pueda dedupear si
+    // el evento llega dos veces (e.g. retry de la mutation): el flow puede
+    // chequear "ya he disparado para este cancellationId? ignora".
     klaviyo
       .trackEvent("subscription_cancelled", email, {
+        cancellationId,
         primaryReason: body.primaryReason,
         freeText: body.freeText,
         cancelCount: cancelCount + 1,

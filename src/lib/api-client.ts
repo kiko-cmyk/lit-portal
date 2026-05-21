@@ -91,6 +91,16 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
         : (text ? text.slice(0, 240) : `HTTP ${res.status}`));
 
     console.warn(`[api] ${path} → ${res.status}`, parsed ?? text);
+
+    // Session expired / invalid: clear our localStorage token so the
+    // customer can re-login cleanly instead of looping on a dead bearer.
+    // The consuming UI still receives the error so it can route to the
+    // login screen (LoginScreen renders on subscription_not_found AND
+    // unauthorized, plus the page itself handles 401-ish codes).
+    if (code === "session_expired" || code === "session_invalid") {
+      clearSessionToken();
+    }
+
     throw new ApiClientError(res.status, code, message);
   }
   return res.json() as Promise<T>;

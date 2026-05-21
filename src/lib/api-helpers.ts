@@ -47,6 +47,19 @@ export class ApiHttpError extends Error {
  *     `shop` may be empty if we authed via Bearer)
  *   - routeCtx: framework-provided dynamic route context
  */
+/**
+ * Distinct auth-failure modes so the FE can react differently. Pre-2026-05-22
+ * we just returned 'unauthorized' for everything, which meant the FE never
+ * knew when to clear localStorage — users with an expired bearer would loop
+ * on the same dead token until they manually logged out.
+ */
+class SessionExpiredError extends Error {
+  constructor() { super("Session expired"); this.name = "SessionExpiredError"; }
+}
+class SessionInvalidError extends Error {
+  constructor() { super("Session not found"); this.name = "SessionInvalidError"; }
+}
+
 export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
   return async (req: NextRequest, routeCtx?: RouteContext<P>): Promise<NextResponse> => {
     try {
@@ -54,6 +67,9 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
       let customerId: string | null = appProxy.customerId;
       let authMode: "app_proxy" | "bearer" | null =
         appProxy.customerId ? "app_proxy" : null;
+      // Track auth failures with bearer so we can return a precise error
+      // code (FE clears localStorage on session_expired/session_invalid).
+      let bearerFailure: "expired" | "invalid" | null = null;
 
       if (!customerId && bearerToken) {
         const sb = supabaseAdmin();
@@ -73,15 +89,16 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
               .eq("session_id", bearerToken)
               .then(() => undefined);
           } else {
-            console.log("[withCustomer] bearer session expired", {
-              session: bearerToken.slice(0, 8),
-              expired_at: data.expires_at,
-            });
+            bearerFailure = "expired";
           }
+        } else {
+          bearerFailure = "invalid";
         }
       }
 
       if (!customerId) {
+        if (bearerFailure === "expired") throw new SessionExpiredError();
+        if (bearerFailure === "invalid") throw new SessionInvalidError();
         throw new AppProxyAuthError("Customer not logged in");
       }
 
@@ -91,23 +108,44 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
         pathPrefix: appProxy.pathPrefix,
         timestamp: appProxy.timestamp,
       };
+      // PII sweep: no `email` in the happy path. customerId is needed for
+      // tracing; bearer token prefix only in the failure path below.
       console.log(
         `[withCustomer] path=${req.nextUrl.pathname} customerId=${customerId} auth=${authMode}`,
       );
       const result = await handler(req, ctx, routeCtx);
       return NextResponse.json(result);
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        return NextResponse.json(
+          { error: "session_expired", message: "Session expired, please log in again" },
+          { status: 401 },
+        );
+      }
+      if (err instanceof SessionInvalidError) {
+        return NextResponse.json(
+          { error: "session_invalid", message: "Session not recognised, please log in again" },
+          { status: 401 },
+        );
+      }
       if (err instanceof AppProxyAuthError) {
         return NextResponse.json({ error: "unauthorized", message: err.message }, { status: 401 });
       }
       if (err instanceof ApiHttpError) {
         return NextResponse.json({ error: err.code, message: err.message }, { status: err.status });
       }
-      const message = err instanceof Error ? err.message : "Unknown error";
+      // Internal error: full detail to the server log only, generic to the
+      // client. Pre-2026-05-22 we returned `message` + stack frames in the
+      // JSON, exposing Supabase column names and Seal internals. The audit
+      // flagged this; now we strip both unless dev mode.
+      const isDev = process.env.NODE_ENV !== "production";
+      const internalMsg = err instanceof Error ? err.message : "Unknown error";
       const stack = err instanceof Error ? err.stack : undefined;
-      console.error("[api-error]", err);
+      console.error("[api-error]", { path: req.nextUrl.pathname, msg: internalMsg, stack });
       return NextResponse.json(
-        { error: "internal_error", message, stack: stack?.split("\n").slice(0, 8) },
+        isDev
+          ? { error: "internal_error", message: internalMsg, stack: stack?.split("\n").slice(0, 8) }
+          : { error: "internal_error", message: "Something went wrong. Please try again." },
         { status: 500 },
       );
     }

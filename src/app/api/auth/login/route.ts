@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { isSafeRelativePath } from "@/lib/safe-path";
 
 /**
  * GET /apps/portal/api/auth/login
@@ -115,9 +116,3 @@ function base64UrlEncode(buf: Buffer): string {
     .replace(/=+$/, "");
 }
 
-function isSafeRelativePath(p: string): boolean {
-  if (!p.startsWith("/")) return false;
-  if (p.startsWith("//")) return false;
-  if (p.includes("://")) return false;
-  return true;
-}

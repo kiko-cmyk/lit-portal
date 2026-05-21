@@ -181,7 +181,7 @@ export default function HubPage() {
     }
   };
 
-  if (error === "unauthorized") return <LoginScreen />;
+  if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
   if (error === "subscription_not_found") return <EmptyState />;
   if (error) return <ErrorState code={error} />;
   if (!data) return <LoadingState />;

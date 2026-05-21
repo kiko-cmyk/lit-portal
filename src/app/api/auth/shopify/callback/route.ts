@@ -90,22 +90,26 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const json = JSON.parse(body) as { access_token: string; scope: string };
 
-  // Token is logged server-side only. The installer (typically Juan or a
-  // partner) needs to read the Vercel log and copy it into SHOPIFY_ADMIN_TOKEN.
-  // This stays in-team because audit logs are admin-only on Vercel.
+  // Audit 2026-05-21: we used to `console.log` the access_token to Vercel
+  // logs so the operator could copy it into SHOPIFY_ADMIN_TOKEN. That
+  // exposed the shpat_ token to anyone with log-read access (incl. log
+  // shippers, ex-staff with retained access, future support agents). Now
+  // we return the token ONCE in the JSON response body — only the
+  // operator browser that completed the OAuth install sees it, and the
+  // page is read once and dismissed. Nothing persists in logs.
   console.log(
     `[auth-callback] OAuth complete shop=${shop} app=${useAdminApp ? "admin" : "v3"} scope=${json.scope}`,
   );
-  console.log(`[auth-callback] access_token (one-time, copy to Vercel env): ${json.access_token}`);
 
   return NextResponse.json({
     success: true,
     shop,
     matched_app: useAdminApp ? "lit-portal-admin" : "lit-portal-v3",
     scope: json.scope,
+    access_token: json.access_token, // one-time display in the operator's browser
     instructions:
-      "Token captured server-side. An admin must check Vercel function logs " +
-      "for the access_token, copy it into SHOPIFY_ADMIN_TOKEN env, and redeploy.",
+      "Copy the access_token below into Vercel env SHOPIFY_ADMIN_TOKEN and redeploy. " +
+      "This token will NOT be retrievable again — save it now.",
   });
 }
 

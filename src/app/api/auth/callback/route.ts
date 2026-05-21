@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { isSafeRelativePath } from "@/lib/safe-path";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -175,9 +176,10 @@ export async function GET(req: NextRequest) {
   handoff.searchParams.set("s", sessionId);
   handoff.searchParams.set("to", safeReturn);
 
+  // PII sweep 2026-05-21: don't log email or session_id prefix in the
+  // happy path. customerId is needed for tracing, expiry for debugging.
   console.log("[oauth-callback] session issued", {
     customerId,
-    email: customerEmail,
     expires: expiresAt.toISOString(),
   });
 
@@ -251,9 +253,3 @@ function base64UrlEncode(buf: Buffer): string {
     .replace(/=+$/, "");
 }
 
-function isSafeRelativePath(p: string): boolean {
-  if (!p.startsWith("/")) return false;
-  if (p.startsWith("//")) return false;
-  if (p.includes("://")) return false;
-  return true;
-}

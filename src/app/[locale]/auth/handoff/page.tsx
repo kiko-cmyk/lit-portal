@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { T } from "@/lib/i18n";
+import { isSafeRelativePath } from "@/lib/safe-path";
 
 /**
  * /[locale]/auth/handoff?s=<session_id>&to=<return_path>
@@ -48,9 +49,3 @@ export default function AuthHandoffPage() {
   );
 }
 
-function isSafeRelativePath(p: string): boolean {
-  if (!p.startsWith("/")) return false;
-  if (p.startsWith("//")) return false;
-  if (p.includes("://")) return false;
-  return true;
-}

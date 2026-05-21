@@ -30,11 +30,22 @@ interface LogoutResponse {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<LogoutResponse>> {
-  const auth = req.headers.get("authorization");
-  const sessionId =
-    auth && auth.toLowerCase().startsWith("bearer ")
-      ? auth.slice(7).trim() || null
-      : null;
+  // Read X-LIT-Session first (the active path — the FE moved to this header
+  // on 2026-05-21 because Shopify App Proxy intercepts Authorization on
+  // POST/PATCH/DELETE). Fall back to Authorization: Bearer only for
+  // back-compat. Pre-fix this was Bearer-only, which meant the FE-issued
+  // X-LIT-Session never reached the lookup → logout was a no-op and
+  // sessions lived their full 30d (now 14d) TTL even after the user
+  // clicked "Cerrar sesión".
+  const custom = req.headers.get("x-lit-session")?.trim();
+  let sessionId: string | null = custom || null;
+  if (!sessionId) {
+    const auth = req.headers.get("authorization");
+    sessionId =
+      auth && auth.toLowerCase().startsWith("bearer ")
+        ? auth.slice(7).trim() || null
+        : null;
+  }
 
   let idToken: string | null = null;
   if (sessionId) {

@@ -69,7 +69,7 @@ export default function AccountPage() {
       .catch(() => setOrders([]));
   }, []);
 
-  if (error === "unauthorized") return <LoginScreen />;
+  if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
   if (error) {
     return (
       <main className="zone-cream flex flex-1 items-center justify-center p-8 text-center">
