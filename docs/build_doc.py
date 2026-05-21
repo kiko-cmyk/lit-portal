@@ -1221,8 +1221,7 @@ prefix  = <span class="y">"apps"</span></pre>
   <img src="__LOGO__" style="width: 40mm; height: 40mm; object-fit: contain; margin-bottom: 22mm;" alt="LIT">
   <div style="font-family: 'Barlow Condensed', sans-serif; font-size: 10pt; font-weight: 700; letter-spacing: 0.32em; text-transform: uppercase; color: var(--yellow); margin-bottom: 14px;">Fin del documento</div>
   <h1 style="font-family: 'Barlow Condensed', sans-serif; font-size: 44pt; font-weight: 900; line-height: 0.95; letter-spacing: -0.015em; text-transform: uppercase; color: var(--white); margin-bottom: 12mm;">Gracias por leer<span style="color: var(--yellow);">.</span></h1>
-  <p style="font-size: 12pt; font-weight: 300; color: rgba(255,255,255,0.7); max-width: 130mm;">Para detalles de seguridad ver <code style="background:rgba(255,255,255,0.1); color: var(--yellow); padding: 2px 8px; border-radius: 4px; font-size: 10pt;">docs/SECURITY_AUDIT_2026-05-21.md</code> en el repo.</p>
-  <div style="width: 60px; height: 3px; background: var(--yellow); margin: 22mm 0 6mm;"></div>
+  <div style="width: 60px; height: 3px; background: var(--yellow); margin: 6mm 0;"></div>
   <div style="font-family: 'Barlow Condensed', sans-serif; font-size: 8pt; font-weight: 700; letter-spacing: 0.3em; text-transform: uppercase; color: rgba(255,255,255,0.5);">PORTAL LIT · DOC V1.0 · 21 · 05 · 2026</div>
 </div>
 
