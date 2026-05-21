@@ -46,16 +46,19 @@ export function clearSessionToken() {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${BASE}${withDevParams(path)}`;
   // Attach our own session token (issued after Customer Account API
-  // OAuth) as a Bearer credential. The backend's `withCustomer`
-  // middleware accepts EITHER this bearer token OR the legacy App
-  // Proxy `logged_in_customer_id`. Sending both is fine — backend
-  // prefers App Proxy when both are valid.
+  // OAuth). We send it as `X-LIT-Session`, NOT `Authorization: Bearer`:
+  // Shopify App Proxy intercepts `Authorization` on POST/PATCH/DELETE
+  // and refuses to forward the request to Vercel (returns the
+  // storefront 500 HTML instead). Verified 2026-05-21 against
+  // /api/subscription/cancel — GET+Bearer reached Vercel, POST+Bearer
+  // never did. Custom X-* headers pass through cleanly.
+  // The backend `withCustomer` reads either header for back-compat.
   const sessionToken = getSessionToken();
   const res = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      ...(sessionToken ? { "X-LIT-Session": sessionToken } : {}),
       ...(init.headers ?? {}),
     },
   });

@@ -107,18 +107,21 @@ export function requireCustomer(req: NextRequest): AppProxyContext & { customerI
  *      path — works when the customer logged in via /account/login and
  *      has a storefront session cookie).
  *
- *   2. Bearer token in `Authorization` header (new path — works when
- *      the customer logged in via our `/api/auth/login` Customer
- *      Account API OAuth flow, which doesn't establish a storefront
- *      session but issues an opaque session_id we stored in Supabase).
+ *   2. Session token from our Customer Account API OAuth flow. Accepted
+ *      via TWO headers:
+ *        - `X-LIT-Session: <token>` (preferred)
+ *        - `Authorization: Bearer <token>` (legacy)
  *
- * For the Bearer path, the caller (withCustomer) must do the Supabase
+ *      Why two? Shopify App Proxy intercepts `Authorization` on
+ *      POST/PATCH/DELETE and returns the storefront 500 page instead
+ *      of forwarding (verified 2026-05-21). Custom `X-*` headers pass
+ *      through cleanly. We keep Authorization for backwards-compat
+ *      and for the GET cases where it still works.
+ *
+ * For the bearer path, the caller (withCustomer) must do the Supabase
  * lookup — this function just returns the parsed token. We keep DB
  * access OUT of shopify-app-proxy to avoid a circular Supabase
  * dependency on this module.
- *
- * Returns `null` for the token if no Bearer header is present so the
- * caller can decide: 401 if both fail, accept either if one succeeds.
  */
 export function parseAuthRequest(req: NextRequest): {
   appProxy: AppProxyContext;
@@ -136,11 +139,17 @@ export function parseAuthRequest(req: NextRequest): {
       timestamp: 0,
     };
   }
-  const auth = req.headers.get("authorization");
-  const bearerToken =
-    auth && auth.toLowerCase().startsWith("bearer ")
-      ? auth.slice(7).trim() || null
-      : null;
+  // Preferred path: custom header that survives App Proxy interception
+  // on POST/PATCH/DELETE.
+  const customSession = req.headers.get("x-lit-session")?.trim();
+  let bearerToken: string | null = customSession || null;
+  if (!bearerToken) {
+    const auth = req.headers.get("authorization");
+    bearerToken =
+      auth && auth.toLowerCase().startsWith("bearer ")
+        ? auth.slice(7).trim() || null
+        : null;
+  }
   return { appProxy, bearerToken };
 }
 
