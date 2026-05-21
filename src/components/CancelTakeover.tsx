@@ -508,28 +508,21 @@ function Step4({
   );
 }
 
-function DoneState({ done, onClose }: { done: CancelStep4Response; onClose: () => void }) {
-  const heldUntil = done.dropsHeldUntil ? new Date(done.dropsHeldUntil) : null;
+function DoneState({ onClose }: { done: CancelStep4Response; onClose: () => void }) {
   return (
     <>
       <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-7xl">
-        <T en="Your last box" es="Tu última caja" />
-        <br />
-        <T en="is on the way" es="va en camino" />
+        <T
+          en="Thank you for trusting LIT"
+          es="Muchas gracias por haber confiado en LIT"
+        />
         <span className="text-[color:var(--color-brisky-cream)]">.</span>
       </h1>
       <p className="mt-8 text-sm opacity-80">
-        {heldUntil ? (
-          <T
-            en={`Your ${done.cardsKept} cards are yours. Drops held 90 days. The door's still open.`}
-            es={`Tus ${done.cardsKept} cartas son tuyas. Drops retenidos 90 días. La puerta sigue abierta.`}
-          />
-        ) : (
-          <T
-            en={`Your Drops were reset. ${done.cardsKept} cards are yours.`}
-            es={`Tus Drops se resetearon. ${done.cardsKept} cartas son tuyas.`}
-          />
-        )}
+        <T
+          en="Hope to have you back soon."
+          es="Ojalá poder tenerte de vuelta pronto."
+        />
       </p>
       <button
         type="button"
