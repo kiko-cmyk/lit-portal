@@ -202,8 +202,15 @@ export default function AccountPage() {
               />
               <SubsummCell
                 label={t({ en: "Flavor", es: "Sabor" })}
-                value={subscription.flavor.split(" ")[0]?.toUpperCase() ?? "—"}
-                sub={subscription.flavor.split(" ").slice(1).join(" ").toLowerCase()}
+                value={
+                  // El "tipo" del producto (LEMON, SUN, …) es lo que el
+                  // cliente reconoce. "Salty" es prefijo de gama, mucho
+                  // menos identificable — va abajo en pequeño.
+                  (subscription.flavor.split(" ").slice(1).join(" ") ||
+                    subscription.flavor)
+                    .toUpperCase() || "—"
+                }
+                sub={subscription.flavor.split(" ")[0]?.toLowerCase() ?? ""}
                 showRightBorder
               />
               <SubsummCell
@@ -224,16 +231,15 @@ export default function AccountPage() {
             <button
               type="button"
               onClick={() => setPlanOpen(true)}
-              className="group mt-3 flex w-full items-center justify-between border-t border-[color:var(--color-lit-grey)]/6 pt-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)] transition-colors hover:text-[color:var(--color-bold-yellow)]"
-              style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
+              className="group mt-4 flex w-full items-center justify-between rounded-sm bg-[color:var(--color-lit-grey)] px-5 py-4 text-[color:var(--color-bold-yellow)] transition-colors hover:bg-[color:var(--color-lit-grey)]/90"
             >
-              <span>
+              <span className="text-[11px] font-black uppercase tracking-[0.22em]">
                 <T
                   en="Change boxes or frequency"
                   es="Cambiar cajas o frecuencia"
                 />
               </span>
-              <span className="text-[16px] transition-transform group-hover:translate-x-0.5 text-[color:var(--color-warm-gray)] group-hover:text-[color:var(--color-lit-grey)]">→</span>
+              <span className="text-[16px] transition-transform group-hover:translate-x-0.5">→</span>
             </button>
           </Section>
         )}
