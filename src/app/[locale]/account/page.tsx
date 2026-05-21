@@ -228,19 +228,18 @@ export default function AccountPage() {
                 sub={t({ en: "ships", es: "sale" })}
               />
             </div>
-            <button
-              type="button"
-              onClick={() => setPlanOpen(true)}
-              className="group mt-4 flex w-full items-center justify-between rounded-sm bg-[color:var(--color-lit-grey)] px-5 py-4 text-[color:var(--color-bold-yellow)] transition-colors hover:bg-[color:var(--color-lit-grey)]/90"
-            >
-              <span className="text-[11px] font-black uppercase tracking-[0.22em]">
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() => setPlanOpen(true)}
+                className="rounded-sm border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
+              >
                 <T
                   en="Change boxes or frequency"
                   es="Cambiar cajas o frecuencia"
                 />
-              </span>
-              <span className="text-[16px] transition-transform group-hover:translate-x-0.5">→</span>
-            </button>
+              </button>
+            </div>
           </Section>
         )}
 
