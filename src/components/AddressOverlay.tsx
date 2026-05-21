@@ -69,8 +69,8 @@ export function AddressOverlay({
       setError(
         code === "cutoff_passed"
           ? t({
-              en: "Too late, your next box ships within 72h.",
-              es: "Demasiado tarde, tu próxima caja sale en 72h.",
+              en: "Too late, your next box ships within 24h.",
+              es: "Demasiado tarde, tu próxima caja sale en 24h.",
             })
           : t({
               en: "Couldn't save. Try again.",
@@ -112,8 +112,8 @@ export function AddressOverlay({
         </h1>
         <p className="mt-3 text-sm opacity-70">
           <T
-            en="Takes effect on your next box (if outside the 72h cutoff)."
-            es="Aplica desde tu próxima caja (si estás fuera del cutoff de 72h)."
+            en="Takes effect on your next box (if outside the 24h cutoff)."
+            es="Aplica desde tu próxima caja (si estás fuera del cutoff de 24h)."
           />
         </p>
 

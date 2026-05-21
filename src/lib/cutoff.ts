@@ -1,9 +1,13 @@
 /**
- * Cutoff window enforcement (72h before next ship).
+ * Cutoff window enforcement (24h before next ship).
  * Applies to: skip, plan, flavor, address, extras.
+ *
+ * Bajado de 72h a 24h el 2026-05-21 por Juan: el operador tiene tiempo
+ * de procesar cambios hasta el día antes del envío. Antes 72h era
+ * demasiado restrictivo y bloqueaba cambios que sí se podían atender.
  */
 
-export const CUTOFF_HOURS = 72;
+export const CUTOFF_HOURS = 24;
 
 export function isWithinCutoff(nextShipDate: Date | string, now = new Date()): boolean {
   const ship = typeof nextShipDate === "string" ? new Date(nextShipDate) : nextShipDate;

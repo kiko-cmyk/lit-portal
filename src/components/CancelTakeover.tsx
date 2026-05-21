@@ -383,10 +383,10 @@ function Step4({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Si el próximo envío está dentro de la ventana de 72h, ya está
+  // Si el próximo envío está dentro de la ventana de 24h, ya está
   // "bloqueado" para envío y Seal lo procesará pese a cancelar. El
   // cliente lo recibe igualmente y la sub se cierra después.
-  // Si está fuera de los 72h, la cancelación es realmente inmediata —
+  // Si está fuera de las 24h, la cancelación es realmente inmediata —
   // no sale más nada.
   const willShipNext = !!subscription?.withinCutoff && !!subscription?.nextShipDate;
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
@@ -410,8 +410,8 @@ function Step4({
       <p className="mt-6 text-sm opacity-70 max-w-md">
         {willShipNext ? (
           <T
-            en="Your next shipment is already within 72h, so it'll go out. After that, no more shipments and no more charges."
-            es="Tu próximo envío ya está dentro de las 72h, así que saldrá igualmente. Después, no habrá más envíos ni cobros."
+            en="Your next shipment is already within 24h, so it'll go out. After that, no more shipments and no more charges."
+            es="Tu próximo envío ya está dentro de las 24h, así que saldrá igualmente. Después, no habrá más envíos ni cobros."
           />
         ) : (
           <T

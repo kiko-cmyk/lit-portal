@@ -30,7 +30,7 @@ interface AddressBody {
  * it silently no-ops on every field we've tested. Shopify is the source of
  * truth; Seal projects state via webhooks.
  *
- * Enforces 72h cutoff against Shopify's nextBillingDate.
+ * Enforces 24h cutoff against Shopify's nextBillingDate.
  */
 export const PATCH = withCustomer(async (req, ctx) => {
   const url = new URL(req.url);
@@ -65,7 +65,7 @@ export const PATCH = withCustomer(async (req, ctx) => {
   assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/address");
 
   if (contract.nextBillingDate && isWithinCutoff(contract.nextBillingDate)) {
-    throw new ApiHttpError(400, "cutoff_passed", "Cannot change address within 72h of next ship");
+    throw new ApiHttpError(400, "cutoff_passed", "Cannot change address within 24h of next ship");
   }
 
   // 1. Update Shopify SubscriptionContract delivery method (drives sub orders)

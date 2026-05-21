@@ -8,7 +8,7 @@ import type { SkipResponse } from "@/lib/types";
 
 // POST /apps/portal/api/subscription/skip
 // Skips the next pending billing attempt of the customer's active subscription.
-// Enforces 72h cutoff. After skip, the new "next" becomes the attempt after
+// Enforces 24h cutoff. After skip, the new "next" becomes the attempt after
 // the skipped one — surfaced in newNextShipDate.
 export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   const url = new URL(req.url);
@@ -27,7 +27,7 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   if (!next) throw new ApiHttpError(400, "no_pending_attempt", "Subscription has no upcoming billing attempt");
 
   if (isWithinCutoff(next.date)) {
-    throw new ApiHttpError(400, "cutoff_passed", "Cannot skip within 72h of next ship");
+    throw new ApiHttpError(400, "cutoff_passed", "Cannot skip within 24h of next ship");
   }
 
   await seal.skipBillingAttempt(next.id, sub.id);
@@ -44,7 +44,7 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
     (a) => !a.completed_at && !a.status && !a.skipped_on,
   ) ?? null;
 
-  // Undo window: until the new cutoff (72h before the kept attempt), or until
+  // Undo window: until the new cutoff (24h before the kept attempt), or until
   // the original attempt date — whichever comes first.
   const undoExpiresAt = newNext?.date ?? next.date;
 

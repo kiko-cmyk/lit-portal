@@ -134,7 +134,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // the slow path; on fast path we trust the FE's cutoff state which is
   // already enforced at the QuickActionButton level via `disabled={withinCutoff}`).
   if (nextAttemptDate && isWithinCutoff(nextAttemptDate)) {
-    throw new ApiHttpError(400, "cutoff_passed", "Cannot change plan within 72h of next ship");
+    throw new ApiHttpError(400, "cutoff_passed", "Cannot change plan within 24h of next ship");
   }
 
   // Resolve target variant + frequency + detect what actually changed.

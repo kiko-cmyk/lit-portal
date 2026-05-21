@@ -15,7 +15,7 @@ interface ExtrasBody {
  * Adds a one-time product to the next subscription shipment.
  * Validates that the variant belongs to a product tagged `add-to-box`
  * (per locked decision 2026-04-27 — Shopify collection drives the catalog).
- * Enforces 72h cutoff. NOT yet tested against prod.
+ * Enforces 24h cutoff. NOT yet tested against prod.
  */
 export const POST = withCustomer(async (req, ctx) => {
   const url = new URL(req.url);
@@ -45,7 +45,7 @@ export const POST = withCustomer(async (req, ctx) => {
 
   const next = getNextBillingAttempt(sub);
   if (next && isWithinCutoff(next.date)) {
-    throw new ApiHttpError(400, "cutoff_passed", "Cannot add extras within 72h of next ship");
+    throw new ApiHttpError(400, "cutoff_passed", "Cannot add extras within 24h of next ship");
   }
 
   await seal.addOneTimeProduct(sub.id, body.shopifyVariantId, quantity);
