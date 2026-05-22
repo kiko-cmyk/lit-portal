@@ -76,16 +76,21 @@ export async function verifyShopifyIdToken(
   }
 
   const claims = payload as JWTPayload & {
-    sub?: string;
-    email?: string;
-    nonce?: string;
+    sub?: unknown;
+    email?: unknown;
+    nonce?: unknown;
   };
-  if (!claims.sub) {
+  // Defensive: OIDC spec says `sub` MUST be a string, but Shopify
+  // Customer Account API sometimes emits it as a JSON number for
+  // numeric customer ids. Coerce to string so downstream `.match()`
+  // doesn't crash with "sub.match is not a function" (Juan 2026-05-22).
+  if (claims.sub === undefined || claims.sub === null || claims.sub === "") {
     throw new IdTokenVerificationError("id_token missing sub claim");
   }
+  const subStr = String(claims.sub);
 
   return {
-    sub: claims.sub,
+    sub: subStr,
     email: typeof claims.email === "string" ? claims.email : undefined,
     nonce: typeof claims.nonce === "string" ? claims.nonce : undefined,
     iat: claims.iat ?? 0,
