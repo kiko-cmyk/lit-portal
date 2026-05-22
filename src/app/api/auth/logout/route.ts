@@ -47,26 +47,25 @@ export async function POST(req: NextRequest): Promise<NextResponse<LogoutRespons
         : null;
   }
 
-  let idToken: string | null = null;
   if (sessionId) {
     try {
       const sb = supabaseAdmin();
-      const { data } = await sb
-        .from("auth_sessions")
-        .select("id_token")
-        .eq("session_id", sessionId)
-        .maybeSingle();
-      idToken = (data?.id_token as string | null) ?? null;
-      // Best-effort delete. If it fails (e.g. row doesn't exist), we still
-      // return logoutUrl so the FE proceeds with localStorage cleanup.
+      // Best-effort delete. If it fails (e.g. row doesn't exist), we
+      // still return logoutUrl so the FE proceeds with localStorage cleanup.
       await sb.from("auth_sessions").delete().eq("session_id", sessionId);
     } catch (e) {
-      console.warn("[auth-logout] supabase op failed", e);
+      console.warn("[auth-logout] supabase delete failed", e);
     }
   }
 
+  // Audit 2026-05-22: pre-fix we attached the stored id_token as
+  // `id_token_hint` to skip Shopify's "are you sure?" interstitial.
+  // But Shopify rejects id_tokens past their (short) exp — our
+  // sessions live 14d but id_tokens expire in ~1h, so any logout
+  // after the first hour failed with "id_token no es valido".
+  // We drop the hint entirely; the customer sees one extra Shopify
+  // confirmation page on logout. Acceptable tradeoff for reliability.
   const logoutUrl = new URL(SHOPIFY_LOGOUT_ENDPOINT);
-  if (idToken) logoutUrl.searchParams.set("id_token_hint", idToken);
   logoutUrl.searchParams.set("post_logout_redirect_uri", POST_LOGOUT_REDIRECT);
 
   return NextResponse.json({ logoutUrl: logoutUrl.toString() });
