@@ -154,7 +154,32 @@ export async function GET(req: NextRequest) {
     customerEmail = verified.email ?? null;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("[oauth-callback] id_token verification failed:", msg);
+    // DEBUG: also decode unverified payload to inspect claims that
+    // caused the mismatch. Sensitive info (sub/email) only goes to
+    // server log, not to the client.
+    let debugClaims: Record<string, unknown> | null = null;
+    try {
+      const parts = tokens.id_token.split(".");
+      if (parts.length === 3) {
+        const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        debugClaims = JSON.parse(
+          Buffer.from(b64, "base64").toString("utf8"),
+        ) as Record<string, unknown>;
+      }
+    } catch { /* ignore */ }
+    console.error("[oauth-callback] id_token verification failed:", msg, {
+      claims: debugClaims
+        ? {
+            iss: debugClaims.iss,
+            aud: debugClaims.aud,
+            exp: debugClaims.exp,
+            iat: debugClaims.iat,
+            nonce: debugClaims.nonce,
+            nonce_expected: payload.nce,
+            sub_present: !!debugClaims.sub,
+          }
+        : "could_not_decode",
+    });
     return new NextResponse(
       "Login verification failed. Please try logging in again.",
       { status: 401 },
