@@ -28,7 +28,20 @@ export function readJustSkipped(): JustSkippedRecord | null {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
     const rec = JSON.parse(raw) as JustSkippedRecord;
-    if (!rec.until || Date.now() > new Date(rec.until).getTime()) {
+    const untilMs = new Date(rec.until).getTime();
+    if (!rec.until || isNaN(untilMs)) {
+      window.localStorage.removeItem(KEY);
+      return null;
+    }
+    // Self-heal old records: pre-2026-05-22 the TTL was the new ship
+    // date (could be WEEKS away). Cap at the current 5-min window — if
+    // until is more than UNDO_WINDOW_MS in the future, treat as stale
+    // and purge. New writes are always within the cap.
+    if (untilMs > Date.now() + UNDO_WINDOW_MS) {
+      window.localStorage.removeItem(KEY);
+      return null;
+    }
+    if (Date.now() > untilMs) {
       window.localStorage.removeItem(KEY);
       return null;
     }
