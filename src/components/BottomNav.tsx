@@ -102,9 +102,7 @@ export function TopNav() {
       aria-label="Primary"
     >
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-8 py-5">
-        <Link href={portalHref(lang, "home")} aria-label="LIT" className="cursor-pointer">
-          <Logo />
-        </Link>
+        <Logo />
         <div className="flex items-center gap-8">
           {ITEMS.map((it) => {
             const active = isActive(pathname, it.canonical);
