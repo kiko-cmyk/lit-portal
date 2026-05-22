@@ -134,8 +134,8 @@ export function AddressOverlay({
         </h1>
         <p className="mt-3 text-sm opacity-70">
           <T
-            en="Takes effect on your next box (if outside the 24h cutoff)."
-            es="Aplica desde tu próxima caja (si estás fuera del cutoff de 24h)."
+            en="Takes effect on your next shipment."
+            es="Aplica desde tu próximo envío."
           />
         </p>
 
