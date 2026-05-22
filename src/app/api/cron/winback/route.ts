@@ -50,7 +50,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         });
         fired++;
       } catch (err) {
-        console.warn(`[winback ${offset}] klaviyo failed for ${email}:`, err);
+        // PII sweep 2026-05-22: log customer_id not email.
+        console.warn(`[winback ${offset}] klaviyo failed for customer ${row.customer_id}:`, err);
       }
     }
     return fired;

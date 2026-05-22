@@ -303,9 +303,10 @@ create index if not exists idx_webhook_log_topic on webhook_log(topic, received_
 -- middleware (`withCustomer`) tries App Proxy first, then this table.
 
 create table if not exists auth_sessions (
-  session_id     text primary key,
+  session_id     text primary key,           -- raw token, KEPT FOR ROLLBACK only; pending drop
+  session_id_hash text not null unique,       -- SHA-256 of raw token; this is the column code reads
   customer_id    text not null,
-  email          text,
+  email          text,                        -- TODO 2026-05-22: review whether still needed at rest
   created_at     timestamptz not null default now(),
   expires_at     timestamptz not null,
   -- We DO NOT persist Shopify access_token / refresh_token. The portal
@@ -314,9 +315,8 @@ create table if not exists auth_sessions (
   -- pointer with our own TTL semantics.
   last_used_at   timestamptz not null default now(),
   -- id_token is the OIDC id_token returned by Shopify during the OAuth
-  -- callback. We persist it solely to pass as `id_token_hint` to the
-  -- Shopify logout endpoint — without it the logout shows an
-  -- interstitial "are you sure?" page that we want to skip.
+  -- callback. We persist it ONLY to decide between OIDC end_session vs
+  -- storefront logout (id_token expires in ~10min so we check freshness).
   id_token       text
 );
 

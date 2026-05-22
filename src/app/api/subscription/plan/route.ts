@@ -5,7 +5,7 @@ import { mapToSubscription, normalizeFrequency, seal, type SealSubscription } fr
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
-import { supabaseAdmin } from "@/lib/supabase";
+import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import type { Frequency, Subscription } from "@/lib/types";
 
 const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo", "6mo"];
@@ -482,30 +482,6 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     ctx.customerId,
   );
 });
-
-/**
- * Verify the given seal_subscription_id belongs to the given Shopify
- * customer by reading the cached mapping in Supabase (sub-100 ms).
- *
- * The mapping is populated by `/api/hub/dashboard` on every dashboard
- * load — so a customer who has the Plan overlay open has guaranteed
- * already populated their row. If for some reason the cache is missing
- * (cold customer, db blip), this returns false and the caller falls
- * back to the slow paginated email scan.
- */
-async function verifyOwnershipFast(
-  sealSubscriptionId: number,
-  shopifyCustomerId: string,
-): Promise<boolean> {
-  const sb = supabaseAdmin();
-  const { data } = await sb
-    .from("subscriptions")
-    .select("seal_subscription_id")
-    .eq("customer_id", shopifyCustomerId)
-    .maybeSingle();
-  if (!data?.seal_subscription_id) return false;
-  return String(data.seal_subscription_id) === String(sealSubscriptionId);
-}
 
 /**
  * Build the Subscription response shape from the IDs we already know,

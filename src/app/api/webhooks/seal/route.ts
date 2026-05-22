@@ -115,7 +115,10 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
     .catch(() => null);
   const customerGid = customer?.customers.edges[0]?.node.id;
   if (!customerGid) {
-    console.warn(`[seal-webhook] no Shopify customer for email ${s.email}`);
+    // PII sweep 2026-05-22: don't log the raw email. Seal sub id is
+    // enough to grep + reproduce; email lookups land in Vercel log
+    // retention which we treat as PII-free.
+    console.warn(`[seal-webhook] no Shopify customer for Seal sub ${s.id}`);
     return;
   }
   const customerId = customerGid.replace(/^gid:\/\/shopify\/Customer\//, "");
