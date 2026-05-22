@@ -1,62 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { api, clearSessionToken } from "@/lib/api-client";
 import { useLangValue } from "@/lib/i18n";
 
 interface DangerZoneProps {
   onCancel: () => void;
-  /**
-   * Kept for backward compat: legacy callers passed a Shopify logout URL
-   * directly. Ignored now — the new auth path manages logout via the
-   * /api/auth/logout endpoint (clears Supabase session + builds the right
-   * Shopify OIDC logout URL with id_token_hint).
-   */
+  /** Legacy prop, no longer used. Kept so callers don't break. */
   signoutUrl?: string;
 }
 
-interface LogoutResponse {
-  logoutUrl: string;
-}
-
 /**
- * Dark "Zona oscura" footer block per the v2 Account proposal. Reserves
- * the cancellation flow as the visual climax of the page: high-contrast
- * dark surface, oversized two-tone headline, pill-shaped action buttons.
+ * Dark "Zona oscura" footer block. Single CTA: cancel subscription.
  *
- * Sign-out flow (2026-05-20):
- *   1. Click "Cerrar sesión"
- *   2. POST /api/auth/logout — deletes our auth_sessions row, returns the
- *      Shopify OIDC logout URL with id_token_hint + post_logout_redirect_uri.
- *   3. Clear lit_session from localStorage.
- *   4. window.location to Shopify logout URL.
- *   5. Shopify clears OIDC session, redirects back to /apps/portal/es/mi-lit.
- *   6. Portal sees no auth → LoginScreen → fresh login.
+ * Sign-out removed 2026-05-22 (Juan): for a personal post-purchase
+ * portal, an explicit logout button is friction with no real benefit
+ * — customers either stay logged in on their own device or close the
+ * tab. Implementing the proper OIDC end_session flow (which would
+ * require refresh_token + offline_access scope) wasn't worth it for a
+ * feature nobody clicks. The /api/auth/logout endpoint still exists
+ * because the cancel done-state uses it to land the customer back on
+ * litsalt.com after they've cancelled.
  */
 export function DangerZone({ onCancel }: DangerZoneProps) {
   const lang = useLangValue();
-  const [busy, setBusy] = useState(false);
-
-  const handleSignout = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const { logoutUrl } = await api<LogoutResponse>("/api/auth/logout", {
-        method: "POST",
-      });
-      clearSessionToken();
-      window.location.replace(logoutUrl);
-    } catch (e) {
-      console.warn("[danger-zone] logout call failed, clearing local state anyway", e);
-      // Even if the API call failed, clean local state and bounce to portal.
-      // The user might have a half-broken session; better to log them out
-      // visually than to leave them stuck.
-      clearSessionToken();
-      window.location.replace("/apps/portal/es/mi-lit");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <section
@@ -98,20 +63,7 @@ export function DangerZone({ onCancel }: DangerZoneProps) {
         )}
       </h2>
 
-      <div className="relative flex flex-wrap gap-2.5">
-        <button
-          type="button"
-          onClick={handleSignout}
-          disabled={busy}
-          className="inline-flex items-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[2px] disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
-        >
-          {busy ? (
-            lang === "es" ? "Cerrando..." : "Signing out..."
-          ) : (
-            lang === "es" ? "Cerrar sesión" : "Sign out"
-          )}
-        </button>
+      <div className="relative">
         <button
           type="button"
           onClick={onCancel}
