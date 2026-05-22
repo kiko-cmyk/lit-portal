@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { IdTokenVerificationError, verifyShopifyIdToken } from "@/lib/oidc";
 import { isSafeRelativePath } from "@/lib/safe-path";
+import { getOAuthStateKey } from "@/lib/secrets";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -43,9 +45,8 @@ const HANDOFF_PATH = "/apps/portal/es/auth/handoff";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 export async function GET(req: NextRequest) {
-  const secret = process.env.SHOPIFY_API_SECRET;
   const clientId = process.env.SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID;
-  if (!secret || !clientId) {
+  if (!process.env.SHOPIFY_API_SECRET || !clientId) {
     return new NextResponse(
       "Server misconfigured: SHOPIFY_API_SECRET or SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID missing",
       { status: 500 },
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const payload = verifyState(secret, state);
+  const payload = verifyState(getOAuthStateKey(), state);
   if (!payload) {
     console.error("[oauth-callback] state JWT verification failed");
     return new NextResponse(
@@ -126,24 +127,37 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Token exchange network error", { status: 502 });
   }
 
-  // ─────── 2) Decode id_token to recover customer identity ───────
+  // ─────── 2) Verify id_token against Shopify's JWKS ───────
+  // Audit 2026-05-21 finding #4: pre-fix we just decoded the JWT
+  // without checking the signature, trusting "the network path".
+  // Now we verify signature (RS256), issuer, audience, expiry, and
+  // bind the nonce we sent at /authorize against the claim Shopify
+  // echoes back. Any mismatch → 401 and login is rejected.
   let customerId: string;
   let customerEmail: string | null = null;
   try {
-    const claims = decodeJwtPayload(tokens.id_token);
+    const verified = await verifyShopifyIdToken(tokens.id_token, {
+      clientId,
+      expectedNonce: payload.nce,
+    });
     // Shopify id_tokens carry the customer as a GID in `sub` —
     // e.g. `gid://shopify/Customer/12345`. Other shops sometimes
     // return just the numeric ID. Handle both.
-    const sub = String(claims.sub ?? "");
-    const numericMatch = sub.match(/(\d+)$/);
+    const numericMatch = verified.sub.match(/(\d+)$/);
     if (!numericMatch) {
-      throw new Error(`id_token sub has no numeric customer id: ${sub}`);
+      throw new IdTokenVerificationError(
+        `id_token sub has no numeric customer id: ${verified.sub}`,
+      );
     }
     customerId = numericMatch[1];
-    if (typeof claims.email === "string") customerEmail = claims.email;
+    customerEmail = verified.email ?? null;
   } catch (e) {
-    console.error("[oauth-callback] id_token decode failed", e);
-    return new NextResponse("Could not parse id_token", { status: 502 });
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[oauth-callback] id_token verification failed:", msg);
+    return new NextResponse(
+      "Login verification failed. Please try logging in again.",
+      { status: 401 },
+    );
   }
 
   // ─────── 3) Create our own session in Supabase ───────
@@ -197,18 +211,18 @@ interface TokenResponse {
 interface StatePayload {
   v: string;
   r: string;
-  n: string;
+  nce: string;
   iat: number;
   exp: number;
 }
 
-function verifyState(secret: string, token: string): StatePayload | null {
+function verifyState(key: Buffer, token: string): StatePayload | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [header, body, sig] = parts;
   const data = `${header}.${body}`;
   const expectedSig = base64UrlEncode(
-    crypto.createHmac("sha256", secret).update(data).digest(),
+    crypto.createHmac("sha256", key).update(data).digest(),
   );
   const a = Buffer.from(sig, "utf8");
   const b = Buffer.from(expectedSig, "utf8");
@@ -221,7 +235,7 @@ function verifyState(secret: string, token: string): StatePayload | null {
     if (
       typeof payload.v !== "string" ||
       typeof payload.r !== "string" ||
-      typeof payload.n !== "string" ||
+      typeof payload.nce !== "string" ||
       typeof payload.iat !== "number" ||
       typeof payload.exp !== "number"
     ) {
@@ -231,18 +245,6 @@ function verifyState(secret: string, token: string): StatePayload | null {
   } catch {
     return null;
   }
-}
-
-function decodeJwtPayload(token: string): Record<string, unknown> {
-  const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("Invalid JWT");
-  // We intentionally don't verify the id_token signature. The token came
-  // from a direct server-side POST to Shopify's token endpoint over HTTPS
-  // immediately before this call — the network path is the trust anchor.
-  // If we ever surface this to untrusted contexts we should verify via
-  // Shopify's JWKS.
-  const body = parts[1];
-  return JSON.parse(Buffer.from(body, "base64").toString("utf8"));
 }
 
 function base64UrlEncode(buf: Buffer): string {

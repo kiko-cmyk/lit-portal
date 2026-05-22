@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { isSafeRelativePath } from "@/lib/safe-path";
+import { getOAuthStateKey } from "@/lib/secrets";
 
 /**
  * GET /apps/portal/api/auth/login
@@ -40,8 +41,7 @@ const DEFAULT_RETURN_TO = "/apps/portal/es/mi-lit";
 const STATE_TTL_SECONDS = 600; // 10 min
 
 export async function GET(req: NextRequest) {
-  const secret = process.env.SHOPIFY_API_SECRET;
-  if (!CLIENT_ID || !secret) {
+  if (!CLIENT_ID || !process.env.SHOPIFY_API_SECRET) {
     return new NextResponse(
       "Server misconfigured: SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID or SHOPIFY_API_SECRET missing",
       { status: 500 },
@@ -59,13 +59,24 @@ export async function GET(req: NextRequest) {
     crypto.createHash("sha256").update(codeVerifier).digest(),
   );
 
+  // OIDC nonce (audit 2026-05-21 finding #4). Sent to /authorize and
+  // bound into the id_token by Shopify; the callback verifies the
+  // claim matches `state.nce`. Defends against id_token replay /
+  // confused-deputy where a stolen token from one flow is presented
+  // to another.
+  const nonce = crypto.randomBytes(16).toString("hex");
+
   // Pack everything into a signed JWT so the callback can recover it
   // without needing cookies (App Proxy strips Set-Cookie headers).
+  // Key is HKDF-derived from SHOPIFY_API_SECRET (different label from
+  // App Proxy HMAC) so a signing oracle in one context can't be used
+  // to forge the other.
   const now = Math.floor(Date.now() / 1000);
-  const state = signState(secret, {
+  const stateKey = getOAuthStateKey();
+  const state = signState(stateKey, {
     v: codeVerifier,
     r: returnTo,
-    n: crypto.randomBytes(8).toString("hex"),
+    nce: nonce,
     iat: now,
     exp: now + STATE_TTL_SECONDS,
   });
@@ -78,6 +89,7 @@ export async function GET(req: NextRequest) {
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", codeChallenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
+  authorizeUrl.searchParams.set("nonce", nonce);
 
   return NextResponse.redirect(authorizeUrl.toString());
 }
@@ -89,21 +101,21 @@ export async function GET(req: NextRequest) {
 // edge-runtime surprises with crypto.subtle on Vercel.
 
 interface StatePayload {
-  v: string; // PKCE code_verifier (caller stores, callback re-uses for token exchange)
-  r: string; // return_to (relative path)
-  n: string; // nonce (CSRF safety)
+  v: string;   // PKCE code_verifier (caller stores, callback re-uses for token exchange)
+  r: string;   // return_to (relative path)
+  nce: string; // OIDC nonce — also sent to Shopify /authorize; callback verifies id_token.nonce matches
   iat: number;
   exp: number;
 }
 
-function signState(secret: string, payload: StatePayload): string {
+function signState(key: Buffer, payload: StatePayload): string {
   const header = base64UrlEncode(
     Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })),
   );
   const body = base64UrlEncode(Buffer.from(JSON.stringify(payload)));
   const data = `${header}.${body}`;
   const sig = base64UrlEncode(
-    crypto.createHmac("sha256", secret).update(data).digest(),
+    crypto.createHmac("sha256", key).update(data).digest(),
   );
   return `${data}.${sig}`;
 }
