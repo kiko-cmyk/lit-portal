@@ -5,11 +5,13 @@
  */
 export function Logo({ className = "h-7 w-auto" }: { className?: string }) {
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png"
-      alt="LIT"
-      className={className}
-    />
+    <a href="https://litsalt.com/" aria-label="LIT — Ir a la tienda" className="inline-flex">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png"
+        alt="LIT"
+        className={className}
+      />
+    </a>
   );
 }
