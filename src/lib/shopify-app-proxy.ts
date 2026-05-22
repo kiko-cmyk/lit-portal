@@ -80,6 +80,22 @@ export function verifyAppProxyRequest(req: NextRequest): AppProxyContext {
     throw new AppProxyAuthError("Missing shop param");
   }
 
+  // Replay protection (audit 2026-05-21). Pre-fix the signature could be
+  // reused indefinitely — anyone with a captured URL (referer logs, browser
+  // history, shared link) could impersonate the customer forever. Shopify
+  // App Proxy always includes a Unix-seconds `timestamp` param, so we just
+  // reject anything outside a ±300s window. 300s is generous: typical
+  // Vercel↔Shopify clock drift is <30s, and we want to avoid spurious
+  // failures during routine NTP corrections. If we ever see legitimate
+  // requests failing here, widen the window; never silently accept.
+  const TIMESTAMP_TOLERANCE_SEC = 300;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (!timestamp || Math.abs(nowSec - timestamp) > TIMESTAMP_TOLERANCE_SEC) {
+    throw new AppProxyAuthError(
+      `Stale signature (timestamp ${timestamp || "missing"}, now ${nowSec})`,
+    );
+  }
+
   return {
     customerId: customerIdRaw && customerIdRaw !== "" ? customerIdRaw : null,
     shop,
