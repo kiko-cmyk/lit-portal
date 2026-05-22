@@ -610,6 +610,8 @@
       <li><div style="flex:1"><div class="toc-title">Superficies del portal<span class="toc-desc">Mi LIT, Cuenta, Skip, Plan, Cancel, Login, Address, Payment.</span></div></div><div class="toc-page">P. 06</div></li>
       <li><div style="flex:1"><div class="toc-title">Integraciones<span class="toc-desc">Seal, Shopify Admin, Klaviyo, Supabase, App Proxy.</span></div></div><div class="toc-page">P. 09</div></li>
       <li><div style="flex:1"><div class="toc-title">Decisiones y aprendizajes<span class="toc-desc">Los gotchas que aprendimos por las malas y por qué la solución es la que es.</span></div></div><div class="toc-page">P. 11</div></li>
+      <li><div style="flex:1"><div class="toc-title">MVP y dimensiones<span class="toc-desc">Qué entra en V1, qué se queda fuera, números del proyecto.</span></div></div><div class="toc-page">P. 13</div></li>
+      <li><div style="flex:1"><div class="toc-title">Próximas fases<span class="toc-desc">Collection, Drops, Inner Circle, The World. Follow-ups técnicos.</span></div></div><div class="toc-page">P. 14</div></li>
     </ol>
     <div class="page-footer">
       <div><span class="brand-pf">PORTAL LIT</span> · Documentación técnica · V1.0</div>
@@ -1200,6 +1202,140 @@ prefix  = <span class="y">"apps"</span></pre>
     <div class="page-footer">
       <div><span class="brand-pf">PORTAL LIT</span> · Documentación técnica · V1.0</div>
       <div>P. 12</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MVP Y DIMENSIONES ════════ -->
+<div class="page">
+  <div class="page-inner">
+    <div class="page-header">
+      <div class="page-header-left">
+        <h2>07 · MVP y dimensiones</h2>
+        <div class="subtitle">Qué entra en V1 y qué tamaño tiene el proyecto.</div>
+      </div>
+      <div class="page-header-right">
+        <div class="brand">PORTAL LIT</div>
+        <div>Sección 07</div>
+      </div>
+    </div>
+
+    <div class="section-title">Qué entra en el MVP</div>
+    <p>El MVP del portal cubre los flujos imprescindibles para que un suscriptor gestione su caja sin tocar soporte. Todo lo demás (Collection, Drops, eventos) queda como Fase 2 con el chasis ya montado.</p>
+
+    <ul>
+      <li><strong>Login OAuth</strong> con Customer Account API de Shopify (PKCE + nonce + JWKS verification).</li>
+      <li><strong>Mi LIT (Hub)</strong>: hero con próximo envío, quick actions, calendar de próximas entregas, historial de pedidos.</li>
+      <li><strong>Cuenta</strong>: ficha de cliente, suscripción, dirección, método de pago, cancelación.</li>
+      <li><strong>Skip / Undo</strong>: saltar próxima caja, deshacer en ventana de 5 minutos.</li>
+      <li><strong>Plan change</strong>: cambiar cajas y/o frecuencia con precio dinámico desde Shopify.</li>
+      <li><strong>Cancel</strong>: takeover en 4 pasos con alternativas (skip, plan, sabor) antes del fin.</li>
+      <li><strong>Reactivate</strong>: ventana de 90 días tras primera cancelación.</li>
+      <li><strong>Address change</strong>: cambio de dirección de envío vía Seal directo.</li>
+      <li><strong>Payment update</strong>: 100% email-only via Shopify <code>customerPaymentMethodSendUpdateEmail</code>.</li>
+      <li><strong>Email change</strong>: con verificación por magic link al nuevo email.</li>
+      <li><strong>EmptyState</strong>: para clientes sin suscripción activa (one-shot buyers, cancelados).</li>
+      <li><strong>Bilingüe ES/EN</strong>: idioma persistido + URL <code>/es/*</code> o <code>/en/*</code>.</li>
+      <li><strong>Telemetría Klaviyo</strong>: eventos para subscription_skip, subscription_cancelled, welcome_to_portal, email_change_requested, subscription_reactivated.</li>
+      <li><strong>Seguridad cerrada</strong>: 13 hallazgos críticos/altos auditados y resueltos. Re-audit confirma cero regresiones.</li>
+    </ul>
+
+    <div class="section-title">Dimensiones</div>
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">Líneas de código</div>
+        <div class="kpi-value">14k</div>
+        <div class="kpi-detail">TypeScript + TSX en src/</div>
+      </div>
+      <div class="kpi-card dark">
+        <div class="kpi-label">Endpoints API</div>
+        <div class="kpi-value">41</div>
+        <div class="kpi-detail">routes en src/app/api/</div>
+      </div>
+      <div class="kpi-card amber">
+        <div class="kpi-label">Componentes React</div>
+        <div class="kpi-value">25</div>
+        <div class="kpi-detail">UI atómicos en src/components/</div>
+      </div>
+      <div class="kpi-card blue">
+        <div class="kpi-label">Migrations en prod</div>
+        <div class="kpi-value">04</div>
+        <div class="kpi-detail">cancellations, auth_sessions_hash, email_change_requests, rate_buckets</div>
+      </div>
+    </div>
+
+    <div class="section-title">Tabla de superficies y endpoints</div>
+    <table class="data-table">
+      <thead><tr><th>Capa</th><th>Cuenta</th><th>Notas</th></tr></thead>
+      <tbody>
+        <tr><td class="bold">Superficies activas</td><td>08</td><td>Hub, Cuenta, Skip, Plan, Cancel, Address, Login/Empty, Confirmación post-cancel</td></tr>
+        <tr><td class="bold">Superficies Fase 2 (UI con stub)</td><td>03</td><td>Collection, The World, Inner Circle</td></tr>
+        <tr><td class="bold">Tablas Supabase</td><td>13+</td><td>auth_sessions, subscriptions, cancellations, customer_preferences, drops_*, events, moments, stories, webhook_log, rate_buckets, email_change_requests</td></tr>
+        <tr><td class="bold">Integraciones externas</td><td>05</td><td>Seal, Shopify Admin, Klaviyo, Customer Account API OAuth, App Proxy</td></tr>
+        <tr><td class="bold">Eventos Klaviyo</td><td>10</td><td>skip, cancelled, reactivated, email_change_requested, welcome_to_portal, tier_unlocked, reward_claimed, winback_d14/d30, drops_earned</td></tr>
+      </tbody>
+    </table>
+
+    <div class="page-footer">
+      <div><span class="brand-pf">PORTAL LIT</span> · Documentación técnica · V1.0</div>
+      <div>P. 13</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ PRÓXIMAS FASES ════════ -->
+<div class="page">
+  <div class="page-inner">
+    <div class="page-header">
+      <div class="page-header-left">
+        <h2>08 · Próximas fases</h2>
+        <div class="subtitle">Lo que queda por construir y por afinar.</div>
+      </div>
+      <div class="page-header-right">
+        <div class="brand">PORTAL LIT</div>
+        <div>Sección 08</div>
+      </div>
+    </div>
+
+    <div class="section-title">Fase 2 — Engagement & loyalty</div>
+    <table class="data-table">
+      <thead><tr><th>Bloque</th><th>Estado</th><th>Qué falta</th></tr></thead>
+      <tbody>
+        <tr><td class="bold">Collection (cartas)</td><td>UI stub en Hub</td><td>Backend de unlocks (drops_events trigger por box shipped), grid completa en /collection, animación de carta nueva.</td></tr>
+        <tr><td class="bold">Drops (recompensas)</td><td>Schema listo</td><td>Triggers: box_shipped (+10), referral_converted (+50), monthly_streak (+5), product_review (+15). Rewards claim flow + carrito de recompensas.</td></tr>
+        <tr><td class="bold">Inner Circle (tier)</td><td>Pill visible</td><td>Threshold de unlock (X cajas o Y meses), beneficios visibles, evento Klaviyo tier_unlocked ya está pero no se dispara nada.</td></tr>
+        <tr><td class="bold">The World (eventos)</td><td>Schema + 1 endpoint</td><td>UI completa /the-world, calendario, RSVP, lista de espera Barcelona, integración con admin para crear eventos.</td></tr>
+        <tr><td class="bold">Flavor switcher</td><td>QA disabled</td><td>Activar cuando haya catálogo &gt;1 sabor. La logic de mutation ya existe (es un plan change variant).</td></tr>
+        <tr><td class="bold">Extras catalog</td><td>Backend completo</td><td>UI activar cuando Shopify tenga productos con tag <code>add-to-box</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-title">Hardening pendiente (low priority)</div>
+    <ul>
+      <li><strong>Drop columna <code>session_id</code> raw</strong> de <code>auth_sessions</code>. Hoy se conserva por rollback safety; tras unas semanas estable se puede tirar.</li>
+      <li><strong>Drop <code>auth_sessions.email</code></strong> si no se usa (defense in depth — DB leak no debería exponer emails).</li>
+      <li><strong>Rate limit en <code>/api/customer/confirm-email</code></strong>: token de 256 bits hace que la probabilidad de adivinar sea ~0, pero limitar IP cubre el caso de scanning.</li>
+      <li><strong>Comentar trust model</strong> del logout id_token decode (cosmético — el auditor lo notó).</li>
+      <li><strong>Auditoría bimensual automática</strong>: cron programado para 2026-06-05; cuando dispare, los 3 agentes ejecutan y se auto-reagenda.</li>
+    </ul>
+
+    <div class="section-title">Mejoras de operaciones</div>
+    <ul>
+      <li><strong>Dashboard ops</strong> para ver cancellations en estado <code>committing</code> (cancels colgados que requieren intervención manual).</li>
+      <li><strong>Sentry o equivalente</strong> para tracking de errores en producción. Hoy todo va a Vercel logs sin alerting.</li>
+      <li><strong>E2E tests con Playwright</strong> para los flujos críticos: skip, plan change, cancel, address.</li>
+      <li><strong>Webhook log replay</strong> tool para reprocesar eventos Shopify/Seal fallidos.</li>
+      <li><strong>Linear integration</strong>: pipe del audit bimensual a tickets automáticos si hay críticos.</li>
+    </ul>
+
+    <div class="insight dark">
+      <span class="label">Estado a fecha de hoy</span>
+      <p>El portal está <strong>en producción y listo para lanzamiento al cliente final</strong>. Los flujos críticos están validados end-to-end, la auditoría de seguridad ha quedado limpia, y la cadencia de re-audit bimensual está programada. La Fase 2 (Collection / Drops / Inner Circle) tiene schema y stubs en su sitio — no es un sprint nuevo de arquitectura, es un sprint de relleno.</p>
+    </div>
+
+    <div class="page-footer">
+      <div><span class="brand-pf">PORTAL LIT</span> · Documentación técnica · V1.0</div>
+      <div>P. 14</div>
     </div>
   </div>
 </div>
