@@ -130,6 +130,31 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
   log("sub-resolved", { sealSubscriptionId, mainItemNumericId, currentFrequency });
 
+  // Audit 2026-05-21 finding #10: validate `mainItemId` (from body in
+  // fast-path) actually belongs to THIS subscription before we use it
+  // in `removeItems`. Without this an authenticated customer could
+  // pass any item id (e.g. from another sub of theirs, or simply
+  // guessed) and trigger removeItems on it. Costs one extra Seal
+  // GET (~300ms via getSubscriptionById which is singular, not the
+  // 33-page paginated scan); acceptable for the security gain.
+  // Only validate when variantChanged (which is the only path that
+  // calls removeItems) AND when we came via fast-path (slow-path
+  // already has the sub object). Cheap enough either way.
+  if (body.sealSubscriptionId !== undefined) {
+    const subForCheck = await seal.getSubscriptionById(sealSubscriptionId);
+    const ownsItem = (subForCheck?.items ?? []).some(
+      (it) => Number(it.id) === Number(mainItemNumericId) && !it.is_one_time_item,
+    );
+    if (!ownsItem) {
+      log("item-ownership-mismatch", { mainItemNumericId });
+      throw new ApiHttpError(
+        403,
+        "item_ownership_mismatch",
+        "mainItemId does not belong to this subscription",
+      );
+    }
+  }
+
   // Cutoff against next billing attempt date (only when we have it from
   // the slow path; on fast path we trust the FE's cutoff state which is
   // already enforced at the QuickActionButton level via `disabled={withinCutoff}`).
