@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { hashSessionId } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -55,9 +56,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<LogoutRespons
   if (sessionId) {
     try {
       const sb = supabaseAdmin();
-      // Best-effort delete. If it fails (e.g. row doesn't exist), we
-      // still return logoutUrl so the FE proceeds with localStorage cleanup.
-      await sb.from("auth_sessions").delete().eq("session_id", sessionId);
+      // Best-effort delete by hash. The DB row keyed on session_id_hash
+      // since 2026-05-22 migration (audit 2026-05-21 LOW).
+      await sb.from("auth_sessions")
+        .delete()
+        .eq("session_id_hash", hashSessionId(sessionId));
     } catch (e) {
       console.warn("[auth-logout] supabase delete failed", e);
     }

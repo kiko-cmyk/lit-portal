@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { IdTokenVerificationError, verifyShopifyIdToken } from "@/lib/oidc";
 import { isSafeRelativePath } from "@/lib/safe-path";
 import { getOAuthStateKey } from "@/lib/secrets";
+import { hashSessionId } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -39,10 +40,10 @@ const PORTAL_BASE = "https://litsalt.com";
 const FALLBACK_RETURN = "/apps/portal/es/mi-lit";
 const HANDOFF_PATH = "/apps/portal/es/auth/handoff";
 
-// 30 días — cliente queda logueado tanto como una sesión típica de
-// Shopify. Refrescamos last_used_at en cada request para no expulsar
-// usuarios activos.
-const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+// 14 días — bajado de 30d el 2026-05-22 (audit recomendaba ≤7, este
+// es el compromiso). Refrescamos last_used_at en cada request, asi
+// que clientes activos no se expulsan por inactividad ligera.
+const SESSION_TTL_SECONDS = 14 * 24 * 60 * 60;
 
 export async function GET(req: NextRequest) {
   const clientId = process.env.SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID;
@@ -161,17 +162,24 @@ export async function GET(req: NextRequest) {
   }
 
   // ─────── 3) Create our own session in Supabase ───────
+  // The raw `sessionId` is sent to the FE (URL fragment, then
+  // localStorage) and NEVER stored server-side. We persist only
+  // its SHA-256 hash (audit 2026-05-21 LOW). The `session_id`
+  // column is kept temporarily for rollback safety; it stores
+  // the raw value too but no code reads it post-migration.
   const sessionId = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
   try {
     const sb = supabaseAdmin();
     const { error: insertErr } = await sb.from("auth_sessions").insert({
       session_id: sessionId,
+      session_id_hash: hashSessionId(sessionId),
       customer_id: customerId,
       email: customerEmail,
       expires_at: expiresAt.toISOString(),
-      // Persist the id_token so /api/auth/logout can use it as
-      // `id_token_hint` to skip Shopify's "are you sure?" interstitial.
+      // id_token kept for back-compat with the logout flow, but no
+      // longer used as id_token_hint (storefront /account/logout
+      // path doesn't need it). Will be removed in a follow-up.
       id_token: tokens.id_token,
     });
     if (insertErr) throw insertErr;
@@ -181,14 +189,18 @@ export async function GET(req: NextRequest) {
   }
 
   // ─────── 4) Hand off to client-side page that stores session ───────
-  // The handoff page lives under [locale]/auth/handoff. It reads `?s=`
-  // from the URL, writes to localStorage, then routes to the final
-  // destination. We can't set localStorage from a server redirect, so
-  // a one-page client bounce is the cleanest pattern.
+  // Audit 2026-05-21 finding #2: pre-fix the redirect used a query
+  // string (`?s=<sessionId>`), which leaks via Referer headers,
+  // browser history, server logs, and any third-party script that
+  // loaded on the handoff page. URL fragments (`#`) are NEVER sent
+  // to servers — they live only client-side — so we use that instead.
+  // The handoff page reads from `window.location.hash` and clears it
+  // with `history.replaceState` before navigating.
   const safeReturn = isSafeRelativePath(payload.r) ? payload.r : FALLBACK_RETURN;
   const handoff = new URL(`${PORTAL_BASE}${HANDOFF_PATH}`);
-  handoff.searchParams.set("s", sessionId);
-  handoff.searchParams.set("to", safeReturn);
+  // URLSearchParams can't write to the fragment; do it manually.
+  // Encode the `to` so a malicious return value can't break out.
+  handoff.hash = `s=${encodeURIComponent(sessionId)}&to=${encodeURIComponent(safeReturn)}`;
 
   // PII sweep 2026-05-21: don't log email or session_id prefix in the
   // happy path. customerId is needed for tracing, expiry for debugging.

@@ -7,6 +7,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { hashSessionId } from "./session";
 import { AppProxyAuthError, parseAuthRequest, type AppProxyContext } from "./shopify-app-proxy";
 import { supabaseAdmin } from "./supabase";
 
@@ -72,11 +73,16 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
       let bearerFailure: "expired" | "invalid" | null = null;
 
       if (!customerId && bearerToken) {
+        // Lookup by SHA-256 hash of the raw token. The DB never sees
+        // the raw value (audit 2026-05-21 LOW). The bearer the FE
+        // sends IS the raw value (so the customer can keep using
+        // their localStorage post-migration).
+        const tokenHash = hashSessionId(bearerToken);
         const sb = supabaseAdmin();
         const { data, error } = await sb
           .from("auth_sessions")
           .select("customer_id, expires_at")
-          .eq("session_id", bearerToken)
+          .eq("session_id_hash", tokenHash)
           .maybeSingle();
         if (error) console.warn("[withCustomer] bearer lookup error", error);
         if (data) {
@@ -86,7 +92,7 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
             // Best-effort refresh of last_used_at — don't block on it.
             sb.from("auth_sessions")
               .update({ last_used_at: new Date().toISOString() })
-              .eq("session_id", bearerToken)
+              .eq("session_id_hash", tokenHash)
               .then(() => undefined);
           } else {
             bearerFailure = "expired";
