@@ -30,7 +30,8 @@ export type KlaviyoEvent =
   | "subscription_cancelled"
   | "subscription_reactivated"
   | "subscription_skip"
-  | "drops_earned";
+  | "drops_earned"
+  | "email_change_requested";
 
 class KlaviyoClient {
   private async req<T>(path: string, init?: RequestInit): Promise<T> {

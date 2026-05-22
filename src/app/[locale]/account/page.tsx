@@ -47,6 +47,11 @@ export default function AccountPage() {
   const [justSkipped, setJustSkipped] = useState<boolean>(
     () => readJustSkipped() !== null,
   );
+  // Email change verification (audit 2026-05-21 finding #11): when the
+  // customer submits a new email we don't apply it until they click
+  // the link in the new inbox. UI feedback in the meantime.
+  const [emailChangePending, setEmailChangePending] = useState<string | null>(null);
+  const [emailChangeConfirmed, setEmailChangeConfirmed] = useState(false);
   const t = useLang();
   const lang = useLangValue();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
@@ -67,6 +72,23 @@ export default function AccountPage() {
     api<OrderHistoryItem[]>("/api/orders?limit=10")
       .then(setOrders)
       .catch(() => setOrders([]));
+
+    // If the customer just confirmed an email change via magic link,
+    // /api/customer/confirm-email redirects back with ?email_changed=1.
+    // Show a toast and clean the URL.
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("email_changed") === "1") {
+        setEmailChangeConfirmed(true);
+        params.delete("email_changed");
+        const next = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (next ? `?${next}` : ""),
+        );
+      }
+    }
   }, []);
 
   if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
@@ -293,6 +315,22 @@ export default function AccountPage() {
         )}
 
         <Section title={t({ en: "My details", es: "Mis datos" })}>
+          {emailChangeConfirmed && (
+            <div className="mx-6 mb-3 rounded-sm bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
+              <T
+                en="Email updated successfully."
+                es="Email actualizado correctamente."
+              />
+            </div>
+          )}
+          {emailChangePending && (
+            <div className="mx-6 mb-3 rounded-sm border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs leading-relaxed text-[color:var(--color-lit-grey)] md:mx-0">
+              <T
+                en={`We sent a confirmation link to ${emailChangePending}. Click it from that inbox to apply the change. Until you do, your account email stays the same.`}
+                es={`Te hemos enviado un enlace de confirmación a ${emailChangePending}. Ábrelo desde ese correo para aplicar el cambio. Hasta entonces tu email actual sigue activo.`}
+              />
+            </div>
+          )}
           <EditableRow
             label={t({ en: "Name", es: "Nombre" })}
             value={customer.name}
@@ -312,11 +350,23 @@ export default function AccountPage() {
             value={customer.email}
             inputType="email"
             onSave={async (v) => {
-              await api("/api/customer", {
+              // PATCH /api/customer no longer mutates email synchronously.
+              // It stages a request and emails the new address; only the
+              // magic-link click applies the change. Show the customer
+              // a banner so they know to check their inbox.
+              const res = await api<{
+                updated: boolean;
+                emailChangeRequested?: boolean;
+                newEmail?: string;
+              }>("/api/customer", {
                 method: "PATCH",
                 body: JSON.stringify({ email: v }),
               });
-              setCustomer({ ...customer, email: v });
+              if (res.emailChangeRequested && res.newEmail) {
+                setEmailChangePending(res.newEmail);
+              }
+              // Don't mutate local customer.email — the UI keeps showing
+              // the old address until confirmation.
             }}
           />
           <EditableRow
