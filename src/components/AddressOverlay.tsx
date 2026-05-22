@@ -58,7 +58,8 @@ export function AddressOverlay({
             countryCode: form.countryCode,
             province: form.province || undefined,
             provinceCode: form.provinceCode || undefined,
-            phone: form.phone || undefined,
+            // phone deliberately omitted — managed from Cuenta > Mis datos,
+            // not from the shipping address form (Juan 2026-05-22).
           }),
         },
       );
@@ -66,17 +67,38 @@ export function AddressOverlay({
       onClose();
     } catch (e) {
       const code = (e as { code?: string }).code;
-      setError(
-        code === "cutoff_passed"
-          ? t({
-              en: "Too late, your next box ships within 24h.",
-              es: "Demasiado tarde, tu próxima caja sale en 24h.",
-            })
-          : t({
-              en: "Couldn't save. Try again.",
-              es: "No se pudo guardar. Inténtalo de nuevo.",
-            }),
-      );
+      console.error("[address] PATCH failed", e);
+      if (code === "cutoff_passed") {
+        setError(
+          t({
+            en: "Too late, your next box ships within 24h.",
+            es: "Demasiado tarde, tu próxima caja sale en 24h.",
+          }),
+        );
+      } else if (code === "contract_not_found" || code === "seal_sub_not_found") {
+        setError(
+          t({
+            en: "There's an issue with your subscription. Please contact support.",
+            es: "Hay un problema con tu suscripción. Por favor, contacta a soporte.",
+          }),
+        );
+      } else if (code === "invalid_country_code" || code === "invalid_postal_code" || code === "invalid_province_code" || code === "invalid_address") {
+        setError(
+          t({
+            en: "Some address fields look invalid. Please check them and try again.",
+            es: "Algunos campos parecen incorrectos. Revísalos e inténtalo de nuevo.",
+          }),
+        );
+      } else {
+        // Fallback: show the code small so we can see it during testing.
+        const codeSuffix = code ? ` (${code})` : "";
+        setError(
+          t({
+            en: `Couldn't save. Try again or contact us.${codeSuffix}`,
+            es: `No se pudo guardar. Inténtalo de nuevo o escríbenos.${codeSuffix}`,
+          }),
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -128,7 +150,6 @@ export function AddressOverlay({
             <Field label={t({ en: "Postal code", es: "Código postal" })} value={form.postalCode} onChange={(v) => set("postalCode", v)} />
             <Field label={t({ en: "City", es: "Ciudad" })} value={form.city} onChange={(v) => set("city", v)} />
           </div>
-          <Field label={t({ en: "Phone", es: "Teléfono" })} value={form.phone ?? ""} onChange={(v) => set("phone", v || null)} />
         </div>
 
         {error && (

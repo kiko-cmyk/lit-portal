@@ -49,21 +49,20 @@ export const PATCH = withCustomer(async (req, ctx) => {
       "address1, city, postalCode, country, countryCode are required",
     );
   }
-  // Audit 2026-05-21: validate format BEFORE talking to Shopify so we
-  // return a clean 400 with a typed code, instead of bubbling up the
-  // Shopify GraphQL error message (which used to leak via the now-fixed
-  // stack-trace path). countryCode is ISO 3166-1 alpha-2 (e.g. "ES").
-  // postalCode covers 3–10 chars to accommodate everything from "ES" to
-  // long alphanumeric postcodes (UK, CA).
-  if (!/^[A-Z]{2}$/.test(body.countryCode)) {
+  // Audit 2026-05-21: light format validation BEFORE talking to Shopify
+  // so we return a clean 400 with a typed code, instead of bubbling up
+  // the Shopify GraphQL error message. Permissive: existing Shopify data
+  // often has province codes like "M", "MD", "Madrid" or null — accept
+  // anything reasonable, reject only obviously broken input.
+  if (!/^[A-Za-z]{2}$/.test(body.countryCode)) {
     throw new ApiHttpError(400, "invalid_country_code", "countryCode must be ISO 2-letter (e.g. ES)");
   }
   const pc = body.postalCode.trim();
-  if (pc.length < 3 || pc.length > 10 || /[^A-Za-z0-9 \-]/.test(pc)) {
-    throw new ApiHttpError(400, "invalid_postal_code", "postalCode must be 3-10 chars, alphanumeric");
+  if (pc.length < 3 || pc.length > 12) {
+    throw new ApiHttpError(400, "invalid_postal_code", "postalCode must be 3-12 chars");
   }
-  if (body.provinceCode && !/^[A-Z0-9]{1,5}$/.test(body.provinceCode)) {
-    throw new ApiHttpError(400, "invalid_province_code", "provinceCode must be 1-5 alphanumeric upper");
+  if (body.provinceCode && body.provinceCode.length > 12) {
+    throw new ApiHttpError(400, "invalid_province_code", "provinceCode too long (max 12)");
   }
 
   const ids = await resolveSubIds(ctx.customerId, email);
