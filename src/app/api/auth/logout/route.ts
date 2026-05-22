@@ -21,9 +21,14 @@ import { supabaseAdmin } from "@/lib/supabase";
  * y redirige). Mejor cerrar de más que dejar sesiones huérfanas.
  */
 
-const SHOPIFY_LOGOUT_ENDPOINT =
-  "https://tracking.litsalt.com/authentication/logout";
-const POST_LOGOUT_REDIRECT = "https://litsalt.com/apps/portal/es/mi-lit";
+// Switched 2026-05-22 (Juan incident): Shopify's OIDC end_session
+// endpoint at tracking.litsalt.com REQUIRES a valid `id_token_hint`,
+// but our id_tokens expire in ~1h while sessions live 14d. We can't
+// keep refreshing the hint. Storefront /account/logout clears the
+// same cookie that App Proxy uses for `logged_in_customer_id`, so
+// it accomplishes the actual goal (kill the storefront session so
+// re-visiting /apps/portal/* shows the LoginScreen).
+const SHOPIFY_LOGOUT_ENDPOINT = "https://litsalt.com/account/logout";
 
 interface LogoutResponse {
   logoutUrl: string;
@@ -58,15 +63,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<LogoutRespons
     }
   }
 
-  // Audit 2026-05-22: pre-fix we attached the stored id_token as
-  // `id_token_hint` to skip Shopify's "are you sure?" interstitial.
-  // But Shopify rejects id_tokens past their (short) exp — our
-  // sessions live 14d but id_tokens expire in ~1h, so any logout
-  // after the first hour failed with "id_token no es valido".
-  // We drop the hint entirely; the customer sees one extra Shopify
-  // confirmation page on logout. Acceptable tradeoff for reliability.
+  // Storefront /account/logout uses `return_url` (not OIDC's
+  // `post_logout_redirect_uri`). Sends a 302 that clears the
+  // storefront session cookie and lands on /apps/portal/es/mi-lit,
+  // which will then show LoginScreen because there's no bearer
+  // (just cleared by FE) and no storefront session (just cleared
+  // by Shopify).
   const logoutUrl = new URL(SHOPIFY_LOGOUT_ENDPOINT);
-  logoutUrl.searchParams.set("post_logout_redirect_uri", POST_LOGOUT_REDIRECT);
+  logoutUrl.searchParams.set("return_url", "/apps/portal/es/mi-lit");
 
   return NextResponse.json({ logoutUrl: logoutUrl.toString() });
 }
