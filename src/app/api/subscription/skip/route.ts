@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -17,6 +18,8 @@ import type { SkipResponse } from "@/lib/types";
 // scan. Added 2026-05-21 after Juan reported first-click skip from Cuenta
 // failing on cold start — the slow path was bumping into Vercel/proxy timeouts.
 export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "skip", { limit: 10, windowMs: 60_000 });
+
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
 

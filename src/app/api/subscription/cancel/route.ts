@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { awardDrops } from "@/lib/drops";
 import { klaviyo } from "@/lib/klaviyo";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -44,6 +45,12 @@ export const POST = withCustomer(async (req, ctx) => {
   const body = (await req.json().catch(() => ({}))) as CancelBody;
   if (![1, 2, 3, 4].includes(body.step)) {
     throw new ApiHttpError(400, "invalid_step", "step must be 1..4");
+  }
+
+  // Rate limit applies only to step 4 (the destructive one). Steps 1-3
+  // are read/stage and the customer may legitimately go back-and-forth.
+  if (body.step === 4) {
+    await enforceRateLimit(ctx.customerId, "cancel", { limit: 5, windowMs: 60 * 60_000 });
   }
 
   const sb = supabaseAdmin();

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { klaviyo } from "@/lib/klaviyo";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CustomerProfile } from "@/lib/types";
@@ -56,6 +57,8 @@ interface CustomerPatchBody {
 // The change only applies when the customer clicks the link in their
 // inbox (GET /api/customer/confirm-email?token=...).
 export const PATCH = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "customer-patch", { limit: 10, windowMs: 60_000 });
+
   const body = (await req.json().catch(() => ({}))) as CustomerPatchBody;
   if (!body.firstName && !body.lastName && !body.email && !body.phone) {
     throw new ApiHttpError(400, "no_changes", "Provide at least one of firstName, lastName, email, phone");

@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { resolveSubIds } from "@/lib/seal-mapping";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -33,6 +34,8 @@ interface AddressBody {
  * Enforces 24h cutoff against Shopify's nextBillingDate.
  */
 export const PATCH = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "address", { limit: 10, windowMs: 60_000 });
+
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));

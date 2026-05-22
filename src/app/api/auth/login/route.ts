@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { isSafeRelativePath } from "@/lib/safe-path";
 import { getOAuthStateKey } from "@/lib/secrets";
 
@@ -46,6 +47,23 @@ export async function GET(req: NextRequest) {
       "Server misconfigured: SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID or SHOPIFY_API_SECRET missing",
       { status: 500 },
     );
+  }
+
+  // Pre-auth rate limit by IP. Vercel sets x-forwarded-for; fall back
+  // to a constant so a missing header doesn't bypass the limit (rare,
+  // but defensive). 30/min per IP is generous — bot abuse would hit it
+  // well before a real customer does.
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    req.headers.get("x-real-ip") ??
+    "ip:unknown";
+  try {
+    await enforceRateLimit(`ip:${ip}`, "login", { limit: 30, windowMs: 60_000 });
+  } catch (e) {
+    const err = e as { status?: number; message?: string };
+    return new NextResponse(err.message ?? "Rate limited", {
+      status: err.status ?? 429,
+    });
   }
 
   const url = new URL(req.url);

@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -18,6 +19,8 @@ interface ExtrasBody {
  * Enforces 24h cutoff. NOT yet tested against prod.
  */
 export const POST = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "extras", { limit: 20, windowMs: 60_000 });
+
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));

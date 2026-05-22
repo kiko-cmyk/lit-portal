@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -35,6 +36,8 @@ const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo"
  *     the same silent no-op we saw on item edits?
  */
 export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "plan", { limit: 10, windowMs: 60_000 });
+
   const t0 = Date.now();
   const log = (step: string, extra?: Record<string, unknown>) =>
     console.log(
