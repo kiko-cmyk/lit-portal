@@ -13,7 +13,7 @@
  * + `rim` to override for other contexts.
  */
 export function WaxSeal({
-  rim = "LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · LIT · PERFORM · ",
+  rim = "LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · ",
   centerTop = "STAY",
   centerBottom = "LIT",
   size = 180,
@@ -84,7 +84,12 @@ export function WaxSeal({
             textTransform: "uppercase",
           }}
         >
-          <textPath href="#wax-seal-arc" startOffset="0%">
+          <textPath
+            href="#wax-seal-arc"
+            startOffset="0%"
+            textLength={490}
+            lengthAdjust="spacingAndGlyphs"
+          >
             {rim}
           </textPath>
         </text>
