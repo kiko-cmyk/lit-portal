@@ -75,6 +75,7 @@ export function WaxSeal({
       >
         <text
           fill="#323743"
+          xmlSpace="preserve"
           style={{
             fontFamily: "var(--font-cond)",
             fontSize: 13,
