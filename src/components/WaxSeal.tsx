@@ -31,7 +31,7 @@ export function WaxSeal({
       width={size}
       height={size}
       aria-hidden
-      className={className}
+      className={`group ${className ?? ""}`.trim()}
       style={{
         filter: "drop-shadow(0 14px 26px rgba(50, 40, 30, 0.28))",
       }}
@@ -66,8 +66,9 @@ export function WaxSeal({
         strokeWidth="0.75"
       />
 
-      {/* Rotating rim text */}
+      {/* Rotating rim text — pausa en hover */}
       <g
+        className="group-hover:[animation-play-state:paused]"
         style={{
           transformOrigin: "100px 100px",
           animation: "seal-spin 28s linear infinite",
