@@ -13,7 +13,7 @@
  * + `rim` to override for other contexts.
  */
 export function WaxSeal({
-  rim = "LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · ",
+  rim = "LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · ",
   centerTop = "STAY",
   centerBottom = "LIT.",
   size = 180,
