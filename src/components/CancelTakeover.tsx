@@ -151,7 +151,6 @@ function Step1({
         <T en="This is what" es="Esto es lo que" />
         <br />
         <T en="you've built" es="has construido" />
-        <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       {/* Drops y Cards omitidos en MVP — no estamos awardando ninguno
           de los dos así que mostrar siempre 0 ofende. Reintroducir
@@ -205,7 +204,6 @@ function Step2({
         <T en="We can adjust" es="Podemos ajustar" />
         <br />
         <T en="your subscription" es="tu suscripción" />
-        <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <div className="mt-8 space-y-3">
         <Alternative
@@ -409,7 +407,6 @@ function Step4({
         <T en="Confirm" es="Confirmar" />
         <br />
         <T en="cancellation" es="cancelación" />
-        <span className="text-[color:var(--color-bold-yellow)]">.</span>
       </h1>
       <p className="mt-6 text-sm opacity-70 max-w-md">
         {willShipNext ? (
@@ -536,7 +533,6 @@ function DoneState({ onClose: _onClose }: { done: CancelStep4Response; onClose: 
           en="Thank you for trusting LIT"
           es="Muchas gracias por haber confiado en LIT"
         />
-        <span className="text-[color:var(--color-brisky-cream)]">.</span>
       </h1>
       <p className="mt-8 text-sm opacity-80">
         <T

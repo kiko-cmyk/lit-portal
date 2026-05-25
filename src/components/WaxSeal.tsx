@@ -13,9 +13,9 @@
  * + `rim` to override for other contexts.
  */
 export function WaxSeal({
-  rim = "LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · ",
+  rim = "LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · LIT · PERFORM · REPEAT · ",
   centerTop = "STAY",
-  centerBottom = "LIT.",
+  centerBottom = "LIT",
   size = 180,
   className,
 }: {
@@ -41,7 +41,7 @@ export function WaxSeal({
             outer rim so the type doesn't kiss the edge. */}
         <path
           id="wax-seal-arc"
-          d="M 100,100 m -78,0 a 78,78 0 1,1 156,0 a 78,78 0 1,1 -156,0"
+          d="M 100,100 m -86,0 a 86,86 0 1,1 172,0 a 86,86 0 1,1 -172,0"
           fill="none"
         />
       </defs>
@@ -80,7 +80,7 @@ export function WaxSeal({
             fontFamily: "var(--font-cond)",
             fontSize: 13,
             fontWeight: 700,
-            letterSpacing: "0.22em",
+            letterSpacing: "0.16em",
             textTransform: "uppercase",
           }}
         >

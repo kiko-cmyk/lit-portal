@@ -42,7 +42,6 @@ export function FlavorOverlay({ onClose }: { onClose: () => void }) {
           <T en="New flavors" es="Sabores nuevos" />
           <br />
           <T en="land in June" es="llegan en junio" />
-          <span className="text-[color:var(--color-bold-yellow)]">.</span>
         </h1>
         <p className="mt-3 text-sm opacity-70">
           <T

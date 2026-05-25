@@ -429,14 +429,12 @@ function EmptyState() {
               Gracias por
               <br />
               probar LIT
-              <span className="text-[color:var(--color-bold-yellow)]">.</span>
             </>
           ) : (
             <>
               Thanks for
               <br />
               trying LIT
-              <span className="text-[color:var(--color-bold-yellow)]">.</span>
             </>
           )}
         </h1>

@@ -143,7 +143,6 @@ export function SkipOverlay({
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
               <T en="Skipped" es="Saltado" />
-              <span className="text-[color:var(--color-bold-yellow)]">.</span>
             </h1>
             <p className="mt-3 text-sm opacity-70">
               <T
