@@ -232,8 +232,8 @@ export default function AccountPage() {
           <div className="mx-6 mb-5 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
             <span className="text-[12px] text-[color:var(--color-lit-grey)]">
               <T
-                en="You skipped the previous delivery. Next box ships on"
-                es="Saltaste la entrega anterior. La próxima sale el"
+                en="You skipped the previous order. The next one ships on"
+                es="Saltaste el pedido anterior. El próximo sale el"
               />{" "}
               <strong>
                 {new Date(subscription.nextShipDate).toLocaleDateString(
@@ -285,7 +285,7 @@ export default function AccountPage() {
                 showRightBorder
               />
               <SubsummCell
-                label={t({ en: "Next", es: "Próxima" })}
+                label={t({ en: "Next", es: "Próximo" })}
                 value={
                   subscription.nextShipDate
                     ? new Date(subscription.nextShipDate)

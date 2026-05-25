@@ -270,8 +270,8 @@ export default function HubPage() {
                 icon={QAIcons.Skip}
                 label={t({ en: "Skip next box", es: "Saltar próxima" })}
                 sub={t({
-                  en: "Skip next delivery",
-                  es: "Saltar próxima entrega",
+                  en: "Skip next order",
+                  es: "Saltar próximo pedido",
                 })}
                 onClick={() => setShowSkip(true)}
                 disabled={sub.withinCutoff}
@@ -297,7 +297,7 @@ export default function HubPage() {
             </section>
 
             <SectionDivider
-              title={t({ en: "Upcoming", es: "Próximas entregas" })}
+              title={t({ en: "Upcoming", es: "Próximos pedidos" })}
             />
             <DeliveryCalendar
               nextShipDate={nextShipDate}

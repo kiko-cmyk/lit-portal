@@ -64,7 +64,7 @@ export function Timeline({
           <T en="Timeline" es="Historial" />
         </span>
         <span className="text-[color:var(--color-lit-grey)] font-extrabold">
-          <T en="Last + next" es="Últimas + próxima" />
+          <T en="Last + next" es="Últimos + próximo" />
         </span>
       </div>
 

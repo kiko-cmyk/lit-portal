@@ -34,8 +34,8 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
       {orders.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)]/60 px-5 py-6 text-center text-[12px] text-[color:var(--color-warm-gray)]">
           <T
-            en="Your past orders will appear here after your first delivery."
-            es="Tus pedidos pasados aparecerán aquí tras tu primera entrega."
+            en="Your past orders will appear here after your first order."
+            es="Tus pedidos pasados aparecerán aquí tras tu primer pedido."
           />
         </div>
       ) : (

@@ -75,7 +75,7 @@ export function NextBoxHero({
   // en el banner inferior, no en la cabecera del hero. (Juan 2026-05-19)
   const tapeLabel = locked
     ? t({ en: "Locked", es: "Cerrada" })
-    : t({ en: "Next delivery", es: "Próxima entrega" });
+    : t({ en: "Next order", es: "Próximo pedido" });
 
   return (
     <section
@@ -186,8 +186,8 @@ export function NextBoxHero({
         <div className="mt-4 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5">
           <span className="text-[12px] text-[color:var(--color-lit-grey)]">
             <T
-              en="You skipped the previous delivery. This is your next one."
-              es="Saltaste la entrega anterior. Esta es tu próxima."
+              en="You skipped the previous order. This is your next one."
+              es="Saltaste el pedido anterior. Este es el próximo."
             />
           </span>
           {onUndoSkip && (
@@ -266,12 +266,12 @@ function arrivalDescriptor(
     return lang === "es" ? `Cierra en ${hours}h` : `Locks in ${hours}h`;
   }
   if (ms <= 0) {
-    return lang === "es" ? "Llega hoy" : "Arrives today";
+    return lang === "es" ? "Sale hoy" : "Ships today";
   }
   if (days <= 1 && hours < 48) {
-    return lang === "es" ? `Llega en ${hours}h` : `Arrives in ${hours}h`;
+    return lang === "es" ? `Sale en ${hours}h` : `Ships in ${hours}h`;
   }
-  return lang === "es" ? `Llega en ${days} días` : `Arrives in ${days} days`;
+  return lang === "es" ? `Sale en ${days} días` : `Ships in ${days} days`;
 }
 
 function formatHM(date: Date): string {
