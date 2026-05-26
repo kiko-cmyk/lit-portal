@@ -305,7 +305,7 @@ export default function HubPage() {
             />
 
             <SectionDivider
-              title={t({ en: "Order history", es: "Historial" })}
+              title={t({ en: "My orders", es: "Mis pedidos" })}
             />
             <OrderHistory limit={10} />
 

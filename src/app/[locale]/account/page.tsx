@@ -23,6 +23,8 @@ import {
   usePageTitle,
 } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
+import Link from "next/link";
+import { orderDetailHref } from "@/lib/portal-link";
 import type {
   CustomerProfile,
   OrderHistoryItem,
@@ -967,43 +969,48 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
               {orders.map((o) => (
                 <li
                   key={o.id}
-                  className="flex items-center justify-between border-t border-[color:var(--color-lit-grey)]/6 py-3"
+                  className="border-t border-[color:var(--color-lit-grey)]/6"
                 >
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
-                      {o.orderNumber} ·{" "}
-                      {new Date(o.date).toLocaleDateString(dateLocale, {
-                        month: "short",
-                        day: "numeric",
-                      })}
-                    </span>
-                    <span
-                      className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
-                      style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-                    >
-                      {o.total.toFixed(2)} {o.currency}
-                    </span>
-                  </div>
-                  {/* Status pill only — enlace a Factura eliminado por
-                      Juan 2026-05-19: el cliente no descarga la factura
-                      desde el portal. */}
-                  <span
-                    className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
-                    style={{
-                      background:
-                        o.status === "delivered"
-                          ? "var(--color-success)"
-                          : o.status === "scheduled" || o.status === "upcoming"
-                            ? "var(--color-bold-yellow)"
-                            : "rgba(50, 55, 67, 0.15)",
-                      color:
-                        o.status === "delivered"
-                          ? "var(--color-cream)"
-                          : "var(--color-lit-grey)",
-                    }}
+                  <Link
+                    href={orderDetailHref(lang, o.id)}
+                    className="flex items-center justify-between gap-3 py-3 -mx-2 px-2 rounded-md transition-colors hover:bg-[color:var(--color-brisky-cream)]"
                   >
-                    {(o.status || "—").toUpperCase()}
-                  </span>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
+                        {o.orderNumber} ·{" "}
+                        {new Date(o.date).toLocaleDateString(dateLocale, {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </span>
+                      <span
+                        className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+                        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                      >
+                        {o.total.toFixed(2)} {o.currency}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
+                        style={{
+                          background:
+                            o.status === "delivered"
+                              ? "var(--color-success)"
+                              : o.status === "scheduled" || o.status === "upcoming"
+                                ? "var(--color-bold-yellow)"
+                                : "rgba(50, 55, 67, 0.15)",
+                          color:
+                            o.status === "delivered"
+                              ? "var(--color-cream)"
+                              : "var(--color-lit-grey)",
+                        }}
+                      >
+                        {(o.status || "—").toUpperCase()}
+                      </span>
+                      <span className="text-[12px] text-[color:var(--color-warm-gray)]" aria-hidden>→</span>
+                    </div>
+                  </Link>
                 </li>
               ))}
             </ul>
