@@ -261,29 +261,23 @@ export default function AccountPage() {
               <SubsummCell
                 label={t({ en: "Boxes", es: "Cajas" })}
                 value={String(subscription.boxCount)}
-                sub={t({
-                  en: `${subscription.boxCount * 30} sachets`,
-                  es: `${subscription.boxCount * 30} sobres`,
-                })}
                 showRightBorder
               />
               <SubsummCell
-                label={t({ en: "Every", es: "Cada" })}
-                value={frequencyLabel(subscription.frequency, lang, { format: "compact" })}
-                sub={t({ en: "frequency", es: "frecuencia" })}
+                label={t({ en: "Frequency", es: "Frecuencia" })}
+                value={frequencyLabel(subscription.frequency, lang, { format: "short" }).toUpperCase()}
                 showRightBorder
               />
               <SubsummCell
                 label={t({ en: "Flavor", es: "Sabor" })}
                 value={
                   // El "tipo" del producto (LEMON, SUN, …) es lo que el
-                  // cliente reconoce. "Salty" es prefijo de gama, mucho
-                  // menos identificable — va abajo en pequeño.
+                  // cliente reconoce. "Salty" es prefijo de gama, se queda
+                  // fuera para que la card respire.
                   (subscription.flavor.split(" ").slice(1).join(" ") ||
                     subscription.flavor)
                     .toUpperCase() || "—"
                 }
-                sub={subscription.flavor.split(" ")[0]?.toLowerCase() ?? ""}
                 showRightBorder
               />
               <SubsummCell
@@ -298,7 +292,6 @@ export default function AccountPage() {
                         .toUpperCase()
                     : "—"
                 }
-                sub={t({ en: "ships", es: "sale" })}
               />
             </div>
             <div className="mt-4">
@@ -553,7 +546,7 @@ function SubsummCell({
 }: {
   label: string;
   value: string;
-  sub: string;
+  sub?: string;
   showRightBorder?: boolean;
 }) {
   return (
