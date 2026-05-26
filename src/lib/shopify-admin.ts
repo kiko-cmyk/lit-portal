@@ -243,6 +243,191 @@ class ShopifyAdminClient {
   }
 
   /**
+   * Single-order full detail for the portal's per-order page. Pulls
+   * everything needed to render contact, addresses, items, totals,
+   * fulfillment + tracking, and to verify ownership against the
+   * authenticated customer.
+   *
+   * The caller MUST check that `result.customerNumericId` matches
+   * `ctx.customerId` before returning to the client — otherwise this
+   * exposes any order by GID.
+   */
+  async getOrderDetail(orderGid: string): Promise<{
+    customerNumericId: string | null;
+    id: string;
+    name: string;
+    createdAt: string;
+    cancelledAt: string | null;
+    displayFulfillmentStatus: string;
+    displayFinancialStatus: string;
+    customer: { email: string | null; phone: string | null; firstName: string | null; lastName: string | null } | null;
+    shippingAddress: {
+      firstName: string | null; lastName: string | null;
+      address1: string | null; address2: string | null;
+      city: string | null; zip: string | null; province: string | null; country: string | null;
+      phone: string | null;
+    } | null;
+    billingAddress: {
+      firstName: string | null; lastName: string | null;
+      address1: string | null; address2: string | null;
+      city: string | null; zip: string | null; province: string | null; country: string | null;
+      phone: string | null;
+    } | null;
+    lineItems: Array<{
+      id: string;
+      title: string;
+      variantTitle: string | null;
+      quantity: number;
+      originalUnitPrice: string;
+      currency: string;
+      sku: string | null;
+      imageUrl: string | null;
+    }>;
+    subtotalPrice: { amount: string; currencyCode: string } | null;
+    totalShippingPrice: { amount: string; currencyCode: string } | null;
+    totalTax: { amount: string; currencyCode: string } | null;
+    currentTotalPrice: { amount: string; currencyCode: string };
+    shippingMethodTitle: string | null;
+    fulfillments: Array<{
+      id: string;
+      createdAt: string;
+      deliveredAt: string | null;
+      status: string;
+      displayStatus: string | null;
+      trackingNumber: string | null;
+      trackingUrl: string | null;
+      trackingCompany: string | null;
+    }>;
+  } | null> {
+    const data = await this.graphql<{
+      order: {
+        id: string;
+        name: string;
+        createdAt: string;
+        cancelledAt: string | null;
+        displayFulfillmentStatus: string;
+        displayFinancialStatus: string;
+        customer: { id: string; email: string | null; phone: string | null; firstName: string | null; lastName: string | null } | null;
+        shippingAddress: {
+          firstName: string | null; lastName: string | null;
+          address1: string | null; address2: string | null;
+          city: string | null; zip: string | null; province: string | null; country: string | null;
+          phone: string | null;
+        } | null;
+        billingAddress: {
+          firstName: string | null; lastName: string | null;
+          address1: string | null; address2: string | null;
+          city: string | null; zip: string | null; province: string | null; country: string | null;
+          phone: string | null;
+        } | null;
+        lineItems: {
+          edges: Array<{ node: {
+            id: string;
+            title: string;
+            variantTitle: string | null;
+            quantity: number;
+            sku: string | null;
+            originalUnitPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+            image: { url: string } | null;
+          } }>;
+        };
+        subtotalPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
+        totalShippingPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
+        totalTaxSet: { shopMoney: { amount: string; currencyCode: string } } | null;
+        currentTotalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+        shippingLines: { edges: Array<{ node: { title: string } }> };
+        fulfillments: Array<{
+          id: string;
+          createdAt: string;
+          deliveredAt: string | null;
+          status: string;
+          displayStatus: string | null;
+          trackingInfo: Array<{ number: string | null; url: string | null; company: string | null }>;
+        }>;
+      } | null;
+    }>(
+      `query orderDetail($id: ID!) {
+         order(id: $id) {
+           id name createdAt cancelledAt
+           displayFulfillmentStatus displayFinancialStatus
+           customer { id email phone firstName lastName }
+           shippingAddress { firstName lastName address1 address2 city zip province country phone }
+           billingAddress  { firstName lastName address1 address2 city zip province country phone }
+           lineItems(first: 50) {
+             edges { node {
+               id title variantTitle quantity sku
+               originalUnitPriceSet { shopMoney { amount currencyCode } }
+               image { url }
+             } }
+           }
+           subtotalPriceSet      { shopMoney { amount currencyCode } }
+           totalShippingPriceSet { shopMoney { amount currencyCode } }
+           totalTaxSet           { shopMoney { amount currencyCode } }
+           currentTotalPriceSet  { shopMoney { amount currencyCode } }
+           shippingLines(first: 1) { edges { node { title } } }
+           fulfillments(first: 5) {
+             id createdAt deliveredAt status displayStatus
+             trackingInfo { number url company }
+           }
+         }
+       }`,
+      { id: orderGid },
+    );
+
+    const o = data.order;
+    if (!o) return null;
+
+    const customerNumericId = o.customer?.id
+      ? o.customer.id.replace(/^gid:\/\/shopify\/Customer\//, "")
+      : null;
+
+    return {
+      customerNumericId,
+      id: o.id,
+      name: o.name,
+      createdAt: o.createdAt,
+      cancelledAt: o.cancelledAt,
+      displayFulfillmentStatus: o.displayFulfillmentStatus,
+      displayFinancialStatus: o.displayFinancialStatus,
+      customer: o.customer
+        ? {
+            email: o.customer.email,
+            phone: o.customer.phone,
+            firstName: o.customer.firstName,
+            lastName: o.customer.lastName,
+          }
+        : null,
+      shippingAddress: o.shippingAddress,
+      billingAddress: o.billingAddress,
+      lineItems: o.lineItems.edges.map(({ node: li }) => ({
+        id: li.id,
+        title: li.title,
+        variantTitle: li.variantTitle,
+        quantity: li.quantity,
+        originalUnitPrice: li.originalUnitPriceSet.shopMoney.amount,
+        currency: li.originalUnitPriceSet.shopMoney.currencyCode,
+        sku: li.sku,
+        imageUrl: li.image?.url ?? null,
+      })),
+      subtotalPrice: o.subtotalPriceSet?.shopMoney ?? null,
+      totalShippingPrice: o.totalShippingPriceSet?.shopMoney ?? null,
+      totalTax: o.totalTaxSet?.shopMoney ?? null,
+      currentTotalPrice: o.currentTotalPriceSet.shopMoney,
+      shippingMethodTitle: o.shippingLines.edges[0]?.node.title ?? null,
+      fulfillments: o.fulfillments.map((f) => ({
+        id: f.id,
+        createdAt: f.createdAt,
+        deliveredAt: f.deliveredAt,
+        status: f.status,
+        displayStatus: f.displayStatus,
+        trackingNumber: f.trackingInfo[0]?.number ?? null,
+        trackingUrl: f.trackingInfo[0]?.url ?? null,
+        trackingCompany: f.trackingInfo[0]?.company ?? null,
+      })),
+    };
+  }
+
+  /**
    * Products tagged `add-to-box` — the catalog shown in the Extras overlay.
    * Returns first variant of each product as the addable SKU.
    */

@@ -36,6 +36,7 @@ const ES_TO_CANONICAL: Record<string, string> = {
   "mi-lit": "my-lit",
   coleccion: "collection",
   cuenta: "account",
+  pedidos: "orders",
 };
 
 // Bare canonical slug (no locale) → translated slug for the default locale
@@ -43,6 +44,7 @@ const CANONICAL_TO_DEFAULT_LOCALE_SLUG: Record<string, string> = {
   "my-lit": "mi-lit",
   collection: "coleccion",
   account: "cuenta",
+  orders: "pedidos",
 };
 
 // Legacy → current slug, applied with a 308 so old links in emails still land.

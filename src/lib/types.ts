@@ -229,6 +229,55 @@ export interface OrderHistoryItem {
   invoiceUrl: string | null;
 }
 
+export interface OrderAddress {
+  firstName: string;
+  lastName: string;
+  address1: string;
+  address2: string | null;
+  city: string;
+  postalCode: string;
+  province: string | null;
+  country: string;
+  phone: string | null;
+}
+
+export interface OrderItem {
+  id: string;
+  title: string;
+  variantTitle: string | null;
+  quantity: number;
+  price: number;
+  imageUrl: string | null;
+  sku: string | null;
+}
+
+export interface OrderFulfillmentStatus {
+  status: "fulfilled" | "in_transit" | "pending" | "cancelled";
+  shippedAt: string | null;
+  deliveredAt: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  carrier: string | null;
+}
+
+export interface OrderDetail extends OrderHistoryItem {
+  /** Same as `date` (createdAt) — labelled explicitly so the UI can show a "Fecha de confirmación" row. */
+  confirmationDate: string;
+  contact: { name: string; email: string; phone: string | null };
+  shippingAddress: OrderAddress | null;
+  billingAddress: OrderAddress | null;
+  items: OrderItem[];
+  subtotal: number;
+  shippingPrice: number;
+  tax: number;
+  /** `total` from OrderHistoryItem is already the grand total; this is here for explicitness. */
+  fulfillment: OrderFulfillmentStatus | null;
+  shippingMethodTitle: string | null;
+  cancelledAt: string | null;
+  /** True when the order can be re-purchased (not cancelled + customer eligible). */
+  canReorder: boolean;
+}
+
 // ============ Hub ============
 
 export interface UpcomingShipment {

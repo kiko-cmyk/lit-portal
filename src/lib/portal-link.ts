@@ -9,17 +9,27 @@
 
 export type Lang = "en" | "es";
 
-export type PortalRoute = "home" | "collection" | "account";
+export type PortalRoute = "home" | "collection" | "account" | "orders";
 
 const SLUGS: Record<Lang, Record<PortalRoute, string>> = {
-  en: { home: "my-lit", collection: "collection", account: "account" },
-  es: { home: "mi-lit", collection: "coleccion", account: "cuenta" },
+  en: { home: "my-lit", collection: "collection", account: "account", orders: "orders" },
+  es: { home: "mi-lit", collection: "coleccion", account: "cuenta", orders: "pedidos" },
 };
 
 const BASE = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH ?? "";
 
 export function portalHref(locale: Lang, route: PortalRoute): string {
   return `${BASE}/${locale}/${SLUGS[locale][route]}`;
+}
+
+/**
+ * Order detail URL for a specific Shopify order. Pass the raw Shopify
+ * order id (numeric or full GID) — we strip the GID prefix and use
+ * just the numeric id in the URL to keep it readable.
+ */
+export function orderDetailHref(locale: Lang, orderId: string): string {
+  const numeric = orderId.replace(/^gid:\/\/shopify\/Order\//, "");
+  return `${BASE}/${locale}/${SLUGS[locale].orders}/${numeric}`;
 }
 
 /**

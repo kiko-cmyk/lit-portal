@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { orderDetailHref } from "@/lib/portal-link";
 import type { OrderHistoryItem } from "@/lib/types";
 
 /**
@@ -43,31 +45,38 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
           {orders.map((o) => (
             <li
               key={o.id}
-              className="flex items-center justify-between gap-3 border-b border-[color:var(--color-lit-grey)]/5 px-5 py-3.5 last:border-b-0"
+              className="border-b border-[color:var(--color-lit-grey)]/5 last:border-b-0"
             >
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
-                  {o.orderNumber} ·{" "}
-                  {new Date(o.date).toLocaleDateString(dateLocale, {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })}
-                </div>
-                <div className="mt-0.5 text-[11px] text-[color:var(--color-warm-gray)]">
-                  {o.total.toFixed(2)} {o.currency} · {translateStatus(o.status, lang)}
-                </div>
-              </div>
-              {/* Status pill only — invoice download intentionally removed
-                  per Juan: customers don't need raw invoices from the portal.
-                  rounded-full per Juan 2026-05-19 round 7: same pill shape as
-                  the SOON tag in Collection. */}
-              <span
-                className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
-                style={statusStyle(o.status)}
+              <Link
+                href={orderDetailHref(lang, o.id)}
+                className="flex items-center justify-between gap-3 px-5 py-3.5 transition-colors hover:bg-[color:var(--color-brisky-cream)]"
               >
-                {translateStatus(o.status, lang).toUpperCase()}
-              </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
+                    {o.orderNumber} ·{" "}
+                    {new Date(o.date).toLocaleDateString(dateLocale, {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-[color:var(--color-warm-gray)]">
+                    {o.total.toFixed(2)} {o.currency} · {translateStatus(o.status, lang)}
+                  </div>
+                </div>
+                <span
+                  className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
+                  style={statusStyle(o.status)}
+                >
+                  {translateStatus(o.status, lang).toUpperCase()}
+                </span>
+                <span
+                  className="ml-2 text-[12px] text-[color:var(--color-warm-gray)]"
+                  aria-hidden
+                >
+                  →
+                </span>
+              </Link>
             </li>
           ))}
         </ul>
