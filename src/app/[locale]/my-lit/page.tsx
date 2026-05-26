@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
@@ -391,23 +392,20 @@ function SyncingBanner() {
 }
 
 /**
- * Estado para clientes sin suscripción activa. Cubre tres escenarios:
- *   1. Compra one-shot (no eligieron selling plan).
- *   2. Suscripción cancelada hace tiempo (ya no en post_cancel).
- *   3. Cliente con cuenta pero sin pedidos (raro pero posible).
+ * Estado para visitantes autenticados sin suscripción activa. Cubre:
+ *   1. Cliente nuevo que acaba de registrarse y aún no ha comprado.
+ *   2. Compra one-shot (no eligieron selling plan).
+ *   3. Suscripción cancelada hace tiempo (ya no en post_cancel).
  *
- * En todos los casos asumimos que han hecho login → son clientes Shopify.
- * Por eso el tono es de "gracias por estar aquí, pásate a suscripción y
- * recibe automático" en vez del frío "descubre LIT" de antes.
- *
- * El CTA principal apunta a la PDP con el selling_plan por defecto pre-
- * seleccionado para que el cliente caiga ya en suscripción mensual sin
- * tener que toquetear el selector.
+ * Copy neutral ("Bienvenido a LIT") para no asumir que han comprado, ya
+ * que el OAuth permite registro on-the-fly. Link directo a Cuenta para
+ * que los clientes one-shot puedan ver su histórico de pedidos.
  */
 function EmptyState() {
   const lang = useLangValue();
   return (
     <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+      <TopNav />
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <LangToggle />
@@ -426,15 +424,15 @@ function EmptyState() {
         >
           {lang === "es" ? (
             <>
-              Gracias por
+              Bienvenido
               <br />
-              probar LIT
+              a LIT
             </>
           ) : (
             <>
-              Thanks for
+              Welcome
               <br />
-              trying LIT
+              to LIT
             </>
           )}
         </h1>
@@ -442,21 +440,19 @@ function EmptyState() {
         <p className="mt-6 max-w-md text-[14px] leading-[1.55] text-[color:var(--color-warm-gray)]">
           {lang === "es" ? (
             <>
-              Tu pedido está en marcha. Si te suscribes, recibirás LIT
-              automáticamente cada mes con un{" "}
+              Suscríbete y recibe LIT automáticamente cada mes con un{" "}
               <strong className="text-[color:var(--color-lit-grey)]">
                 descuento desde el 25%
-              </strong>{" "}
-              sobre el precio único, y podrás gestionar todo desde este portal.
+              </strong>
+              , y gestiona pedidos, planes y direcciones desde este portal.
             </>
           ) : (
             <>
-              Your order is on the way. Subscribe and get LIT delivered
-              automatically every month with{" "}
+              Subscribe and get LIT delivered automatically every month with{" "}
               <strong className="text-[color:var(--color-lit-grey)]">
                 25% off or more
-              </strong>{" "}
-              vs the one-time price, all managed from this portal.
+              </strong>
+              , and manage orders, plans and addresses from this portal.
             </>
           )}
         </p>
@@ -469,13 +465,13 @@ function EmptyState() {
           >
             {lang === "es" ? "Activar mi suscripción" : "Start my subscription"}
           </a>
-          <a
-            href="https://litsalt.com"
+          <Link
+            href={portalHref(lang, "account")}
             className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
             style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
           >
-            {lang === "es" ? "Volver a la tienda" : "Back to shop"}
-          </a>
+            {lang === "es" ? "Ver mis pedidos" : "View my orders"}
+          </Link>
         </div>
       </main>
       <BottomNav />

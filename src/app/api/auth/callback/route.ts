@@ -37,7 +37,7 @@ const TOKEN_ENDPOINT =
 const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
 
 const PORTAL_BASE = "https://litsalt.com";
-const FALLBACK_RETURN = "/apps/portal/es/mi-lit";
+const FALLBACK_RETURN = "/apps/portal/es/cuenta";
 const HANDOFF_PATH = "/apps/portal/es/auth/handoff";
 
 // 14 días — bajado de 30d el 2026-05-22 (audit recomendaba ≤7, este

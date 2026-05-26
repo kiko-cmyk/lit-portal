@@ -18,7 +18,7 @@ import { isSafeRelativePath } from "@/lib/safe-path";
  */
 
 const SESSION_STORAGE_KEY = "lit_session";
-const FALLBACK_TO = "/apps/portal/es/mi-lit";
+const FALLBACK_TO = "/apps/portal/es/cuenta";
 
 export default function AuthHandoffPage() {
   useEffect(() => {

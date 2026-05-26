@@ -24,7 +24,8 @@ import { getOAuthStateKey } from "@/lib/secrets";
  *
  * Query params soportados:
  *   - return_to (opcional): path relativo del portal al que volver tras
- *     el login. Default: /es/mi-lit
+ *     el login. Default: /es/cuenta (Mi LIT es subscriber-only, Cuenta
+ *     funciona para todos los clientes incluidos los one-shot).
  */
 
 const SHOPIFY_AUTHORIZE_URL =
@@ -37,7 +38,7 @@ const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
 // Fallback con prefijo /apps/portal porque return_to viaja con la ruta
 // completa (LoginScreen pasa window.location.pathname, que ya incluye
 // el App Proxy mount prefix).
-const DEFAULT_RETURN_TO = "/apps/portal/es/mi-lit";
+const DEFAULT_RETURN_TO = "/apps/portal/es/cuenta";
 
 const STATE_TTL_SECONDS = 600; // 10 min
 

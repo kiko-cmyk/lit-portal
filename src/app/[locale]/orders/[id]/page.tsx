@@ -49,7 +49,6 @@ export default function OrderDetailPage({
           </div>
           <h1 className="mt-2 font-display text-3xl font-black uppercase">
             <T en="Not found" es="No encontrado" />
-            <span className="text-[color:var(--color-bold-yellow)]">.</span>
           </h1>
           <p className="mt-3 text-sm opacity-70">
             <T

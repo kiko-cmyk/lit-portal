@@ -1,17 +1,31 @@
 /**
  * Shopify Admin GraphQL client.
  *
- * Auth strategy: the LIT app uses `client_credentials` grant. Tokens are
- * issued via `POST /admin/oauth/access_token` with client_id + client_secret
- * and live for 24h. We cache the token in-process and refresh on demand.
+ * Auth strategy: client_credentials grant. Tokens are issued via
+ * `POST /admin/oauth/access_token` with client_id + client_secret and
+ * live for 24h. We cache the token in-process and refresh on demand.
  *
  * If `SHOPIFY_ADMIN_TOKEN` is set in env, we use it directly (e.g., for a
  * statically-issued long-lived token). Otherwise we fetch via client creds.
+ *
+ * Credential selection (resolved 2026-05-26 when Kiko's old orders stopped
+ * showing): the LIT Portal v3 app and LIT Portal Admin app both have
+ * `read_orders` scope but NOT `read_all_orders` (Shopify denies the request
+ * for these app types). Without `read_all_orders` Shopify hides orders
+ * older than 60 days from the API — which silently wipes most history for
+ * any customer who's been around a while.
+ *
+ * Workaround: a third app (the legacy LIT theme app, full-scoped) DOES
+ * have `read_all_orders`. We use ITS credentials for Admin API calls when
+ * `SHOPIFY_ADMIN_CLIENT_ID`/`SHOPIFY_ADMIN_CLIENT_SECRET` are set. The
+ * existing `SHOPIFY_API_KEY`/`SECRET` remain reserved for App Proxy
+ * signature verification (which MUST stay on the v3 app's secret because
+ * Shopify signs proxy requests with that app's client_secret).
  */
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // e.g. "lit-tienda.myshopify.com"
-const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
-const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET;
+const ADMIN_CLIENT_ID = process.env.SHOPIFY_ADMIN_CLIENT_ID ?? process.env.SHOPIFY_API_KEY;
+const ADMIN_CLIENT_SECRET = process.env.SHOPIFY_ADMIN_CLIENT_SECRET ?? process.env.SHOPIFY_API_SECRET;
 const ADMIN_API_VERSION = "2026-04";
 
 interface CachedToken {
@@ -31,16 +45,16 @@ async function getAdminToken(): Promise<string> {
     return _cached.token;
   }
 
-  if (!SHOPIFY_STORE || !SHOPIFY_API_KEY || !SHOPIFY_API_SECRET) {
-    throw new Error("SHOPIFY_STORE, SHOPIFY_API_KEY, SHOPIFY_API_SECRET required");
+  if (!SHOPIFY_STORE || !ADMIN_CLIENT_ID || !ADMIN_CLIENT_SECRET) {
+    throw new Error("SHOPIFY_STORE, SHOPIFY_ADMIN_CLIENT_ID (or SHOPIFY_API_KEY), SHOPIFY_ADMIN_CLIENT_SECRET (or SHOPIFY_API_SECRET) required");
   }
 
   const res = await fetch(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      client_id: SHOPIFY_API_KEY,
-      client_secret: SHOPIFY_API_SECRET,
+      client_id: ADMIN_CLIENT_ID,
+      client_secret: ADMIN_CLIENT_SECRET,
       grant_type: "client_credentials",
     }),
   });

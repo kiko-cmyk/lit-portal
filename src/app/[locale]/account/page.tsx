@@ -398,10 +398,12 @@ export default function AccountPage() {
 
         <Marquee />
 
-        <DangerZone
-          onCancel={() => setCancelOpen(true)}
-          signoutUrl="https://litsalt.com/account/logout"
-        />
+        {subscription && (
+          <DangerZone
+            onCancel={() => setCancelOpen(true)}
+            signoutUrl="https://litsalt.com/account/logout"
+          />
+        )}
       </main>
 
       <BottomNav />
