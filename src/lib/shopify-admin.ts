@@ -36,9 +36,17 @@ interface CachedToken {
 let _cached: CachedToken | null = null;
 
 async function getAdminToken(): Promise<string> {
-  // Static override from env wins
-  const fromEnv = process.env.SHOPIFY_ADMIN_TOKEN;
-  if (fromEnv) return fromEnv;
+  // Prefer client_credentials when separate admin app creds are configured
+  // (SHOPIFY_ADMIN_CLIENT_ID set). This wins even if SHOPIFY_ADMIN_TOKEN
+  // is also set in env — operators sometimes forget to clear the old
+  // static token when adding the new dedicated admin app, and we need
+  // the new app to take effect immediately. The static token remains as
+  // a fallback for environments without separate admin creds.
+  const hasDedicatedAdminApp = !!process.env.SHOPIFY_ADMIN_CLIENT_ID && !!process.env.SHOPIFY_ADMIN_CLIENT_SECRET;
+  if (!hasDedicatedAdminApp) {
+    const fromEnv = process.env.SHOPIFY_ADMIN_TOKEN;
+    if (fromEnv) return fromEnv;
+  }
 
   // Cache hit (with 5min buffer before expiry)
   if (_cached && _cached.expiresAt > Date.now() + 5 * 60 * 1000) {
