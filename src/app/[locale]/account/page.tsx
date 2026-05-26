@@ -196,8 +196,8 @@ export default function AccountPage() {
                 .toUpperCase()}{" "}
               ·{" "}
               <T
-                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"}`}
-                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"}`}
+                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"} delivered`}
+                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"} entregadas`}
               />
             </div>
           </div>
