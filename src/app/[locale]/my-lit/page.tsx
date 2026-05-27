@@ -22,7 +22,6 @@ import { SectionDivider } from "@/components/SectionDivider";
 import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
-import { frequencyLabel } from "@/lib/frequency-label";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref } from "@/lib/portal-link";
@@ -261,18 +260,17 @@ export default function HubPage() {
               <QuickActionButton
                 icon={QAIcons.ChargeNow}
                 label={t({ en: "Bring forward", es: "Adelantar pedido" })}
-                sub={t({ en: "Get it now", es: "Recíbelo ya" })}
+                sub={t({ en: "Order now", es: "Hacer pedido ahora" })}
                 onClick={() => setShowChargeNow(true)}
                 disabled={sub.withinCutoff}
               />
               <QuickActionButton
                 icon={QAIcons.ChangePlan}
                 label={t({ en: "Change plan", es: "Cambiar plan" })}
-                sub={`${sub.boxCount} ${
-                  sub.boxCount === 1
-                    ? t({ en: "box", es: "caja" })
-                    : t({ en: "boxes", es: "cajas" })
-                } · ${frequencyLabel(sub.frequency, lang, { format: "short" })}`}
+                sub={t({
+                  en: "Change frequency or box count",
+                  es: "Cambiar frecuencia o nº de cajas",
+                })}
                 onClick={() => setShowPlan(true)}
                 disabled={sub.withinCutoff}
               />
