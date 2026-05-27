@@ -156,22 +156,10 @@ export function ChargeNowOverlay({
             </h1>
             <p className="mt-3 text-sm opacity-70">
               <T
-                en="We've processed your order. Your next shipment will recalculate in a few moments."
-                es="Hemos procesado tu pedido. Tu próximo envío se recalculará en unos instantes."
+                en="We're processing your order. Your new delivery calendar will recalculate in a few moments."
+                es="Vamos a procesar tu pedido. Tu nuevo calendario de envíos se recalculará en unos instantes."
               />
             </p>
-            {done.newNextShipDate && (
-              <p className="mt-3 text-sm opacity-70">
-                <T en="Next order around" es="Próximo pedido alrededor del" />{" "}
-                <strong>
-                  {new Date(done.newNextShipDate).toLocaleDateString(
-                    t({ en: "en-US", es: "es-ES" }),
-                    { day: "numeric", month: "long" },
-                  )}
-                </strong>
-                .
-              </p>
-            )}
             <button
               type="button"
               onClick={onClose}
