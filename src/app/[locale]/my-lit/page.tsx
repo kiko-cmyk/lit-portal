@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
+import { ChargeNowOverlay } from "@/components/ChargeNowOverlay";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
 import { CustomerChip } from "@/components/CustomerChip";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
@@ -51,6 +52,7 @@ export default function HubPage() {
   const [error, setError] = useState<string | null>(null);
   const [showPlan, setShowPlan] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
+  const [showChargeNow, setShowChargeNow] = useState(false);
   const [justSkipped, setJustSkipped] = useState<boolean>(
     () => readJustSkipped() !== null,
   );
@@ -255,7 +257,14 @@ export default function HubPage() {
                 es: "Gestionar mi suscripción",
               })}
             />
-            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
+            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-5">
+              <QuickActionButton
+                icon={QAIcons.ChargeNow}
+                label={t({ en: "Bring forward", es: "Adelantar pedido" })}
+                sub={t({ en: "Get it now", es: "Recíbelo ya" })}
+                onClick={() => setShowChargeNow(true)}
+                disabled={sub.withinCutoff}
+              />
               <QuickActionButton
                 icon={QAIcons.ChangePlan}
                 label={t({ en: "Change plan", es: "Cambiar plan" })}
@@ -358,6 +367,25 @@ export default function HubPage() {
           }}
         />
       )}
+      {showChargeNow && (
+        <ChargeNowOverlay
+          subscription={sub}
+          onClose={() => setShowChargeNow(false)}
+          onCharged={(newDate) => {
+            // A charge-now with reset_schedule re-anchors the cadence on
+            // today, so any local "just skipped" marker is now stale.
+            markSkipped(false);
+            // Optimistic next date (today + cycle). Seal regenerates the
+            // billing_attempts asynchronously, so kick the silent re-poll to
+            // reconcile the calendar with Seal's truth.
+            setData({
+              ...data,
+              subscription: { ...sub, nextShipDate: newDate ?? sub.nextShipDate },
+            });
+            setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -377,12 +405,12 @@ function SyncingBanner() {
       <div className="text-[11px] leading-[1.4] text-[color:var(--color-lit-grey)]">
         {lang === "es" ? (
           <>
-            <strong className="font-extrabold">Aplicando el cambio de plan.</strong>{" "}
+            <strong className="font-extrabold">Actualizando tu calendario.</strong>{" "}
             Tu nueva fecha de envío aparecerá en unos minutos. Refresca la página.
           </>
         ) : (
           <>
-            <strong className="font-extrabold">Applying your plan change.</strong>{" "}
+            <strong className="font-extrabold">Updating your calendar.</strong>{" "}
             Your new ship date will appear in a few minutes. Refresh the page.
           </>
         )}

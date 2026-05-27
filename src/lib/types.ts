@@ -102,6 +102,13 @@ export interface SkipResponse {
   undoExpiresAt: string;
 }
 
+export interface ChargeNowResponse {
+  charged: boolean;
+  // Estimada (hoy + un ciclo). El calendario real lo reconcilia el re-poll
+  // tras la regeneración asíncrona de billing_attempts en Seal.
+  newNextShipDate: string | null;
+}
+
 export interface CancelStep1Response {
   step: 1;
   data: {

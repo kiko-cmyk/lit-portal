@@ -444,6 +444,41 @@ class SealClient {
   }
 
   /**
+   * Charge the subscription's next order RIGHT NOW ("adelantar pedido").
+   *
+   * Hits Seal's dedicated `/subscription-create-charge-now` endpoint, which
+   * bills the payment method on file immediately and (with
+   * `reset_schedule: "true"`) recreates the rest of the billing schedule
+   * anchored on today — i.e. the next order moves to ~today + one cycle.
+   * Without `reset_schedule`, Seal keeps the previously-queued future
+   * attempts, which would double-bill the customer; so callers who want the
+   * "bring forward" behaviour MUST pass `resetSchedule: true`.
+   *
+   * NOTE: `id` here is the SUBSCRIPTION id, not a billing-attempt id (unlike
+   * skip/reschedule). `reset_schedule` is the STRING "true" — Seal's API uses
+   * string booleans throughout.
+   *
+   * Seal returns HTTP 200 with `{success:false,message}` on rejection (e.g.
+   * card declined), same as skip/edit — we surface that as an error so the
+   * UI never claims success on a failed charge.
+   */
+  async chargeNow(subscriptionId: number, opts?: { resetSchedule?: boolean }): Promise<void> {
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription-create-charge-now",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          id: subscriptionId,
+          ...(opts?.resetSchedule ? { reset_schedule: "true" } : {}),
+        }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal charge-now rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
    * Update shipping address fields on a subscription via `edit` action.
    * Maps the portal's clean address shape to Seal's `s_*` keys.
    */

@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { AddressOverlay } from "@/components/AddressOverlay";
 import { CancelTakeover } from "@/components/CancelTakeover";
+import { ChargeNowOverlay } from "@/components/ChargeNowOverlay";
 import { CustomerChip } from "@/components/CustomerChip";
 import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
@@ -42,6 +43,7 @@ export default function AccountPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
+  const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   // Mirror Mi LIT: an active skip drives the "Saltada" indicator next
   // to the Skip QA + an undo affordance. Persisted in localStorage so
@@ -203,7 +205,13 @@ export default function AccountPage() {
           </div>
         </section>
 
-        <section className="mx-6 mb-5 grid grid-cols-4 gap-1.5 md:mx-0">
+        <section className="mx-6 mb-5 grid grid-cols-3 gap-1.5 md:mx-0 md:grid-cols-5">
+          <CompactAction
+            icon={QAIcons.ChargeNow}
+            label={t({ en: "Bring fwd", es: "Adelantar" })}
+            onClick={() => subscription && setChargeNowOpen(true)}
+            disabled={!subscription || subscription.withinCutoff}
+          />
           <CompactAction
             icon={QAIcons.ChangePlan}
             label={t({ en: "Plan", es: "Plan" })}
@@ -449,6 +457,24 @@ export default function AccountPage() {
           subscription={subscription}
           onClose={() => setAddressOpen(false)}
           onUpdated={(updated) => setSubscription(updated)}
+        />
+      )}
+      {chargeNowOpen && subscription && (
+        <ChargeNowOverlay
+          subscription={subscription}
+          onClose={() => setChargeNowOpen(false)}
+          onCharged={(newDate) => {
+            // Charge-now with reset_schedule re-anchors the cadence on today,
+            // so any "just skipped" marker is now stale.
+            clearJustSkipped();
+            setJustSkipped(false);
+            // Optimistic next date; re-pull the canonical sub to reconcile
+            // once Seal finishes regenerating the schedule.
+            setSubscription({ ...subscription, nextShipDate: newDate ?? subscription.nextShipDate });
+            api<Subscription>("/api/subscription")
+              .then(setSubscription)
+              .catch(() => undefined);
+          }}
         />
       )}
     </div>

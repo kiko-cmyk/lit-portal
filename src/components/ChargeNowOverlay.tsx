@@ -1,0 +1,187 @@
+"use client";
+
+import { useState } from "react";
+import { api } from "@/lib/api-client";
+import { T, useLang } from "@/lib/i18n";
+import type { ChargeNowResponse, Subscription } from "@/lib/types";
+
+/**
+ * Charge-now overlay — "Adelantar mi pedido".
+ *
+ * Calls POST /api/subscription/charge-now which:
+ *   - Enforces the 24h cutoff (can't bring forward an order already shipping)
+ *   - Fires Seal /subscription-create-charge-now with reset_schedule → charges
+ *     the card on file NOW and re-anchors the cadence on today
+ *   - Fires Klaviyo subscription_charge_now event
+ *
+ * Mirror of SkipOverlay, but the copy makes the immediate charge explicit:
+ * the customer must understand they're paying now.
+ */
+export function ChargeNowOverlay({
+  subscription,
+  onClose,
+  onCharged,
+}: {
+  subscription: Subscription;
+  onClose: () => void;
+  onCharged: (newDate: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<ChargeNowResponse | null>(null);
+  const t = useLang();
+
+  const currentShip = subscription.nextShipDate
+    ? new Date(subscription.nextShipDate)
+    : null;
+
+  const handleCharge = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<ChargeNowResponse>("/api/subscription/charge-now", {
+        method: "POST",
+        // Fast-path: lets the backend skip the 33-page Seal scan (same
+        // optimisation as skip/plan).
+        body: JSON.stringify({ sealSubscriptionId: subscription.sealSubscriptionId }),
+      });
+      setDone(res);
+      onCharged(res.newNextShipDate);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      setError(
+        code === "cutoff_passed"
+          ? t({
+              en: "Your next order is already on its way.",
+              es: "Tu próximo pedido ya está en camino.",
+            })
+          : t({
+              en: "Couldn't process the payment. Check your payment method or try again later.",
+              es: "No se pudo procesar el pago. Revisa tu método de pago o inténtalo más tarde.",
+            }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="zone-cream relative mx-auto w-full max-w-md rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute right-4 top-4 text-2xl opacity-60"
+        >
+          ×
+        </button>
+
+        {!done ? (
+          <>
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+              <T en="Bring order forward" es="Adelantar pedido" />
+            </div>
+            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
+              <T en="Get it now" es="¿Recibirlo ya" />?
+            </h1>
+            <p className="mt-3 text-sm opacity-70">
+              <T
+                en="We'll charge your next order to your payment method now, and your calendar will reset from today."
+                es="Cobraremos tu próximo pedido ahora mismo a tu método de pago, y tu calendario se reajustará desde hoy."
+              />
+            </p>
+
+            {currentShip && (
+              <div className="mt-6 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
+                <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+                  <T en="Scheduled ship date" es="Fecha de envío programada" />
+                </div>
+                <div className="mt-1 flex items-center gap-3">
+                  <span className="font-display text-xl font-black uppercase line-through opacity-45">
+                    {currentShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
+                      day: "numeric",
+                      month: "long",
+                    })}
+                  </span>
+                  <span aria-hidden className="text-lg opacity-50">
+                    →
+                  </span>
+                  <span className="font-display text-2xl font-black uppercase text-[color:var(--color-lit-grey)]">
+                    <T en="Today" es="Hoy" />
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleCharge}
+              className="mt-7 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-50"
+            >
+              {busy ? (
+                <T en="Processing…" es="Procesando…" />
+              ) : (
+                <T en="Yes, charge now" es="Sí, cóbralo ahora" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+            >
+              <T en="Never mind" es="Mejor no" />
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+              <T en="Done" es="Listo" />
+            </div>
+            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
+              <T en="On its way" es="En camino" />!
+            </h1>
+            <p className="mt-3 text-sm opacity-70">
+              <T
+                en="We've processed your order. Your next shipment will recalculate in a few moments."
+                es="Hemos procesado tu pedido. Tu próximo envío se recalculará en unos instantes."
+              />
+            </p>
+            {done.newNextShipDate && (
+              <p className="mt-3 text-sm opacity-70">
+                <T en="Next order around" es="Próximo pedido alrededor del" />{" "}
+                <strong>
+                  {new Date(done.newNextShipDate).toLocaleDateString(
+                    t({ en: "en-US", es: "es-ES" }),
+                    { day: "numeric", month: "long" },
+                  )}
+                </strong>
+                .
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-7 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+            >
+              <T en="Back to LIT" es="Volver a LIT" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

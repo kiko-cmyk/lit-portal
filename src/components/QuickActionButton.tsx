@@ -107,6 +107,12 @@ export function QuickActionButton({
 
 /** Inline SVG icon set — line icons sized 20×20. */
 export const QAIcons = {
+  // Bolt = "instant / now". Distinct from Skip's skip-forward glyph.
+  ChargeNow: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  ),
   ChangePlan: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
