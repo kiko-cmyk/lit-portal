@@ -101,7 +101,7 @@ export function ChargeNowOverlay({
             {currentShip && (
               <div className="mt-6 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
                 <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
-                  <T en="Scheduled ship date" es="Fecha de envío programada" />
+                  <T en="Scheduled order date" es="Fecha de pedido programada" />
                 </div>
                 <div className="mt-1 flex items-center gap-3">
                   <span className="font-display text-xl font-black uppercase line-through opacity-45">
@@ -135,7 +135,7 @@ export function ChargeNowOverlay({
               {busy ? (
                 <T en="Processing…" es="Procesando…" />
               ) : (
-                <T en="Yes, charge now" es="Sí, cóbralo ahora" />
+                <T en="Yes, order now" es="Sí, pedir ahora" />
               )}
             </button>
             <button
