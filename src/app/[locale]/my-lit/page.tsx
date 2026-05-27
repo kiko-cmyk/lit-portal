@@ -268,8 +268,8 @@ export default function HubPage() {
                 icon={QAIcons.ChangePlan}
                 label={t({ en: "Change plan", es: "Cambiar plan" })}
                 sub={t({
-                  en: "Change frequency or box count",
-                  es: "Cambiar frecuencia o nº de cajas",
+                  en: "Change boxes or frequency",
+                  es: "Cambiar cajas o frecuencia",
                 })}
                 onClick={() => setShowPlan(true)}
                 disabled={sub.withinCutoff}
