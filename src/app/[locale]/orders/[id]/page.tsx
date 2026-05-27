@@ -11,8 +11,6 @@ import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 import type { CustomerProfile, OrderDetail } from "@/lib/types";
 
-const REORDER_URL = "https://litsalt.com/products/lit-subscription";
-
 export default function OrderDetailPage({
   params,
 }: {
@@ -110,14 +108,6 @@ export default function OrderDetailPage({
             })}
           </p>
         </div>
-        {order.canReorder && (
-          <a
-            href={REORDER_URL}
-            className="rounded-sm border border-[color:var(--color-lit-grey)]/40 px-5 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
-          >
-            <T en="Buy again" es="Volver a comprar" />
-          </a>
-        )}
       </div>
 
       {/* Two-column layout on desktop */}
