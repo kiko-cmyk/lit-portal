@@ -12,6 +12,12 @@ create table if not exists rate_buckets (
   primary key (subject, endpoint)
 );
 
+-- 2026-05-27: enable RLS. Supabase flagged `rls_disabled_in_public` for
+-- this table. All access is via the service-role client (the
+-- rate_limit_check RPC is invoked with it), which bypasses RLS. No public
+-- policies → anon/authenticated cannot read or tamper with the counters.
+alter table rate_buckets enable row level security;
+
 -- Helper RPC for atomic upsert + increment in a single round-trip.
 -- Returns:
 --   ok=true and current count when allowed

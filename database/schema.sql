@@ -348,5 +348,10 @@ alter table cancellations          enable row level security;
 alter table email_logs             enable row level security;
 alter table webhook_log            enable row level security;
 alter table auth_sessions          enable row level security;
+-- NOTE: email_change_requests and rate_buckets are created in their own
+-- migration files (database/migrations/2026-05-22_*.sql) and enable RLS
+-- there. They are NOT created here, so don't add their ALTER statements to
+-- this file or a fresh standalone run would fail. (Supabase flagged both as
+-- rls_disabled on 2026-05-25; fixed 2026-05-27.)
 
 -- No public policies — all access via service role from API routes.

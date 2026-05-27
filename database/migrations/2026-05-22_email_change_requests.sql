@@ -22,3 +22,12 @@ create table if not exists email_change_requests (
 create index if not exists email_change_requests_customer_pending
   on email_change_requests(customer_id)
   where consumed_at is null;
+
+-- 2026-05-27: enable RLS. Supabase flagged `sensitive_columns_exposed` —
+-- the `token`/`new_email` columns were reachable via the public anon key
+-- (which ships in the browser bundle) because RLS was never enabled here.
+-- Leaking a pending token = email-change hijack = account takeover, the
+-- exact risk finding #11 set out to close. Service role (all API routes)
+-- bypasses RLS; no public policies means anon/authenticated see zero rows,
+-- matching every other table in schema.sql.
+alter table email_change_requests enable row level security;
