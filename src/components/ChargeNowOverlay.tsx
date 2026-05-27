@@ -93,8 +93,8 @@ export function ChargeNowOverlay({
             </h1>
             <p className="mt-3 text-sm opacity-70">
               <T
-                en="We'll charge your next order to your payment method now, and your calendar will reset from today."
-                es="Cobraremos tu próximo pedido ahora mismo a tu método de pago, y tu calendario se reajustará desde hoy."
+                en="We'll charge your next order now and it'll arrive within 48-72h. Your calendar will reset from today based on your plan."
+                es="Cobraremos tu próximo pedido ahora y te llegará en las próximas 48-72h. Tu calendario se reajustará desde hoy en función de tu plan contratado."
               />
             </p>
 
