@@ -140,4 +140,10 @@ export const QAIcons = {
       <line x1="10" y1="12" x2="14" y2="12" />
     </svg>
   ),
+  Cancel: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9 9l6 6M15 9l-6 6" />
+    </svg>
+  ),
 };

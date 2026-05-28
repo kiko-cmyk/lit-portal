@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
+import { CancelTakeover } from "@/components/CancelTakeover";
 import { ChargeNowOverlay } from "@/components/ChargeNowOverlay";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
 import { CustomerChip } from "@/components/CustomerChip";
@@ -52,6 +53,7 @@ export default function HubPage() {
   const [showPlan, setShowPlan] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [showChargeNow, setShowChargeNow] = useState(false);
+  const [showCancel, setShowCancel] = useState(false);
   const [justSkipped, setJustSkipped] = useState<boolean>(
     () => readJustSkipped() !== null,
   );
@@ -285,20 +287,20 @@ export default function HubPage() {
                 disabled={sub.withinCutoff}
               />
               <QuickActionButton
+                icon={QAIcons.Cancel}
+                label={t({
+                  en: "Cancel subscription",
+                  es: "Cancelar suscripción",
+                })}
+                sub={t({ en: "Delete account", es: "Eliminar cuenta" })}
+                onClick={() => setShowCancel(true)}
+              />
+              <QuickActionButton
                 icon={QAIcons.Flavor}
                 label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
                 sub={t({
                   en: "New flavors coming soon",
                   es: "Nuevos sabores pronto",
-                })}
-                comingSoon
-              />
-              <QuickActionButton
-                icon={QAIcons.Extras}
-                label={t({ en: "Extras", es: "Extras" })}
-                sub={t({
-                  en: "Add an extra to my order",
-                  es: "Añadir un extra a mi pedido",
                 })}
                 comingSoon
               />
@@ -381,6 +383,21 @@ export default function HubPage() {
               subscription: { ...sub, nextShipDate: newDate ?? sub.nextShipDate },
             });
             setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
+          }}
+        />
+      )}
+      {showCancel && customer && (
+        <CancelTakeover
+          customer={customer}
+          subscription={sub}
+          onClose={() => setShowCancel(false)}
+          onPivotToSkip={() => {
+            setShowCancel(false);
+            setShowSkip(true);
+          }}
+          onPivotToPlan={() => {
+            setShowCancel(false);
+            setShowPlan(true);
           }}
         />
       )}
