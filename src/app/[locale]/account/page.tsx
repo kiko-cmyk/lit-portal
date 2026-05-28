@@ -227,13 +227,14 @@ export default function AccountPage() {
             disabled={!subscription || subscription.withinCutoff}
           />
           <CompactAction
-            icon={QAIcons.Flavor}
-            label={t({ en: "Flavor", es: "Sabor" })}
-            comingSoon
+            icon={QAIcons.Cancel}
+            label={t({ en: "Cancel", es: "Cancelar" })}
+            onClick={() => setCancelOpen(true)}
+            disabled={!subscription}
           />
           <CompactAction
-            icon={QAIcons.Extras}
-            label={t({ en: "Extras", es: "Extras" })}
+            icon={QAIcons.Flavor}
+            label={t({ en: "Flavor", es: "Sabor" })}
             comingSoon
           />
         </section>
