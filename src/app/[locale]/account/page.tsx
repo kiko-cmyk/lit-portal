@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { AddressOverlay } from "@/components/AddressOverlay";
 import { CancelTakeover } from "@/components/CancelTakeover";
@@ -93,6 +93,18 @@ export default function AccountPage() {
         );
       }
     }
+  }, []);
+
+  // Re-pull the subscription on demand. Used when the Cancel takeover closes:
+  // the takeover can be dismissed with its × right after a successful cancel
+  // (instead of the "Back to LIT" redirect), which left this page holding the
+  // stale ACTIVE sub in state, so the management UI kept showing until a full
+  // navigation remounted the page. Refetching here flips the gate to the
+  // cancelled state immediately. (2026-06-02)
+  const refreshSubscription = useCallback(() => {
+    api<Subscription>("/api/subscription")
+      .then(setSubscription)
+      .catch(() => setSubscription(null));
   }, []);
 
   if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
@@ -445,7 +457,10 @@ export default function AccountPage() {
         <CancelTakeover
           customer={customer}
           subscription={subscription}
-          onClose={() => setCancelOpen(false)}
+          onClose={() => {
+            setCancelOpen(false);
+            refreshSubscription();
+          }}
           onPivotToSkip={() => setSkipOpen(true)}
           onPivotToPlan={() => setPlanOpen(true)}
         />
