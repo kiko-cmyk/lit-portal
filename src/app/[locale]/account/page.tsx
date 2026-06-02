@@ -124,6 +124,18 @@ export default function AccountPage() {
 
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
+  // A cancelled/expired sub still comes back from GET /api/subscription: that
+  // route falls back to the most recent sub when none is ACTIVE, so
+  // `subscription` is non-null even after a cancel. Gate the management UI on
+  // the real status (mirrors the Hub, which 404s when there is no ACTIVE sub)
+  // so a cancelled customer doesn't see the plan + action buttons. (2026-06-02)
+  const subActive =
+    subscription != null &&
+    (subscription.status === "active" ||
+      subscription.status === "paused" ||
+      subscription.status === "reactivating");
+  const subCancelled = subscription != null && !subActive;
+
   const handleUndoSkip = async () => {
     if (!subscription) return;
     try {
@@ -205,39 +217,40 @@ export default function AccountPage() {
           </div>
         </section>
 
-        <section className="mx-6 mb-5 grid grid-cols-3 gap-1.5 md:mx-0 md:grid-cols-5">
-          <CompactAction
-            icon={QAIcons.ChargeNow}
-            label={t({ en: "Bring fwd", es: "Adelantar" })}
-            onClick={() => subscription && setChargeNowOpen(true)}
-            disabled={!subscription || subscription.withinCutoff}
-          />
-          <CompactAction
-            icon={QAIcons.ChangePlan}
-            label={t({ en: "Plan", es: "Plan" })}
-            onClick={() => subscription && setPlanOpen(true)}
-            // Match Mi LIT: disable when within 24h of next ship so the
-            // user doesn't hit a backend cutoff_passed error.
-            disabled={!subscription || subscription.withinCutoff}
-          />
-          <CompactAction
-            icon={QAIcons.Skip}
-            label={t({ en: "Skip", es: "Saltar" })}
-            onClick={() => subscription && setSkipOpen(true)}
-            disabled={!subscription || subscription.withinCutoff}
-          />
-          <CompactAction
-            icon={QAIcons.Cancel}
-            label={t({ en: "Cancel", es: "Cancelar" })}
-            onClick={() => setCancelOpen(true)}
-            disabled={!subscription}
-          />
-          <CompactAction
-            icon={QAIcons.Flavor}
-            label={t({ en: "Flavor", es: "Sabor" })}
-            comingSoon
-          />
-        </section>
+        {subActive && (
+          <section className="mx-6 mb-5 grid grid-cols-3 gap-1.5 md:mx-0 md:grid-cols-5">
+            <CompactAction
+              icon={QAIcons.ChargeNow}
+              label={t({ en: "Bring fwd", es: "Adelantar" })}
+              onClick={() => setChargeNowOpen(true)}
+              disabled={!!subscription?.withinCutoff}
+            />
+            <CompactAction
+              icon={QAIcons.ChangePlan}
+              label={t({ en: "Plan", es: "Plan" })}
+              onClick={() => setPlanOpen(true)}
+              // Match Mi LIT: disable when within 24h of next ship so the
+              // user doesn't hit a backend cutoff_passed error.
+              disabled={!!subscription?.withinCutoff}
+            />
+            <CompactAction
+              icon={QAIcons.Skip}
+              label={t({ en: "Skip", es: "Saltar" })}
+              onClick={() => setSkipOpen(true)}
+              disabled={!!subscription?.withinCutoff}
+            />
+            <CompactAction
+              icon={QAIcons.Cancel}
+              label={t({ en: "Cancel", es: "Cancelar" })}
+              onClick={() => setCancelOpen(true)}
+            />
+            <CompactAction
+              icon={QAIcons.Flavor}
+              label={t({ en: "Flavor", es: "Sabor" })}
+              comingSoon
+            />
+          </section>
+        )}
 
         {justSkipped && subscription?.nextShipDate && (
           <div className="mx-6 mb-5 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
@@ -264,7 +277,7 @@ export default function AccountPage() {
           </div>
         )}
 
-        {subscription && (
+        {subActive && (
           <Section title={t({ en: "My subscription", es: "Mi suscripción" })}>
             <div className="grid grid-cols-4 border-t border-[color:var(--color-lit-grey)]/6">
               <SubsummCell
@@ -315,6 +328,17 @@ export default function AccountPage() {
                 />
               </button>
             </div>
+          </Section>
+        )}
+
+        {subCancelled && (
+          <Section title={t({ en: "My subscription", es: "Mi suscripción" })}>
+            <p className="text-[13px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+              <T
+                en="Your subscription is cancelled. You won't be charged or shipped again."
+                es="Tu suscripción está cancelada. No habrá más cobros ni envíos."
+              />
+            </p>
           </Section>
         )}
 
@@ -388,7 +412,7 @@ export default function AccountPage() {
           />
         </Section>
 
-        {subscription && (
+        {subActive && (
           <Section title={t({ en: "Where boxes land", es: "Dónde llegan las cajas" })}>
             <AddressBlock
               address={subscription.shippingAddress}
@@ -407,7 +431,7 @@ export default function AccountPage() {
 
         <Marquee />
 
-        {subscription && (
+        {subActive && (
           <DangerZone
             onCancel={() => setCancelOpen(true)}
             signoutUrl="https://litsalt.com/account/logout"

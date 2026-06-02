@@ -28,6 +28,31 @@ interface CancelBody {
 const HOLD_DAYS = 90;
 
 /**
+ * Fire a Klaviyo event with a few retries. The cancel route used to call
+ * `klaviyo.trackEvent(...)` fire-and-forget (no await, error swallowed), so a
+ * transient Klaviyo hiccup — or the Vercel function freezing right after Seal
+ * — silently dropped the confirmation event. We now await with retries; the
+ * caller still treats a final failure as best-effort (logged for backfill).
+ */
+async function trackEventWithRetry(
+  event: Parameters<typeof klaviyo.trackEvent>[0],
+  email: string,
+  properties: Record<string, unknown>,
+  attempts = 3,
+): Promise<void> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await klaviyo.trackEvent(event, email, properties);
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/**
  * POST /apps/portal/api/subscription/cancel
  *
  * Multi-step flow per BACKEND_CONTRACT § 1.1.9:
@@ -145,53 +170,74 @@ export const POST = withCustomer(async (req, ctx) => {
 
   // ───── Step 4: FINAL COMMIT ─────
   if (body.step === 4) {
-    // IDEMPOTENCY CHECK (audit 2026-05-21):
-    // If there's a recent (<10 min) cancellation row for this customer
-    // already in `committing` or `confirmed` status, return that row's
-    // cached response instead of re-running Seal + DB writes. Prevents:
-    //   - double-increment of cancel_count
-    //   - double-fire of Klaviyo `subscription_cancelled` event
-    //   - double drops-reset on second+ cancel
-    // Typical trigger: FE times out waiting for Seal but the cancel
-    // actually went through (Vercel returned 504, customer retries).
     const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
-    const { data: recentCancel } = await sb
+
+    // IDEMPOTENCY (audit 2026-05-21, HARDENED 2026-06-02 after the cancel
+    // audit): ONLY a recent `confirmed` row short-circuits. Previously a
+    // `committing` row also returned `cancelled:true` — but `committing`
+    // means the Seal cancel may have FAILED, or a post-Seal write/the whole
+    // function was interrupted (Vercel froze it after Seal). That produced
+    // FALSE confirmations (sub still ACTIVE in Seal → still billing → "I
+    // cancelled but my account is still active") AND skipped the Klaviyo
+    // confirmation event. Live diagnosis 2026-06-02: 26/283 cancels stuck
+    // `committing`; of 13 sampled, 2 still ACTIVE in Seal, 11 cancelled but
+    // never finished (no email, no winback). We now RE-DRIVE `committing`
+    // rows below until Seal truly reports CANCELLED, then complete every
+    // dependent write.
+    const { data: recentConfirmed } = await sb
       .from("cancellations")
-      .select("id, status, effective_last_ship_date, drops_release_at, cancel_count_at_event, started_at")
+      .select("id, effective_last_ship_date, drops_release_at, cancel_count_at_event, started_at")
       .eq("customer_id", ctx.customerId)
-      .in("status", ["committing", "confirmed"])
+      .eq("status", "confirmed")
       .order("started_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (
-      recentCancel &&
-      new Date(recentCancel.started_at).getTime() > Date.now() - IDEMPOTENCY_WINDOW_MS
+      recentConfirmed &&
+      new Date(recentConfirmed.started_at).getTime() > Date.now() - IDEMPOTENCY_WINDOW_MS
     ) {
-      console.log("[cancel] idempotency short-circuit", {
+      console.log("[cancel] idempotency short-circuit (confirmed)", {
         customerId: ctx.customerId,
-        cancellationId: recentCancel.id,
-        status: recentCancel.status,
+        cancellationId: recentConfirmed.id,
       });
       const cached: CancelStep4Response = {
         cancelled: true,
         // effective_last_ship_date is a `date` column → no time component.
         // Append midnight UTC for the FE Date() parser to be happy.
-        lastShipDate: recentCancel.effective_last_ship_date
-          ? `${recentCancel.effective_last_ship_date}T00:00:00.000Z`
+        lastShipDate: recentConfirmed.effective_last_ship_date
+          ? `${recentConfirmed.effective_last_ship_date}T00:00:00.000Z`
           : "",
-        dropsHeldUntil: (recentCancel.drops_release_at as string | null) ?? null,
+        dropsHeldUntil: (recentConfirmed.drops_release_at as string | null) ?? null,
         cardsKept: 0,
-        cancelCount: recentCancel.cancel_count_at_event ?? 0,
+        cancelCount: recentConfirmed.cancel_count_at_event ?? 0,
       };
       return cached;
     }
 
+    // Locate an in-flight row. `pending` = normal progression from step 3.
+    // `committing` = a previous step-4 attempt that never reached `confirmed`
+    // → RE-DRIVE it (same cancellationId, reuse its stored ordinal/hold so the
+    // retry is idempotent).
+    const { data: inflight } = await sb
+      .from("cancellations")
+      .select("id, status, cancel_count_at_event, drops_release_at, effective_last_ship_date")
+      .eq("customer_id", ctx.customerId)
+      .in("status", ["pending", "committing"])
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const isRedrive = inflight?.status === "committing";
+
     const url = new URL(req.url);
     const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
 
-    // Fast-path: id-from-body + Supabase ownership check + targeted Seal GET.
-    // Slow-path (fallback): paginated email scan, kept for older clients.
-    // Juan 2026-05-21: fast-path added to keep step 4 inside Vercel's budget.
+    // Resolve the subscription. Fast-path: id-from-body + Supabase ownership
+    // check + targeted Seal GET. Slow-path (fallback): paginated email scan.
+    // On a RE-DRIVE the Seal sub may ALREADY be CANCELLED (cancel went through
+    // but the commit didn't), so accept a cancelled sub there — otherwise we'd
+    // 404 forever and the half-finished cancel could never finish its
+    // email/cache/Shopify side. Juan 2026-05-21: fast-path keeps step 4 inside
+    // Vercel's budget.
     let sub: SealSubscription | null = null;
     let email: string | null = null;
     if (body.sealSubscriptionId !== undefined) {
@@ -211,21 +257,25 @@ export const POST = withCustomer(async (req, ctx) => {
       email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
       if (!email) throw new ApiHttpError(404, "customer_not_found", "");
       const subs = await seal.getSubscriptionsByEmail(email);
-      sub = subs.find((s) => s.status === "ACTIVE") ?? null;
+      sub =
+        subs.find((s) => s.status === "ACTIVE") ??
+        (isRedrive ? subs.find((s) => s.status === "CANCELLED") ?? subs[0] ?? null : null);
       if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
       assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step4");
     }
     if (!email) email = sub.email ?? null;
     if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
-    // 1. Read current state
+    // 1. Read current state. Reuse the in-flight row's stored ordinal so a
+    //    re-drive can never double-count cancel_count.
     const { data: prefs } = await sb
       .from("customer_preferences")
       .select("cancel_count")
       .eq("customer_id", ctx.customerId)
       .maybeSingle();
-    const cancelCount = prefs?.cancel_count ?? 0;
-    const isSecondPlus = cancelCount >= 1;
+    const priorCancelCount = prefs?.cancel_count ?? 0;
+    const cancelOrdinal = inflight?.cancel_count_at_event ?? priorCancelCount + 1;
+    const isSecondPlus = cancelOrdinal >= 2;
 
     const { data: bal } = await sb
       .from("drops_balances")
@@ -234,28 +284,23 @@ export const POST = withCustomer(async (req, ctx) => {
       .maybeSingle();
     const currentBalance = bal?.balance ?? 0;
 
-    // Audit 2026-05-18 [CRIT]: previously Seal cancelled first and Supabase
-    // was updated after. If any DB step failed after Seal returned 200, the
-    // sub was cancelled in Seal but the app's `cancellations` row stayed in
-    // `pending`, no `confirmed_at`, no `drops_release_at`, and the
-    // winback/drops-cleanup crons never fired. Now we mark the row as
-    // `committing` BEFORE talking to Seal, then promote to `confirmed` only
-    // after the Seal cancel + every dependent write succeed. If Seal fails
-    // we leave the row as `committing` and surface a hard error.
+    // First cancel: 90d Drops hold. 2nd+: immediate reset (no hold). Reuse the
+    // stored release date on a re-drive so the hold window doesn't slide.
     const releaseAt = isSecondPlus
       ? null
-      : new Date(Date.now() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const lastShipDate = (sub.billing_attempts ?? []).find(
-      (a) => !a.completed_at && !a.status && !a.skipped_on,
-    )?.date ?? null;
+      : ((inflight?.drops_release_at as string | null) ??
+        new Date(Date.now() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString());
+    const lastShipDate =
+      (inflight?.effective_last_ship_date as string | null) ??
+      (sub.billing_attempts ?? []).find(
+        (a) => !a.completed_at && !a.status && !a.skipped_on,
+      )?.date ??
+      null;
 
-    const { data: pendingRow } = await sb
-      .from("cancellations")
-      .select("id")
-      .eq("customer_id", ctx.customerId)
-      .eq("status", "pending")
-      .maybeSingle();
-
+    // Audit 2026-05-18 [CRIT]: mark the row `committing` BEFORE talking to
+    // Seal, promote to `confirmed` only after the Seal cancel + every
+    // dependent write succeed. (See the idempotency note above for why
+    // `committing` is now re-driven rather than trusted as done.)
     const committingPatch = {
       status: "committing" as const,
       primary_reason: body.primaryReason ?? null,
@@ -264,13 +309,12 @@ export const POST = withCustomer(async (req, ctx) => {
       effective_last_ship_date: lastShipDate ? lastShipDate.slice(0, 10) : null,
       drops_held_at_cancel: isSecondPlus ? 0 : currentBalance,
       drops_release_at: releaseAt,
-      cancel_count_at_event: cancelCount + 1,
+      cancel_count_at_event: cancelOrdinal,
     };
 
-    let cancellationId: string | null = null;
-    if (pendingRow) {
-      cancellationId = pendingRow.id as string;
-      const { error } = await sb.from("cancellations").update(committingPatch).eq("id", pendingRow.id);
+    let cancellationId: string | null = inflight?.id ?? null;
+    if (cancellationId) {
+      const { error } = await sb.from("cancellations").update(committingPatch).eq("id", cancellationId);
       if (error) throw new Error(`cancellations pre-commit update failed: ${error.message}`);
     } else {
       const { data: inserted, error } = await sb
@@ -281,70 +325,136 @@ export const POST = withCustomer(async (req, ctx) => {
       if (error) throw new Error(`cancellations pre-commit insert failed: ${error.message}`);
       cancellationId = inserted?.id as string;
     }
+    if (!cancellationId) throw new Error("cancellations: missing id after pre-commit");
 
-    // Now call Seal. If this fails the row stays in `committing` — visible in
-    // ops dashboards as a half-finished cancel that needs manual follow-up.
-    try {
-      await seal.cancelSubscription(sub.id, { reason: body.primaryReason });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[cancel] seal.cancelSubscription failed for sub ${sub.id}: ${msg}`);
-      throw new ApiHttpError(502, "seal_cancel_failed", msg);
+    // Cancel in Seal — skip the call if Seal already has it cancelled (a
+    // re-drive of a sub that cancelled fine but never committed downstream).
+    // If this fails the row stays `committing` and we surface a hard error.
+    if (sub.status !== "CANCELLED") {
+      try {
+        await seal.cancelSubscription(sub.id, { reason: body.primaryReason });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[cancel] seal.cancelSubscription failed for sub ${sub.id}: ${msg}`);
+        throw new ApiHttpError(502, "seal_cancel_failed", msg);
+      }
     }
 
-    // Seal accepted the cancellation. Promote the row to confirmed and do the
-    // dependent writes. If a follow-up step fails, the cancel is still
-    // committed in Seal, but the row remains in `committing` until the next
-    // retry — preferable to a silent partial state.
+    // VERIFY Seal actually cancelled before we ever report success. This is
+    // THE guard against false confirmations: previously the route returned
+    // `cancelled:true` whenever Seal didn't throw, but Seal can answer 200
+    // without the sub flipping to CANCELLED. Re-read and require it; if not
+    // cancelled we leave the row `committing` and 502 (a retry re-drives).
+    const verify = await seal.getSubscriptionById(sub.id);
+    const reallyCancelled =
+      verify?.status === "CANCELLED" || !!verify?.cancellation_scheduled_for;
+    if (!reallyCancelled) {
+      console.error(
+        `[cancel] post-cancel verify FAILED sub ${sub.id} status=${verify?.status ?? "unknown"} — leaving row committing`,
+      );
+      throw new ApiHttpError(502, "seal_cancel_unverified", "Seal did not confirm the cancellation");
+    }
+
+    // Seal confirmed CANCELLED. Complete every dependent write. All of these
+    // are idempotent so the re-drive of a committing row is safe.
+
+    // Drops reset for 2nd+ cancel. awardDrops does NOT dedup internally
+    // (lib/drops.ts just inserts), so guard on an existing tagged event.
     if (isSecondPlus && currentBalance !== 0) {
-      // Tag the drops_event with cancellationId so reintentos del POST no
-      // dupliquen el negativo (the awardDrops helper checks metadata for the
-      // same tag).
-      await awardDrops(ctx.customerId, "cancel_reset", -currentBalance, {
-        reason: "second_plus_cancel",
-        cancellationId,
-      });
+      const { data: existingReset } = await sb
+        .from("drops_events")
+        .select("id")
+        .eq("customer_id", ctx.customerId)
+        .eq("action", "cancel_reset")
+        .filter("metadata->>cancellationId", "eq", cancellationId)
+        .maybeSingle();
+      if (!existingReset) {
+        await awardDrops(ctx.customerId, "cancel_reset", -currentBalance, {
+          reason: "second_plus_cancel",
+          cancellationId,
+        });
+      }
     }
 
+    // Set (not increment) cancel_count to this cancel's ordinal — idempotent
+    // under re-drive.
     await sb
       .from("customer_preferences")
       .upsert(
         {
           customer_id: ctx.customerId,
-          cancel_count: cancelCount + 1,
+          cancel_count: cancelOrdinal,
           last_cancelled_at: new Date().toISOString(),
         },
         { onConflict: "customer_id" },
       );
 
-    if (cancellationId) {
-      await sb
-        .from("cancellations")
-        .update({ status: "confirmed", confirmed_at: new Date().toISOString() })
-        .eq("id", cancellationId);
+    // Promote to confirmed.
+    await sb
+      .from("cancellations")
+      .update({ status: "confirmed", confirmed_at: new Date().toISOString() })
+      .eq("id", cancellationId);
+
+    // ── Block access (2026-06-02): cancelling must end the session. The FE
+    // best-effort logout only kills the current device's token; invalidate
+    // EVERY session for this customer so they can't keep using the portal on
+    // another device. Combined with the data routes already gating on an
+    // ACTIVE Seal sub (subscription_not_found), Seal=CANCELLED + no session =
+    // no access.
+    {
+      const { error } = await sb.from("auth_sessions").delete().eq("customer_id", ctx.customerId);
+      if (error) console.warn("[cancel] auth_sessions purge failed:", error.message);
     }
 
-    // 6. Trigger Klaviyo event — flows can react with confirmation + schedule win-back.
-    // cancellationId pasa como property para que el flow pueda dedupear si
-    // el evento llega dos veces (e.g. retry de la mutation): el flow puede
-    // chequear "ya he disparado para este cancellationId? ignora".
-    klaviyo
-      .trackEvent("subscription_cancelled", email, {
+    // Invalidate the subscriptions cache so no fast-path reads a stale
+    // "active" (it was never updated on cancel before — bug E in the audit).
+    await sb
+      .from("subscriptions")
+      .update({
+        status: verify?.cancellation_scheduled_for ? "post_cancel" : "expired",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("customer_id", ctx.customerId);
+
+    // NOTE on the Shopify SubscriptionContract (decided 2026-06-02 after
+    // research): we intentionally do NOT call subscriptionContractCancel here.
+    // Seal is the source of truth and owns the contract lifecycle + the
+    // customer cancellation email. For a Seal-managed store, cancelling the
+    // Shopify contract directly does NOT send a customer email (Shopify's
+    // native subscription emails belong to the first-party "Shopify
+    // Subscriptions" app, which this store does not use) and risks Seal/Shopify
+    // drift. Billing is driven by Seal (it creates the billing attempts), so a
+    // Seal cancel stops charges regardless of the mirror contract's status. The
+    // customer-facing cancellation email is a Seal notification setting
+    // (Seal > Settings > Notifications), not anything this route can send.
+
+    // Fire the Klaviyo subscription_cancelled event with retries (was
+    // fire-and-forget). This is for analytics / optional Klaviyo automation —
+    // the customer-facing cancellation email comes from Seal, not this event.
+    // Best-effort: the cancel is already committed, so a Klaviyo failure is
+    // logged, not surfaced. cancellationId lets a flow dedupe on double-fire.
+    try {
+      await trackEventWithRetry("subscription_cancelled", email, {
         cancellationId,
         primaryReason: body.primaryReason,
         freeText: body.freeText,
-        cancelCount: cancelCount + 1,
+        cancelCount: cancelOrdinal,
         lastShipDate,
         dropsHeldUntil: releaseAt,
-      })
-      .catch((err) => console.warn("[cancel] klaviyo event failed:", err));
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[cancel][klaviyo-event-failed] cancellationId=${cancellationId} customer=${ctx.customerId}: ${msg}`,
+      );
+    }
 
     const resp: CancelStep4Response = {
       cancelled: true,
       lastShipDate: lastShipDate ?? "",
       dropsHeldUntil: releaseAt,
       cardsKept: 0, // Phase 2
-      cancelCount: cancelCount + 1,
+      cancelCount: cancelOrdinal,
     };
     return resp;
   }
