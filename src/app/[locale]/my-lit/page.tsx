@@ -1,10 +1,9 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
-import { CancelTakeover } from "@/components/CancelTakeover";
-import { ChargeNowOverlay } from "@/components/ChargeNowOverlay";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
 import { CustomerChip } from "@/components/CustomerChip";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
@@ -13,15 +12,21 @@ import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
-import { PlanOverlay } from "@/components/PlanOverlay";
 import {
   QAIcons,
   QuickActionButton,
 } from "@/components/QuickActionButton";
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { SectionDivider } from "@/components/SectionDivider";
-import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
+
+// Overlays are modal-only (rendered behind a click), so we code-split them out
+// of the Hub's initial bundle — they download on first open instead of slowing
+// every Hub load. (2026-06-10 frontend perf pass)
+const PlanOverlay = dynamic(() => import("@/components/PlanOverlay").then((m) => m.PlanOverlay));
+const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
+const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
+const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 import { api, ApiClientError } from "@/lib/api-client";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";

@@ -1,19 +1,15 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
-import { AddressOverlay } from "@/components/AddressOverlay";
 import { orderStatusStyle, translateOrderStatus } from "@/lib/order-status";
-import { CancelTakeover } from "@/components/CancelTakeover";
-import { ChargeNowOverlay } from "@/components/ChargeNowOverlay";
 import { CustomerChip } from "@/components/CustomerChip";
 import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
-import { PlanOverlay } from "@/components/PlanOverlay";
 import { QAIcons } from "@/components/QuickActionButton";
-import { SkipOverlay } from "@/components/SkipOverlay";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -34,6 +30,14 @@ import type {
   SubscriptionAddress,
   TierResponse,
 } from "@/lib/types";
+
+// Modal-only overlays — code-split out of the Account page's initial bundle;
+// they download on first open. (2026-06-10 frontend perf pass)
+const AddressOverlay = dynamic(() => import("@/components/AddressOverlay").then((m) => m.AddressOverlay));
+const PlanOverlay = dynamic(() => import("@/components/PlanOverlay").then((m) => m.PlanOverlay));
+const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
+const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
+const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 
 export default function AccountPage() {
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
