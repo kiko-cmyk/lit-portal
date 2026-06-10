@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
+import { LoginScreen } from "@/components/LoginScreen";
 import { TierPill } from "@/components/TierPill";
 import { api } from "@/lib/api-client";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
@@ -152,13 +153,34 @@ export default function CollectionPage() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [detailIdx, setDetailIdx] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<TierResponse>("/api/tier").then(setTier).catch(() => setTier(null));
+    // A dead session must send the customer back to login like the other
+    // pages do — otherwise Collection silently showed an empty 00/12 grid as
+    // if they were a brand-new customer. Non-auth errors keep degrading
+    // gracefully to the empty state.
+    const onAuthErr = (e: unknown) => {
+      const code = (e as { code?: string }).code;
+      if (code === "unauthorized" || code === "session_expired" || code === "session_invalid") {
+        setError(code);
+      }
+    };
+    api<TierResponse>("/api/tier").then(setTier).catch((e) => {
+      setTier(null);
+      onAuthErr(e);
+    });
     api<TimelineEntry[]>("/api/timeline?limit=12")
       .then(setTimeline)
-      .catch(() => setTimeline([]));
+      .catch((e) => {
+        setTimeline([]);
+        onAuthErr(e);
+      });
   }, []);
+
+  if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") {
+    return <LoginScreen />;
+  }
 
   const earnedCount = Math.min(12, timeline.length);
   const scenario: Scenario =

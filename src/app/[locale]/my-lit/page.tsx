@@ -186,6 +186,21 @@ export default function HubPage() {
     }
   };
 
+  // Actually revert the skip in Seal (not just hide the banner). Before this,
+  // "Undo" only cleared the local flag, so the customer thought they'd
+  // recovered the box but Seal kept it skipped. (2026-06-10)
+  const handleUndoSkip = async () => {
+    try {
+      await api("/api/subscription/skip/undo", { method: "POST" });
+      markSkipped(false);
+      const fresh = await api<HubDashboard>("/api/hub/dashboard");
+      setData(fresh);
+    } catch (e) {
+      // Leave the banner up so the customer can retry; nothing destructive.
+      console.error("[hub] undo skip failed", e);
+    }
+  };
+
   if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
   if (error === "subscription_not_found") return <EmptyState />;
   if (error) return <ErrorState code={error} />;
@@ -247,7 +262,7 @@ export default function HubPage() {
               flavor={sub.flavor}
               variant={variant}
               cutoffEndsAt={cutoffEndsAt}
-              onUndoSkip={justSkipped ? () => markSkipped(false) : undefined}
+              onUndoSkip={justSkipped ? handleUndoSkip : undefined}
               boxCount={sub.boxCount}
               frequency={sub.frequency}
             />
