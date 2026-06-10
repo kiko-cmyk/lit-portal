@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { T } from "@/lib/i18n";
 
 interface QuickActionButtonProps {
   icon: ReactNode;
@@ -62,7 +63,7 @@ export function QuickActionButton({
           className="absolute right-3 top-3 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
         >
-          Soon
+          <T en="Soon" es="Pronto" />
         </span>
       )}
 
