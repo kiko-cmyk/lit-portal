@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { REWARD_THRESHOLDS, awardDrops } from "@/lib/drops";
 import { klaviyo } from "@/lib/klaviyo";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -28,6 +29,8 @@ const MERCH_VARIANT_IDS: Record<MerchOption, string | undefined> = {
 
 // POST /apps/portal/api/rewards/claim
 export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "rewards-claim", { limit: 10, windowMs: 60_000 });
+
   const body = (await req.json().catch(() => ({}))) as ClaimBody;
   if (!body.rewardId || !(body.rewardId in REWARD_THRESHOLDS)) {
     throw new ApiHttpError(400, "invalid_reward", "Unknown rewardId");

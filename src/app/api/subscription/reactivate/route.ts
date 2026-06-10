@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { klaviyo } from "@/lib/klaviyo";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -20,6 +21,8 @@ const HOLD_DAYS = 90;
  * No cooldown (per locked decision 2026-04-27 — same-day reactivation OK).
  */
 export const POST = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "reactivate", { limit: 5, windowMs: 60_000 });
+
   const sb = supabaseAdmin();
 
   const { data: prefs } = await sb

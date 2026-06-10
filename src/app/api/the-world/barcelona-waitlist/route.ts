@@ -1,19 +1,22 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { BarcelonaWaitlistResponse } from "@/lib/types";
 
 // POST /apps/portal/api/the-world/barcelona-waitlist
-// Body: { email: string }
-export const POST = withCustomer<BarcelonaWaitlistResponse>(async (req, _ctx) => {
-  const body = (await req.json().catch(() => ({}))) as { email?: string };
-  if (!body.email || !/^[^@]+@[^@]+\.[^@]+$/.test(body.email)) {
-    throw new ApiHttpError(400, "invalid_email", "valid email required");
-  }
+// Enrols the authenticated customer in the Barcelona waitlist.
+export const POST = withCustomer<BarcelonaWaitlistResponse>(async (_req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "barcelona-waitlist", { limit: 5, windowMs: 60_000 });
+
+  // Use the authenticated customer's OWN email, never an arbitrary one from
+  // the body — otherwise a logged-in user could enrol third parties.
+  const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
+  if (!email) throw new ApiHttpError(404, "customer_not_found", "No email on file");
+  const normalized = email.trim().toLowerCase();
 
   const sb = supabaseAdmin();
-  const { error } = await sb
-    .from("barcelona_waitlist")
-    .insert({ email: body.email.trim().toLowerCase() });
+  const { error } = await sb.from("barcelona_waitlist").insert({ email: normalized });
 
   // 23505 = already on list — not really an error, return current position
   if (error && error.code !== "23505") {
@@ -23,7 +26,7 @@ export const POST = withCustomer<BarcelonaWaitlistResponse>(async (req, _ctx) =>
   const { data: row } = await sb
     .from("barcelona_waitlist")
     .select("position")
-    .eq("email", body.email.trim().toLowerCase())
+    .eq("email", normalized)
     .maybeSingle();
 
   return { joined: true, position: row?.position ?? 0 };
