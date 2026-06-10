@@ -9,7 +9,7 @@ import type { SkipResponse, Subscription } from "@/lib/types";
  * Skip overlay — confirms skipping the next box.
  *
  * Calls POST /api/subscription/skip which:
- *   - Enforces 72h cutoff
+ *   - Enforces 24h cutoff
  *   - Fires Seal billing-attempt skip
  *   - Fires Klaviyo subscription_skip event
  */

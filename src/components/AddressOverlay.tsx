@@ -9,7 +9,7 @@ import type { Subscription, SubscriptionAddress } from "@/lib/types";
  * AddressOverlay — edit the shipping address on the active subscription.
  *
  * PATCHes /api/subscription/address (Seal s_* + Shopify default address).
- * Enforces the 72h cutoff server-side; surfaces "cutoff_passed" inline.
+ * Enforces the 24h cutoff server-side; surfaces "cutoff_passed" inline.
  */
 export function AddressOverlay({
   subscription,
