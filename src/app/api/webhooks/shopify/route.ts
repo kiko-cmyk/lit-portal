@@ -160,6 +160,11 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     const main = payload.line_items.find((li) => li.selling_plan_allocation) ?? payload.line_items[0];
     const boxCount = main?.quantity ?? 1;
     const planName = main?.selling_plan_allocation?.selling_plan?.name ?? null;
+    // A subscription order has at least one line item with a selling plan.
+    // Exposed as a clean boolean so Klaviyo flows can branch on subscription
+    // vs one-time purchases without parsing plan_label (e.g. the
+    // "Área personal - Bienvenida" welcome triggers on is_subscription = true).
+    const isSubscription = payload.line_items.some((li) => li.selling_plan_allocation);
     klaviyo
       .trackEvent("confirmation_sent", email, {
         order_id: payload.id,
@@ -168,6 +173,8 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
         box_count: boxCount,
         sachets: boxCount * 30,
         plan_label: planName ?? `${boxCount} box${boxCount > 1 ? "es" : ""}`,
+        is_subscription: isSubscription,
+        selling_plan_name: planName,
         flavor: main?.title ?? "Lemon Drop",
         total: payload.total_price,
         currency: payload.currency,
