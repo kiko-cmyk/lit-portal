@@ -1,7 +1,8 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
-import { mapToSubscription, seal } from "@/lib/seal";
+import { mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import type { Subscription } from "@/lib/types";
 
 // GET /apps/portal/api/subscription
@@ -20,19 +21,24 @@ export const GET = withCustomer<Subscription>(async (_req, ctx) => {
     throw new ApiHttpError(404, "customer_not_found", `No email for Shopify customer ${ctx.customerId}`);
   }
 
-  const subs = await seal.getSubscriptionsByEmail(email);
-
-  // Pick the most relevant subscription:
-  //   1. ACTIVE one with the soonest next ship date
-  //   2. otherwise the most recent (by order_placed)
-  const active = subs.filter((s) => s.status === "ACTIVE");
-  const pick =
-    active.sort((a, b) => {
-      const aNext = a.billing_attempts.find((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)?.date ?? "";
-      const bNext = b.billing_attempts.find((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)?.date ?? "";
-      return aNext.localeCompare(bNext);
-    })[0] ??
-    subs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
+  // Fast-path: resolve via the cached Seal id (1 quick call). Falls back to
+  // the full email scan on a cache miss.
+  let pick: SealSubscription | null = await resolveActiveSubFast(ctx.customerId, email);
+  if (!pick) {
+    const subs = await seal.getSubscriptionsByEmail(email);
+    // Pick the most relevant subscription:
+    //   1. ACTIVE one with the soonest next ship date
+    //   2. otherwise the most recent (by order_placed)
+    const active = subs.filter((s) => s.status === "ACTIVE");
+    pick =
+      active.sort((a, b) => {
+        const aNext = a.billing_attempts.find((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)?.date ?? "";
+        const bNext = b.billing_attempts.find((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)?.date ?? "";
+        return aNext.localeCompare(bNext);
+      })[0] ??
+      subs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ??
+      null;
+  }
 
   if (!pick) {
     throw new ApiHttpError(404, "subscription_not_found", `No subscription for ${email}`);

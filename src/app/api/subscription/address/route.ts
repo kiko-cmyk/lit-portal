@@ -4,6 +4,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { resolveActiveSubFast } from "@/lib/sub-resolve";
 
 interface AddressBody {
   address1: string;
@@ -70,13 +71,20 @@ export const PATCH = withCustomer(async (req, ctx) => {
     throw new ApiHttpError(400, "invalid_province_code", "provinceCode too long (max 12)");
   }
 
-  // Find the Seal sub — try ACTIVE first; for resilience also accept
-  // the most recent one (allows address change on a re-activated sub
-  // even if Seal eventual consistency hasn't promoted status yet).
-  const sealSubs = await seal.getSubscriptionsByEmail(email);
-  const sealSub =
-    sealSubs.find((s) => s.status === "ACTIVE") ??
-    sealSubs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
+  // Fast-path: resolve via the cached Seal id (1 quick call). Falls back to
+  // the full email scan on a cache miss. The old scan-first approach (twice
+  // over) was the source of the intermittent "subscription_not_found" and the
+  // lag Juan hit when saving an address. For resilience the fallback also
+  // accepts the most recent sub (lets you edit a re-activated sub even if Seal
+  // hasn't promoted its status yet).
+  let sealSub = await resolveActiveSubFast(ctx.customerId, email);
+  if (!sealSub) {
+    const sealSubs = await seal.getSubscriptionsByEmail(email);
+    sealSub =
+      sealSubs.find((s) => s.status === "ACTIVE") ??
+      sealSubs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ??
+      null;
+  }
   if (!sealSub) {
     throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
   }
@@ -138,8 +146,9 @@ export const PATCH = withCustomer(async (req, ctx) => {
     });
 
   // Re-fetch Seal for the response (eventual consistency — Seal usually
-  // catches up within ~1s).
-  const refreshed = await seal.getSubscription(sealSub.id);
+  // catches up within ~1s). Use the fast singular by-id endpoint, not the
+  // paginated scan.
+  const refreshed = await seal.getSubscriptionById(sealSub.id);
   return {
     updated: true,
     appliesFrom: refreshed ? getNextBillingAttempt(refreshed)?.date ?? null : null,

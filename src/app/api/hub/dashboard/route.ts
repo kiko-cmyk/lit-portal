@@ -1,9 +1,10 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { langFromRequest } from "@/lib/request-lang";
 import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
-import { mapToSubscription, seal } from "@/lib/seal";
+import { mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type {
   EventListItem,
@@ -22,9 +23,11 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
 
   const sb = supabaseAdmin();
 
-  // Parallel fetches
-  const [subsRes, balanceRes, prefsRes] = await Promise.all([
-    seal.getSubscriptionsByEmail(email),
+  // Parallel fetches. Sub resolution tries the fast path (cached Seal id →
+  // 1 by-id call) instead of the full multi-page email scan; balance + prefs
+  // load alongside it.
+  const [fastSub, balanceRes, prefsRes] = await Promise.all([
+    resolveActiveSubFast(ctx.customerId, email),
     sb
       .from("drops_balances")
       .select("balance, tier_earned_at")
@@ -39,7 +42,12 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       .then((r) => r.data),
   ]);
 
-  const sub = subsRes.find((s) => s.status === "ACTIVE");
+  // Fallback to the full scan on a cache miss (cold first load, or stale id).
+  let sub: SealSubscription | null = fastSub;
+  if (!sub) {
+    const subsRes = await seal.getSubscriptionsByEmail(email);
+    sub = subsRes.find((s) => s.status === "ACTIVE") ?? null;
+  }
   if (!sub) {
     throw new ApiHttpError(404, "subscription_not_found", "No active subscription");
   }
