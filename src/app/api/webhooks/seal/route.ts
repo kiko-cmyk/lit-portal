@@ -110,7 +110,10 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
   const customer = await shopifyAdmin
     .graphql<{ customers: { edges: Array<{ node: { id: string } }> } }>(
       `query findByEmail($q: String!) { customers(first: 1, query: $q) { edges { node { id } } } }`,
-      { q: `email:${s.email}` },
+      // Quote + escape the email so a value with spaces/operators can't alter
+      // Shopify's search-query syntax (the payload is HMAC-verified, so this
+      // is defence-in-depth).
+      { q: `email:"${s.email.replace(/"/g, '\\"')}"` },
     )
     .catch(() => null);
   const customerGid = customer?.customers.edges[0]?.node.id;
