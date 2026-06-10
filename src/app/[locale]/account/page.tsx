@@ -63,7 +63,15 @@ export default function AccountPage() {
   useEffect(() => {
     Promise.all([
       api<CustomerProfile>("/api/customer"),
-      api<Subscription>("/api/subscription").catch(() => null),
+      // Only a genuine "no subscription" (404) collapses to null → the page
+      // renders the cancelled/empty management UI. Any OTHER failure (e.g. a
+      // transient Seal 5xx) must propagate, so we show a retryable error
+      // instead of silently hiding the plan + Quick Actions from an active
+      // subscriber. (2026-06-10)
+      api<Subscription>("/api/subscription").catch((e: ApiClientError) => {
+        if (e.code === "subscription_not_found") return null;
+        throw e;
+      }),
       api<TierResponse>("/api/tier"),
     ])
       .then(([c, s, ti]) => {

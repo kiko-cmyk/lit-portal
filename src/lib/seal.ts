@@ -13,6 +13,14 @@
 
 const SEAL_API_BASE = "https://app.sealsubscriptions.com/shopify/merchant/api";
 
+// Transient-failure retry budget for idempotent GETs. A single hiccup talking
+// to Seal used to surface to active subscribers as "no subscription" (the
+// email scan returned [] on a swallowed error → the Hub rendered EmptyState).
+// Retrying GETs absorbs the common case; persistent failures now propagate.
+const SEAL_MAX_RETRIES = 2;
+const SEAL_BACKOFF_MS = 300;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 function token(): string {
   const t = process.env.SEAL_API_TOKEN;
   if (!t) throw new Error("SEAL_API_TOKEN not set");
@@ -99,20 +107,51 @@ interface SealListResponse<T> {
 // ============ Client ============
 
 class SealClient {
-  private async req<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${SEAL_API_BASE}${path}`, {
-      ...init,
-      headers: {
-        "X-Seal-Token": token(),
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new SealApiError(res.status, body);
+  private async req<T>(path: string, init?: RequestInit, attempt = 0): Promise<T> {
+    // Retry transient failures (network error, 429, 5xx) — but ONLY on
+    // idempotent GETs. Mutations (PUT/POST) must never be retried: Seal
+    // regenerates billing_attempts on every write, so a retried skip /
+    // reschedule / charge-now could double-apply.
+    const method = (init?.method ?? "GET").toUpperCase();
+    const retriable = method === "GET";
+    try {
+      const res = await fetch(`${SEAL_API_BASE}${path}`, {
+        ...init,
+        headers: {
+          "X-Seal-Token": token(),
+          "Content-Type": "application/json",
+          ...(init?.headers ?? {}),
+        },
+      });
+      if (!res.ok) {
+        if (
+          retriable &&
+          attempt < SEAL_MAX_RETRIES &&
+          (res.status === 429 || res.status >= 500)
+        ) {
+          await sleep(SEAL_BACKOFF_MS * (attempt + 1));
+          return this.req<T>(path, init, attempt + 1);
+        }
+        const body = await res.text().catch(() => "");
+        throw new SealApiError(res.status, body);
+      }
+      return res.json() as Promise<T>;
+    } catch (err) {
+      // fetch() itself rejected (DNS / connection reset / timeout). Retry
+      // idempotent calls. Never retry aborts (caller-driven cancellation) or
+      // a SealApiError we already chose not to retry above.
+      const name = (err as { name?: string }).name;
+      if (
+        retriable &&
+        attempt < SEAL_MAX_RETRIES &&
+        name !== "AbortError" &&
+        !(err instanceof SealApiError)
+      ) {
+        await sleep(SEAL_BACKOFF_MS * (attempt + 1));
+        return this.req<T>(path, init, attempt + 1);
+      }
+      throw err;
     }
-    return res.json() as Promise<T>;
   }
 
   /**
@@ -138,9 +177,14 @@ class SealClient {
         "with-billing-attempts": "true",
         page: String(page),
       });
+      // No silent `.catch(() => null)` here. A failed page must propagate so
+      // the caller throws (→ 500 → the FE shows a retryable error state)
+      // instead of returning a truncated/empty list that the Hub and Account
+      // would misread as "this customer has no subscription". req() already
+      // retries transient GET failures before this rejects.
       return this.req<SealListResponse<SealSubscription>>(
         `/subscriptions?${params.toString()}`,
-      ).catch(() => null);
+      );
     };
 
     // Round 1: page 1 alone, to learn how many pages there are.
