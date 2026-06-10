@@ -1,4 +1,5 @@
 import { withCustomer } from "@/lib/api-helpers";
+import { resolveLang } from "@/lib/request-lang";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { StoryItem } from "@/lib/types";
 
@@ -8,12 +9,7 @@ export const GET = withCustomer<StoryItem[]>(async (req, ctx) => {
   const limit = Math.min(20, Math.max(1, parseInt(url.searchParams.get("limit") ?? "3", 10)));
 
   const sb = supabaseAdmin();
-  const { data: prefs } = await sb
-    .from("customer_preferences")
-    .select("language")
-    .eq("customer_id", ctx.customerId)
-    .maybeSingle();
-  const lang = (prefs?.language as "en" | "es") ?? "en";
+  const lang = await resolveLang(req, ctx.customerId);
 
   const { data, error } = await sb
     .from("stories")

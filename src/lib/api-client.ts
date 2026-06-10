@@ -19,6 +19,21 @@ function withDevParams(path: string): string {
   return `${path}${sep}${extras.join("&")}`;
 }
 
+/**
+ * Forward the active URL locale (`/apps/portal/en/...` → "en") as `?lang=` so
+ * server-rendered content (events, stories, moments, the Hub event card)
+ * follows the language toggle in the same render, instead of trailing the
+ * persisted Supabase preference. See `lib/request-lang.ts`. (2026-06-10)
+ */
+function withLang(path: string): string {
+  if (typeof window === "undefined") return path;
+  if (/[?&]lang=/.test(path)) return path;
+  const m = window.location.pathname.match(/\/(en|es)(?:\/|$)/);
+  if (!m) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}lang=${m[1]}`;
+}
+
 const SESSION_STORAGE_KEY = "lit_session";
 
 function getSessionToken(): string | null {
@@ -44,7 +59,7 @@ export function clearSessionToken() {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const url = `${BASE}${withDevParams(path)}`;
+  const url = `${BASE}${withDevParams(withLang(path))}`;
   // Attach our own session token (issued after Customer Account API
   // OAuth). We send it as `X-LIT-Session`, NOT `Authorization: Bearer`:
   // Shopify App Proxy intercepts `Authorization` on POST/PATCH/DELETE

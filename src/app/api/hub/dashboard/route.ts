@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { langFromRequest } from "@/lib/request-lang";
 import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -83,7 +84,9 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   }
 
   // Next event for the customer's preferred city (TODO: derive from address; default Madrid for MVP)
-  const lang = (prefsRes?.language as "en" | "es") ?? "en";
+  // Prefer the URL locale (forwarded by the api-client as `?lang=`) so the
+  // event card follows the language toggle; fall back to the persisted pref.
+  const lang = langFromRequest(req) ?? (prefsRes?.language as "en" | "es") ?? "en";
   let nextEvent: EventListItem | null = null;
   const { data: ev } = await sb
     .from("events")

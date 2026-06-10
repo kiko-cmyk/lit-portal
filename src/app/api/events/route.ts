@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { resolveLang } from "@/lib/request-lang";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { EventListItem, EventsResponse } from "@/lib/types";
 
@@ -11,7 +12,7 @@ export const GET = withCustomer<EventsResponse>(async (req, ctx) => {
   }
 
   const sb = supabaseAdmin();
-  const lang = await getLanguagePref(ctx.customerId);
+  const lang = await resolveLang(req, ctx.customerId);
 
   const [eventsRes, savesRes] = await Promise.all([
     sb
@@ -45,12 +46,3 @@ export const GET = withCustomer<EventsResponse>(async (req, ctx) => {
     upcoming: items.slice(1),
   };
 });
-
-async function getLanguagePref(customerId: string): Promise<"en" | "es"> {
-  const { data } = await supabaseAdmin()
-    .from("customer_preferences")
-    .select("language")
-    .eq("customer_id", customerId)
-    .maybeSingle();
-  return (data?.language as "en" | "es") ?? "en";
-}
