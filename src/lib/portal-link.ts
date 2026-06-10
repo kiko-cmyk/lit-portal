@@ -41,13 +41,19 @@ export function orderDetailHref(locale: Lang, orderId: string): string {
  * post-rewrite), so we look up the route in both locales' slug maps.
  */
 export function swapLocale(currentPathname: string, nextLocale: Lang): string {
-  const [, , slug] = currentPathname.split("/");
+  const parts = currentPathname.split("/");
+  const slug = parts[2];
+  // Preserve any trailing segments (e.g. an order id in /es/pedidos/12345) so
+  // toggling language on a detail page keeps you on that page instead of
+  // bouncing to the section root.
+  const rest = parts.slice(3).filter(Boolean);
   const routes = Object.keys(SLUGS.en) as PortalRoute[];
   const route = routes.find(
     (r) => SLUGS.en[r] === slug || SLUGS.es[r] === slug,
   );
   if (!route) return `${BASE}/${nextLocale}/${SLUGS[nextLocale].home}`;
-  return portalHref(nextLocale, route);
+  const base = portalHref(nextLocale, route);
+  return rest.length ? `${base}/${rest.join("/")}` : base;
 }
 
 /**
@@ -65,7 +71,9 @@ export function activeRoute(currentPathname: string | null): PortalRoute | null 
   for (const seg of currentPathname.split("/")) {
     if (!seg) continue;
     const r = routes.find((rt) => SLUGS.en[rt] === seg || SLUGS.es[rt] === seg);
-    if (r) return r;
+    // Order detail lives under the Account tab — highlight "Cuenta" there
+    // instead of leaving the nav with nothing active.
+    if (r) return r === "orders" ? "account" : r;
   }
   return null;
 }
