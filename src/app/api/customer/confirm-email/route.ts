@@ -69,8 +69,23 @@ export async function GET(req: NextRequest) {
     .eq("token", token);
 
   // Send the customer back to the portal with a flag the FE can render
-  // as a success toast.
-  const back = new URL("https://litsalt.com/apps/portal/es/cuenta");
+  // as a success toast — in THEIR language. Before this we always landed on
+  // /es/cuenta, dumping English customers on the Spanish portal right after a
+  // sensitive action. Read the saved language pref (same metafield the toggle
+  // and /api/customer use); default to ES.
+  let locale: "en" | "es" = "es";
+  try {
+    const pref = await shopifyAdmin.getCustomerMetafield(
+      row.customer_id,
+      "lit_portal",
+      "language_pref",
+    );
+    if (pref === "en") locale = "en";
+  } catch {
+    // keep ES default
+  }
+  const slug = locale === "en" ? "account" : "cuenta";
+  const back = new URL(`https://litsalt.com/apps/portal/${locale}/${slug}`);
   back.searchParams.set("email_changed", "1");
   return NextResponse.redirect(back.toString());
 }
