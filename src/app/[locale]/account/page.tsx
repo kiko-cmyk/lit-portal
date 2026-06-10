@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { AddressOverlay } from "@/components/AddressOverlay";
+import { orderStatusStyle, translateOrderStatus } from "@/lib/order-status";
 import { CancelTakeover } from "@/components/CancelTakeover";
 import { ChargeNowOverlay } from "@/components/ChargeNowOverlay";
 import { CustomerChip } from "@/components/CustomerChip";
@@ -560,7 +561,7 @@ function CompactAction({
           className="absolute right-1.5 top-1.5 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 8 }}
         >
-          Soon
+          <T en="Soon" es="Pronto" />
         </span>
       )}
       <span
@@ -1062,20 +1063,9 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
                     <div className="flex items-center gap-2">
                       <span
                         className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
-                        style={{
-                          background:
-                            o.status === "delivered"
-                              ? "var(--color-success)"
-                              : o.status === "scheduled" || o.status === "upcoming"
-                                ? "var(--color-bold-yellow)"
-                                : "rgba(50, 55, 67, 0.15)",
-                          color:
-                            o.status === "delivered"
-                              ? "var(--color-cream)"
-                              : "var(--color-lit-grey)",
-                        }}
+                        style={orderStatusStyle(o.status)}
                       >
-                        {(o.status || "—").toUpperCase()}
+                        {o.status ? translateOrderStatus(o.status, lang).toUpperCase() : "—"}
                       </span>
                       <span className="text-[12px] text-[color:var(--color-warm-gray)]" aria-hidden>→</span>
                     </div>

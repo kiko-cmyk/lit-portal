@@ -52,7 +52,7 @@ export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
           className="inline-flex items-center rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-retro-rust)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
-          Soon
+          <T en="Soon" es="Pronto" />
         </span>
       </div>
 

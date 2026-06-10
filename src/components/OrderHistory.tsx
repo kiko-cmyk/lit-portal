@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { T, useLang, useLangValue } from "@/lib/i18n";
+import { T, useLangValue } from "@/lib/i18n";
+import { orderStatusStyle, translateOrderStatus } from "@/lib/order-status";
 import { orderDetailHref } from "@/lib/portal-link";
 import type { OrderHistoryItem } from "@/lib/types";
 
@@ -16,7 +17,6 @@ import type { OrderHistoryItem } from "@/lib/types";
  */
 export function OrderHistory({ limit = 10 }: { limit?: number }) {
   const [orders, setOrders] = useState<OrderHistoryItem[] | null>(null);
-  const t = useLang();
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
@@ -61,14 +61,14 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
                     })}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[color:var(--color-warm-gray)]">
-                    {o.total.toFixed(2)} {o.currency} · {translateStatus(o.status, lang)}
+                    {o.total.toFixed(2)} {o.currency} · {translateOrderStatus(o.status, lang)}
                   </div>
                 </div>
                 <span
                   className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
-                  style={statusStyle(o.status)}
+                  style={orderStatusStyle(o.status)}
                 >
-                  {translateStatus(o.status, lang).toUpperCase()}
+                  {translateOrderStatus(o.status, lang).toUpperCase()}
                 </span>
                 <span
                   className="ml-2 text-[12px] text-[color:var(--color-warm-gray)]"
@@ -85,36 +85,3 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
   );
 }
 
-function translateStatus(s: string, lang: "en" | "es"): string {
-  const key = (s || "").toLowerCase();
-  const map: Record<string, { en: string; es: string }> = {
-    delivered: { en: "Delivered", es: "Entregada" },
-    shipped: { en: "Shipped", es: "Enviada" },
-    scheduled: { en: "Scheduled", es: "Programada" },
-    upcoming: { en: "Upcoming", es: "Próxima" },
-    fulfilled: { en: "Delivered", es: "Entregada" },
-    paid: { en: "Paid", es: "Pagada" },
-    refunded: { en: "Refunded", es: "Reembolsada" },
-  };
-  return map[key]?.[lang] ?? s;
-}
-
-function statusStyle(s: string): { background: string; color: string } {
-  const key = (s || "").toLowerCase();
-  if (key === "delivered" || key === "fulfilled") {
-    return { background: "var(--color-success)", color: "var(--color-cream)" };
-  }
-  if (key === "scheduled" || key === "upcoming") {
-    return {
-      background: "var(--color-bold-yellow)",
-      color: "var(--color-lit-grey)",
-    };
-  }
-  if (key === "refunded") {
-    return { background: "var(--color-danger)", color: "var(--color-cream)" };
-  }
-  return {
-    background: "rgba(50, 55, 67, 0.12)",
-    color: "var(--color-lit-grey)",
-  };
-}

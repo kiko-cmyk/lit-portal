@@ -54,7 +54,7 @@ export function BottomNav() {
             >
               <span>{t({ en: it.en, es: it.es })}</span>
               <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/70">
-                Soon
+                {t({ en: "Soon", es: "Pronto" })}
               </span>
             </span>
           );
@@ -111,7 +111,7 @@ export function TopNav() {
                 >
                   {t({ en: it.en, es: it.es })}{" "}
                   <span className="ml-1 text-[8px] font-extrabold tracking-[0.2em] text-[color:var(--color-warm-gray)]/80">
-                    SOON
+                    {t({ en: "SOON", es: "PRONTO" })}
                   </span>
                 </span>
               );
