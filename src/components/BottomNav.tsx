@@ -64,15 +64,15 @@ export function BottomNav() {
             key={it.route}
             href={portalHref(lang, it.route)}
             aria-current={active ? "page" : undefined}
-            className={`flex flex-col items-center justify-center gap-1.5 py-2 text-[9px] uppercase tracking-[0.1em] cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1.5 rounded-xl py-2 text-[9px] uppercase tracking-[0.1em] cursor-pointer transition-colors ${
               active
-                ? "font-black text-[color:var(--color-lit-grey)]"
-                : "font-bold text-[color:var(--color-warm-gray)]/70 hover:text-[color:var(--color-lit-grey)]"
+                ? "bg-[color:var(--color-bold-yellow)]/15 font-black text-[color:var(--color-lit-grey)]"
+                : "font-semibold text-[color:var(--color-warm-gray)]/50 hover:text-[color:var(--color-lit-grey)]"
             }`}
           >
             <span>{t({ en: it.en, es: it.es })}</span>
             <span
-              className={`h-[3px] w-6 rounded-full transition-colors ${
+              className={`h-[3px] w-7 rounded-full transition-colors ${
                 active ? "bg-[color:var(--color-bold-yellow)]" : "bg-transparent"
               }`}
             />

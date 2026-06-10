@@ -58,8 +58,14 @@ export function swapLocale(currentPathname: string, nextLocale: Lang): string {
  */
 export function activeRoute(currentPathname: string | null): PortalRoute | null {
   if (!currentPathname) return null;
-  const [, , slug] = currentPathname.split("/");
-  if (!slug) return null;
   const routes = Object.keys(SLUGS.en) as PortalRoute[];
-  return routes.find((r) => SLUGS.en[r] === slug || SLUGS.es[r] === slug) ?? null;
+  // Scan EVERY path segment (not a fixed index) so it works whether the
+  // pathname is `/es/mi-lit`, `/en/my-lit`, or includes the App Proxy prefix
+  // `/apps/portal/...`. Matches the visible slug in either locale.
+  for (const seg of currentPathname.split("/")) {
+    if (!seg) continue;
+    const r = routes.find((rt) => SLUGS.en[rt] === seg || SLUGS.es[rt] === seg);
+    if (r) return r;
+  }
+  return null;
 }
