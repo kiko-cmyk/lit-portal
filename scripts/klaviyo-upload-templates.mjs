@@ -147,7 +147,7 @@ function emailHtml(lang) {
 
   <!-- Hero — sin kicker 'CONFIRMADO' (Juan 2026-05-20). -->
   <div class="hero">
-    <h1 class="hero-h1">${t.heroL1}<br>${t.heroL2}<span class="yellow-square"></span></h1>
+    <h1 class="hero-h1">${t.heroL1}<br>${t.heroL2}</h1>
     <p class="welcome">${t.welcome}</p>
   </div>
 
@@ -191,7 +191,7 @@ function emailHtml(lang) {
   <!-- Crew section -->
   <div class="crew">
     <div class="crew-kicker">${t.crewKicker}</div>
-    <h2 class="crew-h1">${t.crewL1}<br>${t.crewL2}<span class="ysq"></span></h2>
+    <h2 class="crew-h1">${t.crewL1}<br>${t.crewL2}</h2>
     <p class="crew-sub">${t.crewSub}</p>
   </div>
 
@@ -219,7 +219,7 @@ function emailHtml(lang) {
           </tr>
         </table>
         <p style="font-family:'Barlow',Arial,Helvetica,sans-serif;font-size:9px;font-weight:400;color:rgba(245,240,221,0.5);margin:14px 0 0;line-height:1.55;mso-line-height-rule:exactly;letter-spacing:0;">
-          LIT Hydration&reg; &mdash; Superior Hydration<br/>
+          LIT Hydration&reg;, Superior Hydration<br/>
           {% unsubscribe '${t.footerUnsubscribe}' %} &middot; {% manage_preferences '${t.footerPreferences}' %}
         </p>
       </td>
