@@ -61,7 +61,7 @@ export default function HubPage() {
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const t = useLang();
   const lang = useLangValue();
-  usePageTitle({ en: "My LIT", es: "Mi LIT" }); // browser tab title
+  usePageTitle({ en: "Subscription", es: "Suscripción" }); // browser tab title
 
   useEffect(() => {
     api<CustomerProfile>("/api/customer")

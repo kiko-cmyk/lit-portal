@@ -8,7 +8,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { locale } = await params;
   return {
-    title: locale === "es" ? "Mi LIT" : "My LIT",
+    title: locale === "es" ? "Suscripción" : "Subscription",
   };
 }
 

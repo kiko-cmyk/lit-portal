@@ -189,7 +189,7 @@ export default function CollectionPage() {
           href={portalHref(lang, "home")}
           className="text-[13px] font-medium text-[color:var(--color-lit-grey)] hover:opacity-60"
         >
-          ← <T en="My LIT" es="Mi LIT" />
+          ← <T en="Subscription" es="Suscripción" />
         </Link>
         <div className="flex items-center gap-2">
           <span className="rounded-sm bg-[color:var(--color-lit-grey)] px-3 py-[5px] text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">

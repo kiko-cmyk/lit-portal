@@ -22,7 +22,7 @@ const ITEMS: {
   es: string;
   inactive?: boolean;
 }[] = [
-  { route: "home", canonical: "my-lit", en: "My LIT", es: "Mi LIT" },
+  { route: "home", canonical: "my-lit", en: "Subscription", es: "Suscripción" },
   { route: "account", canonical: "account", en: "Account", es: "Cuenta" },
   {
     route: "collection",
