@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { LangToggle, useLang, useLangValue } from "@/lib/i18n";
-import { portalHref, type PortalRoute } from "@/lib/portal-link";
+import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
 
 /**
  * Bottom navigation — Phase 1 MVP has 3 slots: Hub / Collection / Account.
@@ -17,48 +17,39 @@ import { portalHref, type PortalRoute } from "@/lib/portal-link";
  */
 const ITEMS: {
   route: PortalRoute;
-  canonical: string;
   en: string;
   es: string;
   inactive?: boolean;
 }[] = [
-  { route: "home", canonical: "my-lit", en: "Subscription", es: "Suscripción" },
-  { route: "account", canonical: "account", en: "Account", es: "Cuenta" },
-  {
-    route: "collection",
-    canonical: "collection",
-    en: "Collection",
-    es: "Colección",
-    inactive: true,
-  },
+  { route: "home", en: "Subscription", es: "Suscripción" },
+  { route: "account", en: "Account", es: "Cuenta" },
+  { route: "collection", en: "Collection", es: "Colección", inactive: true },
 ];
-
-function isActive(pathname: string | null, canonical: string): boolean {
-  // pathname comes from usePathname, which reflects post-proxy.ts rewrite
-  // (always the canonical EN slug). Match `/[locale]/<canonical>` and
-  // `/[locale]/<canonical>/...`.
-  if (!pathname) return false;
-  const re = new RegExp(`^/(en|es)/${canonical}(/|$)`);
-  return re.test(pathname);
-}
 
 export function BottomNav() {
   const pathname = usePathname();
   const lang = useLangValue();
   const t = useLang();
+  // Match the active route against the user-visible slug in EITHER locale —
+  // usePathname returns the localized slug (mi-lit / cuenta / coleccion), not
+  // the canonical EN one, so a plain "=== canonical" check never matched for
+  // Spanish users and nothing was ever highlighted.
+  const current = activeRoute(pathname);
   return (
     <nav
-      className="sticky bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3.5 pt-2.5 pb-6 md:hidden"
+      // fixed (not sticky) so it stays anchored to the bottom of the viewport
+      // even on short pages like the no-subscription state.
+      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3.5 pt-2.5 pb-6 md:hidden"
       aria-label="Primary"
     >
       {ITEMS.map((it) => {
-        const active = isActive(pathname, it.canonical);
+        const active = current === it.route;
         if (it.inactive) {
           return (
             <span
-              key={it.canonical}
+              key={it.route}
               aria-disabled
-              className="flex cursor-not-allowed flex-col items-center justify-center gap-1 py-2 text-[9px] font-bold uppercase tracking-[0.1em] text-[color:var(--color-warm-gray)]/55"
+              className="flex cursor-not-allowed flex-col items-center justify-center gap-1.5 py-2 text-[9px] font-bold uppercase tracking-[0.1em] text-[color:var(--color-warm-gray)]/55"
               title={t({ en: "Coming soon", es: "Próximamente" })}
             >
               <span>{t({ en: it.en, es: it.es })}</span>
@@ -70,17 +61,20 @@ export function BottomNav() {
         }
         return (
           <Link
-            key={it.canonical}
+            key={it.route}
             href={portalHref(lang, it.route)}
-            className={`flex flex-col items-center justify-center gap-1 py-2 text-[9px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
+            aria-current={active ? "page" : undefined}
+            className={`flex flex-col items-center justify-center gap-1.5 py-2 text-[9px] uppercase tracking-[0.1em] cursor-pointer ${
               active
                 ? "font-black text-[color:var(--color-lit-grey)]"
-                : "text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
+                : "font-bold text-[color:var(--color-warm-gray)]/70 hover:text-[color:var(--color-lit-grey)]"
             }`}
           >
             <span>{t({ en: it.en, es: it.es })}</span>
             <span
-              className={`h-1 w-1 rounded-full ${active ? "bg-[color:var(--color-bold-yellow)]" : "bg-transparent"}`}
+              className={`h-[3px] w-6 rounded-full transition-colors ${
+                active ? "bg-[color:var(--color-bold-yellow)]" : "bg-transparent"
+              }`}
             />
           </Link>
         );
@@ -96,6 +90,7 @@ export function TopNav() {
   const pathname = usePathname();
   const lang = useLangValue();
   const t = useLang();
+  const current = activeRoute(pathname);
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
@@ -105,11 +100,11 @@ export function TopNav() {
         <Logo />
         <div className="flex items-center gap-8">
           {ITEMS.map((it) => {
-            const active = isActive(pathname, it.canonical);
+            const active = current === it.route;
             if (it.inactive) {
               return (
                 <span
-                  key={it.canonical}
+                  key={it.route}
                   aria-disabled
                   className="cursor-not-allowed text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/35"
                   title={t({ en: "Coming soon", es: "Próximamente" })}
@@ -123,8 +118,9 @@ export function TopNav() {
             }
             return (
               <Link
-                key={it.canonical}
+                key={it.route}
                 href={portalHref(lang, it.route)}
+                aria-current={active ? "page" : undefined}
                 className={`text-[11px] font-bold uppercase tracking-[0.18em] cursor-pointer transition-colors hover:text-[color:var(--color-lit-grey)] ${
                   active ? "text-[color:var(--color-lit-grey)] underline underline-offset-4" : "text-[color:var(--color-lit-grey)]/55"
                 }`}

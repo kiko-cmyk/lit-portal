@@ -214,7 +214,7 @@ export default function HubPage() {
   const collectionEarned = Math.min(4, Math.floor(timeline.length));
 
   return (
-    <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
@@ -232,7 +232,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPostCancel ? (
           <ReactivateCard
@@ -447,13 +447,13 @@ function SyncingBanner() {
 function EmptyState() {
   const lang = useLangValue();
   return (
-    <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <LangToggle />
       </header>
-      <main className="flex flex-1 flex-col items-center justify-center px-6 pt-[68px] pb-24 text-center md:mx-auto md:w-full md:max-w-2xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex flex-1 flex-col items-center justify-center px-6 pt-[88px] pb-24 text-center md:mx-auto md:w-full md:max-w-2xl md:px-8 md:pt-[92px] md:pb-12">
         <span
           className="font-semibold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}

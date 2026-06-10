@@ -49,3 +49,17 @@ export function swapLocale(currentPathname: string, nextLocale: Lang): string {
   if (!route) return `${BASE}/${nextLocale}/${SLUGS[nextLocale].home}`;
   return portalHref(nextLocale, route);
 }
+
+/**
+ * Which nav route the current path belongs to. Matches the user-visible slug
+ * in EITHER locale (usePathname returns the localized slug — `mi-lit`,
+ * `cuenta`, `coleccion` — NOT the canonical EN one, same as swapLocale), so
+ * the active nav item highlights correctly for Spanish users too.
+ */
+export function activeRoute(currentPathname: string | null): PortalRoute | null {
+  if (!currentPathname) return null;
+  const [, , slug] = currentPathname.split("/");
+  if (!slug) return null;
+  const routes = Object.keys(SLUGS.en) as PortalRoute[];
+  return routes.find((r) => SLUGS.en[r] === slug || SLUGS.es[r] === slug) ?? null;
+}

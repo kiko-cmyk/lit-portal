@@ -173,7 +173,7 @@ export default function AccountPage() {
   };
 
   return (
-    <div className="zone-cream mesh-bg flex min-h-full flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
@@ -190,7 +190,7 @@ export default function AccountPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[68px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {/* H1 "CUENTA" eliminado a petición de Juan 2026-05-19: la
             pestaña activa de la nav + el browser tab title ya indican
             dónde está el usuario, el titular interno es redundante. */}
