@@ -46,7 +46,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     topic,
   });
   if (dedup.error?.code === "23505") {
-    return NextResponse.json({ ok: true, dedup: true });
+    // Duplicate delivery. Distinguish "already processed" (real dedup) from
+    // "previous attempt died mid-flight" (processed_at still NULL → reprocess).
+    // The old code returned dedup:true unconditionally, so any handler crash
+    // after this insert lost the event forever (Shopify redelivery hit the PK
+    // conflict and was dropped).
+    const { data: existing } = await sb
+      .from("webhook_log")
+      .select("processed_at, received_at")
+      .eq("provider", "shopify")
+      .eq("event_id", eventId)
+      .maybeSingle();
+    if (existing?.processed_at) {
+      return NextResponse.json({ ok: true, dedup: true });
+    }
+    // processed_at NULL: earlier attempt failed or is still running. Within a
+    // 5-min grace, assume in-flight and dedup (avoids double-processing on
+    // concurrent deliveries); after that, treat as dead and fall through to
+    // reprocess. orders/paid is safe to re-run (referral insert is unique on
+    // converted_order_id); fulfillments box_shipped Drops are NOT idempotent,
+    // so the >5min window is deliberately conservative.
+    const ageMs = existing?.received_at
+      ? Date.now() - new Date(existing.received_at).getTime()
+      : Number.POSITIVE_INFINITY;
+    if (ageMs < 5 * 60 * 1000) {
+      return NextResponse.json({ ok: true, dedup: true, pending: true });
+    }
+    console.warn(`[shopify-webhook] reprocessing stale unprocessed event ${eventId} (${topic})`);
+    // fall through to handler
+  } else if (dedup.error) {
+    // webhook_log unavailable — fail loud so Shopify redelivers later, rather
+    // than silently continuing to process an unlogged (non-idempotent) event.
+    console.error("[shopify-webhook] webhook_log insert failed", dedup.error);
+    return NextResponse.json({ error: "webhook_log_unavailable" }, { status: 500 });
   }
 
   let payload: Record<string, unknown>;
@@ -144,7 +176,7 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
           .catch(() => null);
         if (referrerEmail) {
           klaviyo
-            .trackEvent("referral_converted" as never, referrerEmail, {
+            .trackEvent("referral_converted", referrerEmail, {
               orderId: payload.id,
               dropsAwarded: 250,
             })
@@ -176,7 +208,17 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
         total: payload.total_price,
         currency: payload.currency,
       })
-      .catch((err) => console.warn("[orders/paid] confirmation_sent klaviyo failed:", err));
+      // Surfaced as an alert (not silent warn): a dropped confirmation_sent
+      // means a customer never gets their order email, and the webhook still
+      // returns 200 (no redelivery). We keep .catch rather than throwing —
+      // letting it 500→redeliver would re-run non-idempotent fulfillments
+      // Drops awards. Visibility over retry. See audit 2026-06-10.
+      .catch((err) =>
+        console.error(
+          `[ALERT][orders/paid] confirmation_sent klaviyo FAILED order=${payload.id} email=${email}:`,
+          err,
+        ),
+      );
   }
 }
 

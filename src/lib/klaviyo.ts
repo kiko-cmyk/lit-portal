@@ -32,7 +32,8 @@ export type KlaviyoEvent =
   | "subscription_skip"
   | "subscription_charge_now"
   | "drops_earned"
-  | "email_change_requested";
+  | "email_change_requested"
+  | "referral_converted";
 
 class KlaviyoClient {
   private async req<T>(path: string, init?: RequestInit): Promise<T> {
