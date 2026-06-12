@@ -17,6 +17,10 @@
     {
       "path": "/api/cron/monthly-streak",
       "schedule": "0 0 1 * *"
+    },
+    {
+      "path": "/api/cron/reanchor-drain",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

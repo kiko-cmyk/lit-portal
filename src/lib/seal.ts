@@ -488,6 +488,51 @@ class SealClient {
   }
 
   /**
+   * Preserve the customer's prior next-ship date after a plan change.
+   *
+   * Why: a plan change (edit/add/remove) makes Seal DELETE and REGENERATE the
+   * whole billing_attempts schedule anchored on "today + interval". That wipes
+   * a prior skip — e.g. a customer who had skipped to 27-Sep ends up with a
+   * regenerated next charge of 27-Jun. The business rule is: a plan change must
+   * NEVER move the next charge earlier than the date the customer already had.
+   *
+   * Mechanism (verified against the live Seal API 2026-06-12): `reschedule`
+   * can't move an attempt onto `preserve` when Seal already generated an
+   * attempt near that date ("another attempt scheduled close to the desired
+   * date"). What works is to SKIP every regenerated pending attempt that falls
+   * BEFORE `preserve`; the first surviving pending attempt then lands on the
+   * preserved date and the new cadence continues from there.
+   *
+   * Idempotent: re-reads live state and only skips pending attempts strictly
+   * before `preserve` that aren't already skipped/completed. Safe to re-run
+   * (the cron drain and the in-request path both call it). Skips sequentially —
+   * Seal regenerates attempts on every mutation, so concurrent skips would
+   * race the regenerator.
+   *
+   * Never skips an attempt already inside the 24h cutoff (the operator is
+   * already processing that shipment). Returns the number of attempts skipped.
+   */
+  async skipIntermediateAttempts(
+    subscriptionId: number,
+    preserveYYYYMMDD: string,
+  ): Promise<number> {
+    const sub = await this.getSubscriptionById(subscriptionId);
+    if (!sub) return 0;
+    const intermediates = pendingAttemptsBefore(sub, preserveYYYYMMDD);
+    let skipped = 0;
+    for (const ba of intermediates) {
+      // Never skip a charge that's already within the cutoff window.
+      if (isWithinCutoff(ba.date)) continue;
+      await this.skipBillingAttempt(ba.id, subscriptionId);
+      skipped++;
+      // Seal needs a beat to settle its regenerator between mutations
+      // (~300-500 ms, same as the plan-change route's inter-mutation pause).
+      await sleep(SEAL_BACKOFF_MS);
+    }
+    return skipped;
+  }
+
+  /**
    * Charge the subscription's next order RIGHT NOW ("adelantar pedido").
    *
    * Hits Seal's dedicated `/subscription-create-charge-now` endpoint, which
@@ -687,6 +732,23 @@ export function getNextBillingAttempt(s: SealSubscription): SealBillingAttempt |
     (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
   );
   return pending ?? null;
+}
+
+/**
+ * Pending attempts whose date falls strictly before `preserveYYYYMMDD`,
+ * sorted ascending. Same "pending" filter as getNextBillingAttempt
+ * (not completed, no terminal status, not skipped). Used by
+ * skipIntermediateAttempts to preserve a prior next-ship date after a
+ * plan change regenerated the schedule earlier than the customer had it.
+ */
+export function pendingAttemptsBefore(
+  s: SealSubscription,
+  preserveYYYYMMDD: string,
+): SealBillingAttempt[] {
+  return (s.billing_attempts ?? [])
+    .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
+    .filter((ba) => ba.date.slice(0, 10) < preserveYYYYMMDD)
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /**

@@ -1,12 +1,49 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { getNextBillingAttempt, mapToSubscription, normalizeFrequency, pendingAttemptsBefore, seal, type SealSubscription } from "@/lib/seal";
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
+import { supabaseAdmin } from "@/lib/supabase";
 import type { Frequency, Subscription } from "@/lib/types";
+
+/**
+ * Persist (or refresh) the "preserve this next-ship date" intent so the
+ * cron drain (/api/cron/reanchor-drain) can finish the job if the in-request
+ * skip didn't complete (rare: Seal still regenerating after our poll budget).
+ * One live intent per customer; a later plan change overwrites it.
+ */
+async function writeReanchorIntent(
+  customerId: string,
+  sealSubscriptionId: number,
+  preserveYYYYMMDD: string,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  await supabaseAdmin()
+    .from("subscription_reanchor_intents")
+    .upsert(
+      {
+        customer_id: customerId,
+        seal_subscription_id: String(sealSubscriptionId),
+        preserve_date: preserveYYYYMMDD,
+        status: "pending",
+        attempts: 0,
+        created_at: nowIso,
+        updated_at: nowIso,
+      },
+      { onConflict: "customer_id" },
+    );
+}
+
+/** Mark any live intent for this customer as done (in-request skip finished it). */
+async function clearReanchorIntent(customerId: string): Promise<void> {
+  await supabaseAdmin()
+    .from("subscription_reanchor_intents")
+    .delete()
+    .eq("customer_id", customerId);
+}
 
 const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo", "6mo"];
 
@@ -472,56 +509,92 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       );
     }
 
-    // ───── Re-anchor the next ship date (preserve prior steps) ─────
+    // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
     //
-    // Seal just regenerated billing_attempts and re-anchored the next charge
-    // to "today + interval". If that landed EARLIER than the date the
-    // customer already had (e.g. a prior skip pushed them to 27-Sep but Seal
-    // snapped back to ~27-Jul), we reschedule the regenerated attempt back to
-    // the preserved date so the change never reverts an earlier step.
+    // Seal just DELETED and REGENERATED billing_attempts, anchoring the next
+    // charge on "today + interval". If a prior skip had pushed the customer to
+    // (say) 27-Sep, Seal's regenerated schedule now has charges on 27-Jun /
+    // 27-Jul / 27-Aug / 27-Sep… — i.e. the next charge snapped back to 27-Jun.
+    // The business rule: a plan change must NEVER move the next charge earlier
+    // than the date the customer already had.
     //
-    // We only ever move the date LATER (back to where it was), never earlier:
-    // if Seal's regenerated date is already >= the preserved date we leave it
-    // alone. Bringing a charge forward is exclusively the job of "adelantar
-    // pedido" (charge-now), which the customer triggers explicitly.
-    const regenerated = getNextBillingAttempt(verified);
-    let finalNextShipDate: string | null = regenerated?.date ?? null;
-    if (preserveYYYYMMDD) {
-      const regeneratedYYYYMMDD = regenerated?.date?.slice(0, 10) ?? null;
-      if (
-        regenerated &&
-        regeneratedYYYYMMDD &&
-        regeneratedYYYYMMDD < preserveYYYYMMDD &&
-        !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)
-      ) {
-        try {
-          await seal.rescheduleBillingAttempt(
-            regenerated.id,
-            sealSubscriptionId,
-            preserveYYYYMMDD,
-          );
-          finalNextShipDate = `${preserveYYYYMMDD}T13:00:00Z`;
-          log("seal-reschedule-ok", {
-            from: regeneratedYYYYMMDD,
-            to: preserveYYYYMMDD,
-            attemptId: regenerated.id,
-          });
-        } catch (e) {
-          // Reschedule failed — leave Seal's regenerated date in place rather
-          // than blowing up the whole plan change (the plan itself succeeded).
-          // FE's silent re-poll will reflect the real Seal date.
-          log("seal-reschedule-failed", {
-            from: regeneratedYYYYMMDD,
-            to: preserveYYYYMMDD,
-            msg: e instanceof Error ? e.message : String(e),
-          });
+    // Fix: skip every regenerated pending attempt that falls BEFORE the
+    // preserved date, so the first surviving charge lands on 27-Sep and the new
+    // cadence continues from there. (reschedule can't do this — Seal rejects
+    // moving an attempt onto a date where one already exists.)
+    //
+    // Timing: regeneration is async. It's usually done in seconds (attempt IDs
+    // changed ~2 s apart in testing), but can rarely take minutes. We poll
+    // briefly here (budget well under the 60 s maxDuration) and skip in-request
+    // for the common case; if regeneration hasn't surfaced an early attempt by
+    // the deadline, we record an intent and the cron drain
+    // (/api/cron/reanchor-drain) finishes the job. We only ever push the date
+    // LATER (never earlier — that's charge-now's job).
+    let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
+    if (preserveYYYYMMDD && !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) {
+      // CRITICAL timing subtlety (this is what broke the first attempt):
+      // a plan change ALWAYS makes Seal regenerate the schedule, but the regen
+      // is async. Right after mutating, a GET can still show the OLD schedule
+      // (e.g. only 27-Sep pending). If we naively checked "first pending >=
+      // preserve" we'd wrongly conclude "all good" and exit — then Seal resets
+      // to 27-Jun a moment later and the rule is violated.
+      //
+      // So we must NOT accept a no-op until we've SEEN regeneration happen.
+      // Fingerprint the pending attempt IDs we have now; regeneration is
+      // confirmed once that set changes (Seal assigns fresh attempt IDs).
+      // Until then we keep polling. Decision table once regen is confirmed:
+      //   - early attempts (< preserve) exist → skip them (the real fix)
+      //   - none exist          → genuine no-op (e.g. shorter cadence landed
+      //                            on/after preserve) → leave as is
+      // If the deadline hits before regen is confirmed (rare slow Seal) → hand
+      // off to the cron drain, which runs after regen has definitely finished.
+      const fingerprint = (s: SealSubscription) =>
+        (s.billing_attempts ?? [])
+          .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
+          .map((ba) => ba.id)
+          .sort((a, b) => a - b)
+          .join(",");
+      const beforeFingerprint = fingerprint(verified);
+
+      let sub: SealSubscription | null = verified;
+      const POLL_DEADLINE_MS = 45_000; // leave ~15 s headroom under maxDuration=60
+      while (true) {
+        const regenConfirmed = fingerprint(sub) !== beforeFingerprint;
+        const intermediates = pendingAttemptsBefore(sub, preserveYYYYMMDD);
+
+        // Early attempts already visible → regen has surfaced them; skip now.
+        if (intermediates.length > 0) {
+          const skipped = await seal.skipIntermediateAttempts(sealSubscriptionId, preserveYYYYMMDD);
+          const after = await seal.getSubscriptionById(sealSubscriptionId);
+          finalNextShipDate = getNextBillingAttempt(after ?? sub)?.date ?? null;
+          await clearReanchorIntent(ctx.customerId).catch(() => {});
+          log("reanchor-skipped-in-request", { skipped, preserveYYYYMMDD, finalNextShipDate });
+          break;
         }
-      } else {
-        log("reschedule-skipped", {
-          regeneratedYYYYMMDD,
-          preserveYYYYMMDD,
-          reason: !regenerated ? "no-attempt" : "seal-date-not-earlier",
-        });
+
+        // No early attempts AND we've confirmed Seal regenerated → genuine
+        // no-op: the new schedule's next charge is already on/after preserve.
+        if (regenConfirmed) {
+          finalNextShipDate = getNextBillingAttempt(sub)?.date ?? null;
+          await clearReanchorIntent(ctx.customerId).catch(() => {});
+          log("reanchor-noop-after-regen", {
+            preserveYYYYMMDD,
+            firstPending: finalNextShipDate?.slice(0, 10) ?? null,
+          });
+          break;
+        }
+
+        // Not regenerated yet — keep waiting, or defer to the cron at deadline.
+        if (Date.now() - t0 > POLL_DEADLINE_MS) {
+          await writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD).catch(
+            (e) => log("reanchor-intent-write-failed", { msg: String(e) }),
+          );
+          finalNextShipDate = `${preserveYYYYMMDD}T13:00:00Z`; // optimistic; cron makes it real
+          log("reanchor-deferred-to-cron", { preserveYYYYMMDD });
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1_500));
+        sub = (await seal.getSubscriptionById(sealSubscriptionId)) ?? verified;
       }
     }
 
@@ -531,9 +604,6 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       finalVariant: refreshedMainItem?.variant_id,
       finalNextShipDate,
     });
-    // Return the corrected date directly. The reschedule re-regenerates
-    // attempts asynchronously, so re-reading Seal now could be stale; the
-    // FE's 60 s silent re-poll confirms it.
     return { ...mapToSubscription(verified, ctx.customerId), nextShipDate: finalNextShipDate };
   }
 
@@ -541,14 +611,15 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // The mutation may have applied; we just couldn't confirm in time. The
   // FE's silent re-poll picks up the real state on the next refresh.
   //
-  // We also couldn't re-anchor the preserved next-ship date here: re-anchoring
-  // needs the regenerated billing_attempt id, which lives in `verified`. This
-  // is the rare path (verify fits in budget the vast majority of the time).
-  // TODO: if this proves common, fire ONE light getSubscription with a hard
-  // 3 s AbortController budget to grab the attempt and reschedule, keeping the
-  // total request under Vercel's 10 s limit.
-  if (preserveYYYYMMDD) {
-    log("reschedule-skipped-unverified", { sealSubscriptionId, preserveYYYYMMDD, verifyOutcome });
+  // We couldn't run the in-request poll-and-skip here (it needs the verified
+  // sub state). Record a re-anchor intent so the cron drain
+  // (/api/cron/reanchor-drain) preserves the prior next-ship date once Seal
+  // finishes regenerating. This is exactly the case the safety net exists for.
+  if (preserveYYYYMMDD && !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) {
+    await writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD).catch((e) =>
+      log("reanchor-intent-write-failed", { msg: String(e) }),
+    );
+    log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, preserveYYYYMMDD, verifyOutcome });
   }
   log("done-unverified", {
     sealSubscriptionId,
@@ -562,6 +633,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     variantChanged ? variantDetails.variantId : mainItemVariantId,
     expectedInterval,
     ctx.customerId,
+    preserveYYYYMMDD,
   );
 });
 
@@ -576,6 +648,8 @@ function synthesizePostMutationSub(
   finalVariantId: string,
   expectedInterval: string,
   customerId: string,
+  /** When set, show this date optimistically (a re-anchor intent is pending). */
+  preserveYYYYMMDD?: string | null,
 ): Subscription {
   // Derive the resulting boxCount from the variant id. Falls back to 1
   // for unmapped variants (shouldn't happen — we only mutate to mapped ones).
@@ -590,7 +664,9 @@ function synthesizePostMutationSub(
     frequency,
     frequencyLabel: expectedInterval,
     flavor: "Salty Lemon",
-    nextShipDate: null, // FE will re-poll to pick up regenerated date
+    // Optimistic: show the preserved date while the cron finishes the skip.
+    // Otherwise null and the FE re-polls for the regenerated date.
+    nextShipDate: preserveYYYYMMDD ? `${preserveYYYYMMDD}T13:00:00Z` : null,
     nextBoxNumber: null,
     status: "active",
     createdAt: new Date().toISOString(),
