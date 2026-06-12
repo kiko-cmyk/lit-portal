@@ -1,7 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { getNextBillingAttempt, mapToSubscription, normalizeFrequency, pendingAttemptsBefore, seal, type SealSubscription } from "@/lib/seal";
+import { getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -37,13 +37,6 @@ async function writeReanchorIntent(
     );
 }
 
-/** Mark any live intent for this customer as done (in-request skip finished it). */
-async function clearReanchorIntent(customerId: string): Promise<void> {
-  await supabaseAdmin()
-    .from("subscription_reanchor_intents")
-    .delete()
-    .eq("customer_id", customerId);
-}
 
 const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo", "6mo"];
 
@@ -511,91 +504,35 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
 
     // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
     //
-    // Seal just DELETED and REGENERATED billing_attempts, anchoring the next
-    // charge on "today + interval". If a prior skip had pushed the customer to
-    // (say) 27-Sep, Seal's regenerated schedule now has charges on 27-Jun /
-    // 27-Jul / 27-Aug / 27-Sep… — i.e. the next charge snapped back to 27-Jun.
-    // The business rule: a plan change must NEVER move the next charge earlier
-    // than the date the customer already had.
+    // ONLY a frequency change regenerates the schedule. A box-count change
+    // (add_items + remove_items) leaves billing_attempts untouched — same IDs,
+    // same dates — so there's nothing to preserve. (Confirmed against the live
+    // Seal API 2026-06-12.) So we only act when planChanged.
     //
-    // Fix: skip every regenerated pending attempt that falls BEFORE the
-    // preserved date, so the first surviving charge lands on 27-Sep and the new
-    // cadence continues from there. (reschedule can't do this — Seal rejects
-    // moving an attempt onto a date where one already exists.)
+    // When the frequency changes, Seal DELETES every pending billing_attempt
+    // immediately and REGENERATES the schedule ASYNCHRONOUSLY (~60-100 s, up to
+    // hours per Seal's docs) anchored on "last completed charge + interval",
+    // ignoring any prior skip. If a customer had skipped to 27-Sep, the
+    // regenerated next charge can snap back to 27-Jun. Business rule: a plan
+    // change must NEVER move the next charge earlier than the date the customer
+    // already had.
     //
-    // Timing: regeneration is async. It's usually done in seconds (attempt IDs
-    // changed ~2 s apart in testing), but can rarely take minutes. We poll
-    // briefly here (budget well under the 60 s maxDuration) and skip in-request
-    // for the common case; if regeneration hasn't surfaced an early attempt by
-    // the deadline, we record an intent and the cron drain
-    // (/api/cron/reanchor-drain) finishes the job. We only ever push the date
-    // LATER (never earlier — that's charge-now's job).
+    // We CANNOT fix this in-request: the regen hasn't happened yet when we
+    // return (this is exactly what broke the first two attempts — we read 0
+    // pending and concluded "all good", then Seal reset the date a minute
+    // later). Instead we persist a "preserve this date" intent and let the
+    // Seal `subscription/updated` webhook — which fires WHEN regen completes —
+    // skip the regenerated early attempts (seal.skipIntermediateAttempts), so
+    // the first surviving charge lands on the preserved date. The Hub dashboard
+    // re-poll and the cron drain are backstops. We respond optimistically with
+    // the preserved date so the customer sees it immediately.
     let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
-    if (preserveYYYYMMDD && !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) {
-      // CRITICAL timing subtlety (this is what broke the first attempt):
-      // a plan change ALWAYS makes Seal regenerate the schedule, but the regen
-      // is async. Right after mutating, a GET can still show the OLD schedule
-      // (e.g. only 27-Sep pending). If we naively checked "first pending >=
-      // preserve" we'd wrongly conclude "all good" and exit — then Seal resets
-      // to 27-Jun a moment later and the rule is violated.
-      //
-      // So we must NOT accept a no-op until we've SEEN regeneration happen.
-      // Fingerprint the pending attempt IDs we have now; regeneration is
-      // confirmed once that set changes (Seal assigns fresh attempt IDs).
-      // Until then we keep polling. Decision table once regen is confirmed:
-      //   - early attempts (< preserve) exist → skip them (the real fix)
-      //   - none exist          → genuine no-op (e.g. shorter cadence landed
-      //                            on/after preserve) → leave as is
-      // If the deadline hits before regen is confirmed (rare slow Seal) → hand
-      // off to the cron drain, which runs after regen has definitely finished.
-      const fingerprint = (s: SealSubscription) =>
-        (s.billing_attempts ?? [])
-          .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
-          .map((ba) => ba.id)
-          .sort((a, b) => a - b)
-          .join(",");
-      const beforeFingerprint = fingerprint(verified);
-
-      let sub: SealSubscription | null = verified;
-      const POLL_DEADLINE_MS = 45_000; // leave ~15 s headroom under maxDuration=60
-      while (true) {
-        const regenConfirmed = fingerprint(sub) !== beforeFingerprint;
-        const intermediates = pendingAttemptsBefore(sub, preserveYYYYMMDD);
-
-        // Early attempts already visible → regen has surfaced them; skip now.
-        if (intermediates.length > 0) {
-          const skipped = await seal.skipIntermediateAttempts(sealSubscriptionId, preserveYYYYMMDD);
-          const after = await seal.getSubscriptionById(sealSubscriptionId);
-          finalNextShipDate = getNextBillingAttempt(after ?? sub)?.date ?? null;
-          await clearReanchorIntent(ctx.customerId).catch(() => {});
-          log("reanchor-skipped-in-request", { skipped, preserveYYYYMMDD, finalNextShipDate });
-          break;
-        }
-
-        // No early attempts AND we've confirmed Seal regenerated → genuine
-        // no-op: the new schedule's next charge is already on/after preserve.
-        if (regenConfirmed) {
-          finalNextShipDate = getNextBillingAttempt(sub)?.date ?? null;
-          await clearReanchorIntent(ctx.customerId).catch(() => {});
-          log("reanchor-noop-after-regen", {
-            preserveYYYYMMDD,
-            firstPending: finalNextShipDate?.slice(0, 10) ?? null,
-          });
-          break;
-        }
-
-        // Not regenerated yet — keep waiting, or defer to the cron at deadline.
-        if (Date.now() - t0 > POLL_DEADLINE_MS) {
-          await writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD).catch(
-            (e) => log("reanchor-intent-write-failed", { msg: String(e) }),
-          );
-          finalNextShipDate = `${preserveYYYYMMDD}T13:00:00Z`; // optimistic; cron makes it real
-          log("reanchor-deferred-to-cron", { preserveYYYYMMDD });
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 1_500));
-        sub = (await seal.getSubscriptionById(sealSubscriptionId)) ?? verified;
-      }
+    if (planChanged && preserveYYYYMMDD && !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) {
+      await writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD).catch((e) =>
+        log("reanchor-intent-write-failed", { msg: String(e) }),
+      );
+      finalNextShipDate = `${preserveYYYYMMDD}T13:00:00Z`; // optimistic; webhook/cron makes it real
+      log("reanchor-intent-recorded", { preserveYYYYMMDD });
     }
 
     log("done-verified", {
