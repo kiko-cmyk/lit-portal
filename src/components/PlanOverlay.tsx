@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang } from "@/lib/i18n";
-import { readJustSkipped } from "@/lib/just-skipped";
 import type { Frequency, PricingResponse, Subscription } from "@/lib/types";
 
 const FREQUENCIES: { value: Frequency; en: string; es: string }[] = [
@@ -45,11 +44,6 @@ export function PlanOverlay({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  // Active skip flag — Seal regenerates billing_attempts on any plan change,
-  // which wipes a previously-applied skip. We surface this BEFORE the user
-  // commits the change so they're not surprised. Read from localStorage so
-  // it works regardless of which page hosts the overlay (Hub or Account).
-  const [hasActiveSkip] = useState<boolean>(() => readJustSkipped() !== null);
   const t = useLang();
 
   useEffect(() => {
@@ -84,6 +78,13 @@ export function PlanOverlay({
           mainItemId: subscription.mainItemId,
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
+          // Preserve the customer's current next-ship date. Seal regenerates
+          // billing_attempts on any plan change and re-anchors the next charge
+          // to "today + interval", which would silently undo a prior skip
+          // (e.g. 27-Sep snaps back to ~27-Jul). The backend re-anchors the
+          // regenerated attempt back to this date so earlier steps are never
+          // reverted. (Juan 2026-06-12.)
+          preserveNextShipDate: subscription.nextShipDate,
         }),
       });
       onUpdated(updated);
@@ -266,15 +267,6 @@ export function PlanOverlay({
                     {Math.abs(newPrice - currentPrice).toFixed(2)}
                   </div>
                 )}
-              </div>
-            )}
-
-            {hasActiveSkip && hasChange && (
-              <div className="mt-4 rounded-sm bg-[color:var(--color-bold-yellow)]/25 px-4 py-3 text-xs leading-relaxed text-[color:var(--color-lit-grey)]">
-                <T
-                  en="Heads up: changing your plan will undo your active skip and your next box will be rescheduled to the new cadence."
-                  es="Aviso: al cambiar el plan se deshará el salto que tienes activo y tu próxima caja se reprogramará con la nueva frecuencia."
-                />
               </div>
             )}
 

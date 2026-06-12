@@ -1,7 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -53,6 +53,13 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     mainItemId?: number;
     currentVariantId?: string;
     currentFrequency?: Frequency;
+    /**
+     * The customer's current next-ship date (ISO), sent by the FE so we can
+     * re-anchor it after Seal regenerates billing_attempts. Without this, a
+     * plan change snaps the next charge back to "today + interval" and
+     * silently undoes a prior skip. See re-anchor block near the end.
+     */
+    preserveNextShipDate?: string | null;
   };
   log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
 
@@ -164,6 +171,14 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   if (nextAttemptDate && isWithinCutoff(nextAttemptDate)) {
     throw new ApiHttpError(400, "cutoff_passed", "Cannot change plan within 24h of next ship");
   }
+
+  // Date we must keep as the next ship date after Seal regenerates its
+  // billing_attempts. Prefer the FE-sent value (fast path); fall back to the
+  // pending attempt we already read on the slow path. May be null on legacy
+  // payloads — then we simply don't re-anchor (the customer keeps whatever
+  // Seal picks, same as the old behaviour).
+  const preserveYYYYMMDD =
+    (body.preserveNextShipDate ?? nextAttemptDate)?.slice(0, 10) ?? null;
 
   // Resolve target variant + frequency + detect what actually changed.
   const targetBoxCount = body.boxCount ?? null;
@@ -457,17 +472,84 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       );
     }
 
+    // ───── Re-anchor the next ship date (preserve prior steps) ─────
+    //
+    // Seal just regenerated billing_attempts and re-anchored the next charge
+    // to "today + interval". If that landed EARLIER than the date the
+    // customer already had (e.g. a prior skip pushed them to 27-Sep but Seal
+    // snapped back to ~27-Jul), we reschedule the regenerated attempt back to
+    // the preserved date so the change never reverts an earlier step.
+    //
+    // We only ever move the date LATER (back to where it was), never earlier:
+    // if Seal's regenerated date is already >= the preserved date we leave it
+    // alone. Bringing a charge forward is exclusively the job of "adelantar
+    // pedido" (charge-now), which the customer triggers explicitly.
+    const regenerated = getNextBillingAttempt(verified);
+    let finalNextShipDate: string | null = regenerated?.date ?? null;
+    if (preserveYYYYMMDD) {
+      const regeneratedYYYYMMDD = regenerated?.date?.slice(0, 10) ?? null;
+      if (
+        regenerated &&
+        regeneratedYYYYMMDD &&
+        regeneratedYYYYMMDD < preserveYYYYMMDD &&
+        !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)
+      ) {
+        try {
+          await seal.rescheduleBillingAttempt(
+            regenerated.id,
+            sealSubscriptionId,
+            preserveYYYYMMDD,
+          );
+          finalNextShipDate = `${preserveYYYYMMDD}T13:00:00Z`;
+          log("seal-reschedule-ok", {
+            from: regeneratedYYYYMMDD,
+            to: preserveYYYYMMDD,
+            attemptId: regenerated.id,
+          });
+        } catch (e) {
+          // Reschedule failed — leave Seal's regenerated date in place rather
+          // than blowing up the whole plan change (the plan itself succeeded).
+          // FE's silent re-poll will reflect the real Seal date.
+          log("seal-reschedule-failed", {
+            from: regeneratedYYYYMMDD,
+            to: preserveYYYYMMDD,
+            msg: e instanceof Error ? e.message : String(e),
+          });
+        }
+      } else {
+        log("reschedule-skipped", {
+          regeneratedYYYYMMDD,
+          preserveYYYYMMDD,
+          reason: !regenerated ? "no-attempt" : "seal-date-not-earlier",
+        });
+      }
+    }
+
     log("done-verified", {
       sealSubscriptionId,
       finalInterval: verified.delivery_interval,
       finalVariant: refreshedMainItem?.variant_id,
+      finalNextShipDate,
     });
-    return mapToSubscription(verified, ctx.customerId);
+    // Return the corrected date directly. The reschedule re-regenerates
+    // attempts asynchronously, so re-reading Seal now could be stale; the
+    // FE's 60 s silent re-poll confirms it.
+    return { ...mapToSubscription(verified, ctx.customerId), nextShipDate: finalNextShipDate };
   }
 
   // Verification timed out or errored — fall back to synthetic response.
   // The mutation may have applied; we just couldn't confirm in time. The
   // FE's silent re-poll picks up the real state on the next refresh.
+  //
+  // We also couldn't re-anchor the preserved next-ship date here: re-anchoring
+  // needs the regenerated billing_attempt id, which lives in `verified`. This
+  // is the rare path (verify fits in budget the vast majority of the time).
+  // TODO: if this proves common, fire ONE light getSubscription with a hard
+  // 3 s AbortController budget to grab the attempt and reschedule, keeping the
+  // total request under Vercel's 10 s limit.
+  if (preserveYYYYMMDD) {
+    log("reschedule-skipped-unverified", { sealSubscriptionId, preserveYYYYMMDD, verifyOutcome });
+  }
   log("done-unverified", {
     sealSubscriptionId,
     verifyOutcome,
