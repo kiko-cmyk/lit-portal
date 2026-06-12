@@ -22,7 +22,9 @@ import { supabaseAdmin } from "@/lib/supabase";
  *     (seal.skipIntermediateAttempts — idempotent, so retrying is safe).
  *   - On Seal error → bump attempts, leave pending; after MAX_ATTEMPTS → failed.
  *
- * Runs every 5 min (vercel.json), bounding worst-case rule enforcement.
+ * Cadence: every 5 min via external cron on n8n.drinklit.com (curl with
+ * `Authorization: Bearer CRON_SECRET`) — Vercel Hobby only allows daily
+ * crons, so vercel.json keeps a daily run as fallback only.
  */
 
 const MAX_ATTEMPTS = 5;
