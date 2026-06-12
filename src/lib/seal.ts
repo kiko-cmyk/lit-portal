@@ -488,48 +488,72 @@ class SealClient {
   }
 
   /**
-   * Preserve the customer's prior next-ship date after a plan change.
+   * Re-anchor the regenerated schedule to the customer's prior next-ship date.
    *
-   * Why: a plan change (edit/add/remove) makes Seal DELETE and REGENERATE the
-   * whole billing_attempts schedule anchored on "today + interval". That wipes
-   * a prior skip — e.g. a customer who had skipped to 27-Sep ends up with a
-   * regenerated next charge of 27-Jun. The business rule is: a plan change must
-   * NEVER move the next charge earlier than the date the customer already had.
+   * Why: a frequency change makes Seal DELETE and REGENERATE the whole
+   * billing_attempts schedule anchored on "last completed charge + interval",
+   * ignoring any prior skip — e.g. a customer who had their next charge on
+   * 27-Jul ends up with the schedule re-anchored to 11-Jul. Business rule
+   * (Juan 2026-06-12): EVERY change counts FROM the date the customer already
+   * had; the next charge must never move earlier, and the new cadence runs
+   * from that preserved date.
    *
-   * Mechanism (verified against the live Seal API 2026-06-12): `reschedule`
-   * can't move an attempt onto `preserve` when Seal already generated an
-   * attempt near that date ("another attempt scheduled close to the desired
-   * date"). What works is to SKIP every regenerated pending attempt that falls
-   * BEFORE `preserve`; the first surviving pending attempt then lands on the
-   * preserved date and the new cadence continues from there.
+   * Mechanism (verified against the live Seal API 2026-06-12):
+   *   - reschedule moves a single attempt but does NOT re-space the rest, and
+   *     it rejects moving an attempt onto a date where one already exists
+   *     ("another attempt scheduled close to the desired date").
+   *   - Seal's regenerated attempts ARE correctly spaced for the new frequency
+   *     among themselves (e.g. exactly 45 days apart); they're just anchored on
+   *     the wrong start date.
+   *   - So we SHIFT the whole schedule by a uniform offset = (preserve − first
+   *     pending date), preserving Seal's own spacing (works for day- and
+   *     month-based intervals alike without hardcoding interval lengths) while
+   *     moving the first charge onto the preserved date. We reschedule each
+   *     pending attempt FURTHEST-FIRST so we never drop one onto a slot still
+   *     occupied by an un-moved attempt (avoids the "close to date" rejection).
    *
-   * Idempotent: re-reads live state and only skips pending attempts strictly
-   * before `preserve` that aren't already skipped/completed. Safe to re-run
-   * (the cron drain and the in-request path both call it). Skips sequentially —
-   * Seal regenerates attempts on every mutation, so concurrent skips would
-   * race the regenerator.
+   * Only shifts FORWARD (offset > 0): if Seal's first charge is already on/after
+   * preserve, there's nothing to fix (we never pull a charge earlier — that's
+   * charge-now's job). Idempotent: re-reads live state; once the first pending
+   * equals preserve, the offset is 0 and it's a no-op. Sequential reschedules —
+   * Seal regenerates on every mutation, so concurrent calls would race.
    *
-   * Never skips an attempt already inside the 24h cutoff (the operator is
-   * already processing that shipment). Returns the number of attempts skipped.
+   * Returns the number of attempts moved.
    */
-  async skipIntermediateAttempts(
+  async reanchorCadence(
     subscriptionId: number,
     preserveYYYYMMDD: string,
   ): Promise<number> {
     const sub = await this.getSubscriptionById(subscriptionId);
     if (!sub) return 0;
-    const intermediates = pendingAttemptsBefore(sub, preserveYYYYMMDD);
-    let skipped = 0;
-    for (const ba of intermediates) {
-      // Never skip a charge that's already within the cutoff window.
-      if (isWithinCutoff(ba.date)) continue;
-      await this.skipBillingAttempt(ba.id, subscriptionId);
-      skipped++;
-      // Seal needs a beat to settle its regenerator between mutations
-      // (~300-500 ms, same as the plan-change route's inter-mutation pause).
+
+    const pending = (sub.billing_attempts ?? [])
+      .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (pending.length === 0) return 0;
+
+    const firstDay = pending[0].date.slice(0, 10);
+    // Only act when Seal anchored EARLIER than the preserved date.
+    if (firstDay >= preserveYYYYMMDD) return 0;
+
+    const offsetDays = daysBetween(firstDay, preserveYYYYMMDD); // > 0
+    if (offsetDays <= 0) return 0;
+
+    // Compute each attempt's target = its current date + offset, then move
+    // furthest-first so we never collide with an un-moved attempt.
+    const moves = pending
+      .map((ba) => ({ id: ba.id, cur: ba.date.slice(0, 10), tgt: addDaysYYYYMMDD(ba.date.slice(0, 10), offsetDays) }))
+      .filter((m) => m.cur !== m.tgt)
+      .sort((a, b) => b.tgt.localeCompare(a.tgt));
+
+    let moved = 0;
+    for (const m of moves) {
+      await this.rescheduleBillingAttempt(m.id, subscriptionId, m.tgt);
+      moved++;
+      // Seal needs a beat to settle its regenerator between mutations.
       await sleep(SEAL_BACKOFF_MS);
     }
-    return skipped;
+    return moved;
   }
 
   /**
@@ -737,9 +761,9 @@ export function getNextBillingAttempt(s: SealSubscription): SealBillingAttempt |
 /**
  * Pending attempts whose date falls strictly before `preserveYYYYMMDD`,
  * sorted ascending. Same "pending" filter as getNextBillingAttempt
- * (not completed, no terminal status, not skipped). Used by
- * skipIntermediateAttempts to preserve a prior next-ship date after a
- * plan change regenerated the schedule earlier than the customer had it.
+ * (not completed, no terminal status, not skipped). Used to decide whether a
+ * re-anchor is needed after a plan change regenerated the schedule earlier
+ * than the customer had it.
  */
 export function pendingAttemptsBefore(
   s: SealSubscription,
@@ -749,6 +773,20 @@ export function pendingAttemptsBefore(
     .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
     .filter((ba) => ba.date.slice(0, 10) < preserveYYYYMMDD)
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Whole days from `fromYYYYMMDD` to `toYYYYMMDD` (positive if `to` is later). */
+function daysBetween(fromYYYYMMDD: string, toYYYYMMDD: string): number {
+  const a = Date.parse(`${fromYYYYMMDD}T00:00:00Z`);
+  const b = Date.parse(`${toYYYYMMDD}T00:00:00Z`);
+  return Math.round((b - a) / 86_400_000);
+}
+
+/** Add `days` to a YYYY-MM-DD date, returning YYYY-MM-DD (UTC, no tz drift). */
+function addDaysYYYYMMDD(yyyymmdd: string, days: number): string {
+  return new Date(Date.parse(`${yyyymmdd}T00:00:00Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 /**

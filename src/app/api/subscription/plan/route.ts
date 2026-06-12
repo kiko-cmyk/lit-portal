@@ -193,6 +193,13 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
         "mainItemId does not belong to this subscription",
       );
     }
+    // Read the CURRENT next charge straight from Seal (fast path didn't have
+    // the sub object). This is the authoritative date to preserve — using the
+    // FE-sent value risks a timezone-truncated day (a local-midnight ISO
+    // slices to the day BEFORE; that bug put 27-Jul in as 26-Jul).
+    if (subForCheck && nextAttemptDate === null) {
+      nextAttemptDate = getNextBillingAttempt(subForCheck)?.date ?? null;
+    }
   }
 
   // Cutoff against next billing attempt date (only when we have it from
@@ -203,12 +210,12 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   // Date we must keep as the next ship date after Seal regenerates its
-  // billing_attempts. Prefer the FE-sent value (fast path); fall back to the
-  // pending attempt we already read on the slow path. May be null on legacy
-  // payloads — then we simply don't re-anchor (the customer keeps whatever
-  // Seal picks, same as the old behaviour).
+  // billing_attempts. Prefer Seal's authoritative attempt date (read above /
+  // slow path) — Seal returns it at 10:00Z so slicing the day is timezone-safe.
+  // Fall back to the FE-sent value only if Seal gave us nothing. May be null on
+  // legacy payloads — then we simply don't re-anchor.
   const preserveYYYYMMDD =
-    (body.preserveNextShipDate ?? nextAttemptDate)?.slice(0, 10) ?? null;
+    (nextAttemptDate ?? body.preserveNextShipDate)?.slice(0, 10) ?? null;
 
   // Resolve target variant + frequency + detect what actually changed.
   const targetBoxCount = body.boxCount ?? null;

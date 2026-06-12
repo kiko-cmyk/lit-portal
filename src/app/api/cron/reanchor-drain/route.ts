@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { isWithinCutoff } from "@/lib/cutoff";
-import { getNextBillingAttempt, pendingAttemptsBefore, seal } from "@/lib/seal";
+import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -86,15 +86,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     const firstPending = getNextBillingAttempt(sub);
-    const intermediates = pendingAttemptsBefore(sub, preserve);
+    const firstDay = firstPending?.date.slice(0, 10) ?? null;
 
-    // Already correct (next charge on/after preserve, no early attempts) → done.
-    if (intermediates.length === 0) {
-      if (firstPending && firstPending.date.slice(0, 10) < preserve) {
-        // Edge: only attempt(s) before preserve are inside cutoff (skipped by
-        // the helper's cutoff guard). Treat as converged — nothing skippable.
-        void firstPending;
-      }
+    // No pending yet → Seal still regenerating; retry next run.
+    if (!firstDay) {
+      await bumpAttempt(sb, intent.customer_id, intent.attempts);
+      deferred++;
+      continue;
+    }
+
+    // Already on/after preserve → cadence shifted, converged → done.
+    if (firstDay >= preserve) {
       await sb
         .from("subscription_reanchor_intents")
         .delete()
@@ -104,8 +106,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     try {
-      const skipped = await seal.skipIntermediateAttempts(subId, preserve);
-      skippedTotal += skipped;
+      const moved = await seal.reanchorCadence(subId, preserve);
+      skippedTotal += moved;
       await sb
         .from("subscription_reanchor_intents")
         .delete()

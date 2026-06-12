@@ -2,7 +2,7 @@ import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { langFromRequest } from "@/lib/request-lang";
 import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
-import { mapToSubscription, pendingAttemptsBefore, seal, type SealSubscription } from "@/lib/seal";
+import { getNextBillingAttempt, mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
@@ -55,13 +55,12 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   assertSubscriptionBelongsToCustomer(sub, email, "hub/dashboard");
 
   // Opportunistic re-anchor drain. After a plan change, the FE silently
-  // re-polls this dashboard every 5 s for 60 s — by then Seal has finished
-  // regenerating billing_attempts. If a "preserve next-ship date" intent is
-  // still pending (the plan route couldn't finish the skip in-request), apply
-  // it now: skip the regenerated early attempts so the next charge holds on
-  // the preserved date. This makes the fix work without depending on a
-  // sub-daily Vercel cron (Hobby plans only run crons once a day). The cron
-  // remains as a backstop. seal.skipIntermediateAttempts is idempotent.
+  // re-polls this dashboard every 5 s for 60 s — by then Seal has usually
+  // finished regenerating billing_attempts. If a "preserve next-ship date"
+  // intent is still pending, apply it now: shift the regenerated schedule
+  // forward so the next charge holds on the preserved date and the new cadence
+  // runs from there. This makes the fix work even without the Seal webhook /
+  // sub-daily cron firing first. seal.reanchorCadence is idempotent.
   try {
     const { data: intent } = await sb
       .from("subscription_reanchor_intents")
@@ -71,17 +70,19 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       .maybeSingle();
     if (intent && String(intent.seal_subscription_id) === String(sub.id)) {
       const preserve = String(intent.preserve_date).slice(0, 10);
+      const firstDay = getNextBillingAttempt(sub)?.date?.slice(0, 10) ?? null;
       if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
         await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
-      } else if (pendingAttemptsBefore(sub, preserve).length > 0) {
-        await seal.skipIntermediateAttempts(Number(sub.id), preserve);
+      } else if (firstDay && firstDay < preserve) {
+        await seal.reanchorCadence(Number(sub.id), preserve);
         const refreshed = await seal.getSubscriptionById(Number(sub.id));
         if (refreshed) sub = refreshed;
         await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
-      } else {
-        // No early attempts left — already correct, clear the intent.
+      } else if (firstDay && firstDay >= preserve) {
+        // Already on/after preserve — converged, clear the intent.
         await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
       }
+      // firstDay null → regen not finished yet; leave intent for next poll.
     }
   } catch (err) {
     console.warn("[hub-dashboard] reanchor drain failed:", err);

@@ -6,7 +6,6 @@ import {
   mapStatus,
   mapToSubscription,
   normalizeFrequency,
-  pendingAttemptsBefore,
   seal,
   type SealSubscription,
 } from "@/lib/seal";
@@ -155,37 +154,30 @@ async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promis
   const sub = await seal.getSubscriptionById(Number(sealSubId));
   if (!sub) return; // transient; another webhook (or the cron/dashboard) retries
 
-  const intermediates = pendingAttemptsBefore(sub, preserve);
-  if (intermediates.length === 0) {
-    // Either regen hasn't surfaced early attempts yet (0 pending), or they're
-    // already gone. If there IS a pending attempt and it's >= preserve, we're
-    // done; if there are NO pending at all, regen isn't finished — leave the
-    // intent for the next webhook. Only clear when we can see a valid next
-    // charge on/after preserve.
-    const firstPending = getNextBillingAttempt(sub);
-    if (firstPending && firstPending.date.slice(0, 10) >= preserve) {
-      await sb.from("subscription_reanchor_intents").delete().eq("customer_id", intent.customer_id);
-      console.log("[seal-webhook] reanchor converged", {
-        sealSubId,
-        preserve,
-        nextCharge: firstPending.date.slice(0, 10),
-      });
-    } else {
-      console.log("[seal-webhook] reanchor waiting for regen", {
-        sealSubId,
-        preserve,
-        pending: (sub.billing_attempts ?? []).filter(
-          (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
-        ).length,
-      });
-    }
+  const firstPending = getNextBillingAttempt(sub);
+  if (!firstPending) {
+    // Regen hasn't surfaced attempts yet (0 pending) — leave the intent for
+    // the next webhook / cron / dashboard poll.
+    console.log("[seal-webhook] reanchor waiting for regen", { sealSubId, preserve });
     return;
   }
 
-  // Skip the early attempts. This fires another subscription/updated, which
-  // re-enters here, finds no early attempts, and clears the intent.
-  const skipped = await seal.skipIntermediateAttempts(Number(sealSubId), preserve);
-  console.log("[seal-webhook] reanchor skipped intermediates", { sealSubId, preserve, skipped });
+  const firstDay = firstPending.date.slice(0, 10);
+  if (firstDay >= preserve) {
+    // Converged: the next charge is on/after the preserved date and the whole
+    // cadence was shifted with it. Done — clear the intent. (This is also the
+    // re-entry after our own reschedules fire another subscription/updated.)
+    await sb.from("subscription_reanchor_intents").delete().eq("customer_id", intent.customer_id);
+    console.log("[seal-webhook] reanchor converged", { sealSubId, preserve, nextCharge: firstDay });
+    return;
+  }
+
+  // Seal anchored earlier than preserve → shift the whole regenerated schedule
+  // forward so the next charge lands on preserve and the new cadence runs from
+  // there. reanchorCadence fires more subscription/updated events; on re-entry
+  // firstDay === preserve, so we converge and clear the intent.
+  const moved = await seal.reanchorCadence(Number(sealSubId), preserve);
+  console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved, from: firstDay });
 }
 
 /**
