@@ -61,6 +61,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   // forward so the next charge holds on the preserved date and the new cadence
   // runs from there. This makes the fix work even without the Seal webhook /
   // sub-daily cron firing first. seal.reanchorCadence is idempotent.
+  let reanchorPending = false;
   try {
     const { data: intent } = await sb
       .from("subscription_reanchor_intents")
@@ -81,8 +82,11 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       } else if (firstDay && firstDay >= preserve) {
         // Already on/after preserve — converged, clear the intent.
         await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
+      } else {
+        // firstDay null → Seal still regenerating; leave intent for next poll.
+        // The Hub keeps the "updating your calendar" banner up while this holds.
+        reanchorPending = true;
       }
-      // firstDay null → regen not finished yet; leave intent for next poll.
     }
   } catch (err) {
     console.warn("[hub-dashboard] reanchor drain failed:", err);
@@ -180,5 +184,6 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     drops: { balance, tierEarned, activeReward },
     nextEvent,
     upcomingShipments,
+    reanchorPending,
   };
 });

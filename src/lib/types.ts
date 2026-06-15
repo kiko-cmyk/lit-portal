@@ -304,6 +304,13 @@ export interface HubDashboard {
    * Sorted by date ascending. Seal typically pre-schedules 5–6 in advance.
    */
   upcomingShipments: UpcomingShipment[];
+  /**
+   * True while a re-anchor intent is still pending for this customer — i.e. a
+   * frequency change is in flight and Seal hasn't finished regenerating +
+   * re-anchoring the cadence yet. The Hub shows the "updating your calendar"
+   * banner while this is true and keeps silently re-polling until it clears.
+   */
+  reanchorPending?: boolean;
 }
 
 export interface TimelineEntry {

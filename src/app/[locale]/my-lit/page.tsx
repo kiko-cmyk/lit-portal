@@ -93,9 +93,12 @@ export default function HubPage() {
       .catch(() => setTimeline([]));
   }, []);
 
-  // Silent re-poll loop after a plan change. Stops as soon as the dashboard
-  // returns a non-null nextShipDate (Seal finished rebuilding), or after the
-  // window closes.
+  // Silent re-poll loop after a plan change. Stops once the dashboard reports
+  // the re-anchor is no longer pending (Seal finished regenerating AND the
+  // cadence was re-anchored to the preserved date), or after the window closes.
+  // We DON'T stop on the first non-null date: the PATCH returns an optimistic
+  // date right away, but the real schedule is still settling — stopping early
+  // would hide the banner before the cadence is correct.
   useEffect(() => {
     if (syncingUntil === null) return;
     let cancelled = false;
@@ -105,7 +108,7 @@ export default function HubPage() {
         const fresh = await api<HubDashboard>("/api/hub/dashboard");
         if (cancelled) return;
         setData(fresh);
-        if (fresh.subscription.nextShipDate) {
+        if (fresh.reanchorPending !== true) {
           setSyncingUntil(null);
           return;
         }
@@ -174,12 +177,15 @@ export default function HubPage() {
         },
       };
     });
-    // Kick off the silent re-poll window. The backend already waited ~8 s; if
-    // we still don't have a fresh date here it means Seal is slow today.
-    // (Date.now is impure but this is inside an event-handler callback,
-    // not in render — ESLint over-flags here.)
+    // Always show the syncing banner immediately after a plan change — no
+    // refresh needed. Seal ALWAYS regenerates billing_attempts on a frequency
+    // change and the webhook re-anchors the cadence asynchronously (~1-2 min),
+    // so even though the PATCH returns an optimistic date, the real schedule is
+    // still settling. Keep the banner up for the resync window so the customer
+    // sees "updating" the moment they save. (Date.now is impure but this is an
+    // event-handler callback, not render — ESLint over-flags here.)
     // eslint-disable-next-line react-hooks/purity
-    if (!updated.nextShipDate) setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
+    setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
   };
 
   const markSkipped = (next: boolean, until?: string | null) => {
@@ -441,12 +447,12 @@ function SyncingBanner() {
         {lang === "es" ? (
           <>
             <strong className="font-extrabold">Actualizando tu calendario.</strong>{" "}
-            Tu nueva fecha de envío aparecerá en unos minutos. Refresca la página.
+            Tu nueva fecha de envío se confirmará en unos instantes.
           </>
         ) : (
           <>
             <strong className="font-extrabold">Updating your calendar.</strong>{" "}
-            Your new ship date will appear in a few minutes. Refresh the page.
+            Your new ship date will be confirmed in a moment.
           </>
         )}
       </div>
