@@ -112,9 +112,9 @@ export function SkipOverlay({
             {currentShip && (
               <div className="mt-6 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
                 <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
-                  <T en="Current ship date" es="Fecha de envío actual" />
+                  <T en="Next order date" es="Fecha de próximo pedido" />
                 </div>
-                <div className="mt-1 font-display text-2xl font-black uppercase opacity-60">
+                <div className="mt-1 font-display text-xl font-black uppercase opacity-60">
                   {currentShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
                     weekday: "long",
                     day: "numeric",
@@ -125,9 +125,9 @@ export function SkipOverlay({
                   <>
                     <div className="my-4 border-t border-[color:var(--color-lit-grey)]/10" />
                     <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]">
-                      <T en="New ship date" es="Nueva fecha de envío" />
+                      <T en="New next order date" es="Nueva fecha del próximo pedido" />
                     </div>
-                    <div className="mt-1 font-display text-2xl font-black uppercase">
+                    <div className="mt-1 font-display text-xl font-black uppercase">
                       {newShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
                         weekday: "long",
                         day: "numeric",

@@ -314,7 +314,7 @@ export default function HubPage() {
               />
               <QuickActionButton
                 icon={QAIcons.Skip}
-                label={t({ en: "Skip next box", es: "Saltar próxima" })}
+                label={t({ en: "Skip next", es: "Saltar próximo" })}
                 sub={t({
                   en: "Skip next order",
                   es: "Saltar próximo pedido",
