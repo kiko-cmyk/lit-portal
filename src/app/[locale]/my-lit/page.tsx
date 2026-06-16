@@ -68,6 +68,16 @@ export default function HubPage() {
   const lang = useLangValue();
   usePageTitle({ en: "Subscription", es: "Suscripción" }); // browser tab title
 
+  // Deep-link desde el email de recordatorio de renovación
+  // (litsalt.com/apps/portal/es/mi-lit?action=skip): abre el overlay de Skip
+  // automáticamente al montar el Hub. Evita una página /skip dedicada y reutiliza
+  // el SkipOverlay existente. Si el cliente llega deslogueado, LoginScreen preserva
+  // pathname+search, así que el `?action=skip` sobrevive al OAuth.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("action") === "skip") setShowSkip(true);
+  }, []);
+
   useEffect(() => {
     api<CustomerProfile>("/api/customer")
       .then(setCustomer)

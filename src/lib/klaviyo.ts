@@ -31,6 +31,7 @@ export type KlaviyoEvent =
   | "subscription_reactivated"
   | "subscription_skip"
   | "subscription_charge_now"
+  | "subscription_renewal_reminder"
   | "drops_earned"
   | "email_change_requested";
 

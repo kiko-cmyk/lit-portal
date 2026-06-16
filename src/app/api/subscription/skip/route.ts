@@ -1,5 +1,4 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
-import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, seal, type SealSubscription } from "@/lib/seal";
@@ -10,8 +9,16 @@ import type { SkipResponse } from "@/lib/types";
 
 // POST /apps/portal/api/subscription/skip
 // Skips the next pending billing attempt of the customer's active subscription.
-// Enforces 24h cutoff. After skip, the new "next" becomes the attempt after
-// the skipped one — surfaced in newNextShipDate.
+// After skip, the new "next" becomes the attempt after the skipped one —
+// surfaced in newNextShipDate.
+//
+// NO 24h cutoff (removed 2026-06-15, Juan): the billing-attempt date is the
+// CHARGE/order-generation moment, not the ship date, so the customer should be
+// able to skip right up until Seal actually charges. The real guard is now
+// Seal itself — if the attempt has already started processing/charged, Seal
+// rejects the skip and we surface `already_charged`. The 24h cutoff still
+// applies to plan/flavor/address/extras (see lib/cutoff.ts), which need
+// operator lead time; skip does not.
 //
 // Body (optional): { sealSubscriptionId } — when present, takes the fast-path
 // (Supabase ownership + targeted Seal GET) and skips the 33-page pagination
@@ -57,11 +64,16 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   const next = getNextBillingAttempt(sub);
   if (!next) throw new ApiHttpError(400, "no_pending_attempt", "Subscription has no upcoming billing attempt");
 
-  if (isWithinCutoff(next.date)) {
-    throw new ApiHttpError(400, "cutoff_passed", "Cannot skip within 24h of next ship");
+  try {
+    await seal.skipBillingAttempt(next.id, sub.id);
+  } catch (err) {
+    // With the 24h cutoff gone, the only remaining guard is the race where
+    // Seal charged this attempt between our read above and this call (or it's
+    // already processing). Seal rejects the skip → surface a clear code so the
+    // UI tells the customer the order is already on its way instead of a 500.
+    console.warn(`[skip] seal rejected skip for sub ${sub.id} attempt ${next.id}:`, err);
+    throw new ApiHttpError(409, "already_charged", "This order is already being processed and can no longer be skipped.");
   }
-
-  await seal.skipBillingAttempt(next.id, sub.id);
 
   // Compute the post-skip next ship date locally instead of re-fetching.
   // Seal has eventual consistency on billing-attempt mutations — a GET fired

@@ -9,8 +9,8 @@ import type { SkipResponse, Subscription } from "@/lib/types";
  * Skip overlay — confirms skipping the next box.
  *
  * Calls POST /api/subscription/skip which:
- *   - Enforces 24h cutoff
- *   - Fires Seal billing-attempt skip
+ *   - Fires Seal billing-attempt skip (no 24h cutoff — allowed until the
+ *     charge actually fires; Seal rejects with `already_charged` past that)
  *   - Fires Klaviyo subscription_skip event
  */
 export function SkipOverlay({
@@ -47,10 +47,10 @@ export function SkipOverlay({
     } catch (e) {
       const code = (e as { code?: string }).code;
       setError(
-        code === "cutoff_passed"
+        code === "already_charged" || code === "no_pending_attempt"
           ? t({
-              en: "Too late, your next box ships within 24h.",
-              es: "Demasiado tarde, tu próxima caja se envía en 24h.",
+              en: "This order is already being processed and can't be skipped.",
+              es: "Este pedido ya se está procesando y no se puede saltar.",
             })
           : t({
               en: "Couldn't skip. Try again or contact us.",
