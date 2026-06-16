@@ -13,6 +13,17 @@ import type { SkipResponse, Subscription } from "@/lib/types";
  *     charge actually fires; Seal rejects with `already_charged` past that)
  *   - Fires Klaviyo subscription_skip event
  */
+// Nueva fecha de envío tras saltar: la actual + un ciclo de la frecuencia
+// (1mo, 15d, 3mo…). En una cadencia regular coincide con el siguiente billing
+// attempt ya programado, que es lo que pasa a ser el próximo envío al saltar.
+function addCycle(date: Date, frequency: string): Date {
+  const d = new Date(date);
+  const n = parseInt(frequency, 10);
+  if (frequency.endsWith("mo")) d.setMonth(d.getMonth() + n);
+  else if (frequency.endsWith("d")) d.setDate(d.getDate() + n);
+  return d;
+}
+
 export function SkipOverlay({
   subscription,
   onClose,
@@ -29,6 +40,9 @@ export function SkipOverlay({
 
   const currentShip = subscription.nextShipDate
     ? new Date(subscription.nextShipDate)
+    : null;
+  const newShip = currentShip
+    ? addCycle(currentShip, subscription.frequency)
     : null;
 
   const handleSkip = async () => {
@@ -83,15 +97,15 @@ export function SkipOverlay({
         {!done ? (
           <>
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
-              <T en="Skip next box" es="Saltar próxima caja" />
+              <T en="Skip next order" es="Saltar próximo pedido" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              <T en="Going somewhere" es="¿Te vas de viaje" />?
+              <T en="Need a break?" es="¿Necesitas una pausa?" />
             </h1>
             <p className="mt-3 text-sm opacity-70">
               <T
-                en="Your next box will skip one cycle and we'll resume from there."
-                es="Tu próxima caja se saltará un ciclo y retomaremos desde ahí."
+                en="Your subscription will skip one cycle and we'll resume from there."
+                es="Tu suscripción se saltará un ciclo y retomaremos desde ahí."
               />
             </p>
 
@@ -100,13 +114,28 @@ export function SkipOverlay({
                 <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
                   <T en="Current ship date" es="Fecha de envío actual" />
                 </div>
-                <div className="mt-1 font-display text-2xl font-black uppercase">
+                <div className="mt-1 font-display text-2xl font-black uppercase opacity-60">
                   {currentShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
                     weekday: "long",
                     day: "numeric",
                     month: "long",
                   })}
                 </div>
+                {newShip && (
+                  <>
+                    <div className="my-4 border-t border-[color:var(--color-lit-grey)]/10" />
+                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]">
+                      <T en="New ship date" es="Nueva fecha de envío" />
+                    </div>
+                    <div className="mt-1 font-display text-2xl font-black uppercase">
+                      {newShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
+                        weekday: "long",
+                        day: "numeric",
+                        month: "long",
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
