@@ -210,6 +210,50 @@ class SealClient {
   }
 
   /**
+   * List EVERY subscription Seal has, paginated, with items + billing attempts.
+   *
+   * Seal is the source of truth for subscriptions; the Supabase `subscriptions`
+   * table is only a partial, webhook-populated cache (it lags new/charged subs
+   * and never backfilled the existing book). Crons that must act on the WHOLE
+   * active book — e.g. the renewal reminder, which has to see every upcoming
+   * charge, not the ~20% the cache happens to hold — read from here instead.
+   *
+   * Pages are fetched with bounded concurrency: page 1 first to learn
+   * total_pages, then the rest in waves of `POOL`. A failed page propagates
+   * (no silent truncation) so the caller fails loud rather than acting on a
+   * partial book.
+   */
+  async listAllSubscriptions(signal?: AbortSignal): Promise<SealSubscription[]> {
+    const POOL = 8;
+    const fetchPage = (page: number) => {
+      const params = new URLSearchParams({
+        "with-items": "true",
+        "with-billing-attempts": "true",
+        page: String(page),
+      });
+      return this.req<SealListResponse<SealSubscription>>(
+        `/subscriptions?${params.toString()}`,
+        { signal },
+      );
+    };
+
+    const page1 = await fetchPage(1);
+    const totalPages = page1?.payload?.total_pages ?? 1;
+
+    const all: SealSubscription[] = [...(page1?.payload?.subscriptions ?? [])];
+    for (let start = 2; start <= totalPages; start += POOL) {
+      const wave = Array.from(
+        { length: Math.min(POOL, totalPages - start + 1) },
+        (_, i) => fetchPage(start + i),
+      );
+      for (const data of await Promise.all(wave)) {
+        all.push(...(data?.payload?.subscriptions ?? []));
+      }
+    }
+    return all;
+  }
+
+  /**
    * Fetch a single subscription by id WITHOUT pagination.
    *
    * Re-discovered 2026-05-21: the SINGULAR `/subscription?id=X` endpoint
@@ -752,10 +796,16 @@ export function getBoxCount(s: SealSubscription): number {
  * Matches the filter in reference_seal_api.md.
  */
 export function getNextBillingAttempt(s: SealSubscription): SealBillingAttempt | null {
-  const pending = (s.billing_attempts ?? []).find(
-    (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
-  );
-  return pending ?? null;
+  // EARLIEST pending attempt by date — not array order. Seal regenerates the
+  // whole billing_attempts schedule on every write and does not guarantee
+  // chronological order, so we sort rather than trust [0]/.find() (matches the
+  // sort every other consumer already does: hub/dashboard, reanchorCadence,
+  // pendingAttemptsBefore). A stable earliest also keeps the renewal-reminder
+  // cron's window decision and dedup key deterministic across daily runs.
+  const pending = (s.billing_attempts ?? [])
+    .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on && ba.date)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return pending[0] ?? null;
 }
 
 /**

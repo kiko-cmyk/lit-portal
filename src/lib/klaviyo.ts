@@ -35,25 +35,51 @@ export type KlaviyoEvent =
   | "drops_earned"
   | "email_change_requested";
 
+// Transient-failure retry budget. Klaviyo throttles /events/ (429) and can 5xx
+// under load; without a retry a single hiccup on a high-volume day (e.g. the
+// renewal-reminder spike) silently drops that profile's event and the daily
+// crons can't recover it (their window has moved on). trackEvent/upsertProfile
+// are effectively idempotent (event ingestion + profile upsert), so retrying is
+// safe. We retry 429/5xx and network errors only; other 4xx fail fast.
+const KLAVIYO_MAX_RETRIES = 3;
+const KLAVIYO_BACKOFF_MS = 400;
+const klaviyoSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 class KlaviyoClient {
-  private async req<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${KLAVIYO_API_BASE}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Klaviyo-API-Key ${key()}`,
-        revision: REVISION,
-        accept: "application/vnd.api+json",
-        "content-type": "application/vnd.api+json",
-        ...(init?.headers ?? {}),
-      },
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Klaviyo ${res.status}: ${body}`);
+  private async req<T>(path: string, init?: RequestInit, attempt = 0): Promise<T> {
+    try {
+      const res = await fetch(`${KLAVIYO_API_BASE}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Klaviyo-API-Key ${key()}`,
+          revision: REVISION,
+          accept: "application/vnd.api+json",
+          "content-type": "application/vnd.api+json",
+          ...(init?.headers ?? {}),
+        },
+      });
+      if (!res.ok) {
+        if (attempt < KLAVIYO_MAX_RETRIES && (res.status === 429 || res.status >= 500)) {
+          await klaviyoSleep(KLAVIYO_BACKOFF_MS * (attempt + 1));
+          return this.req<T>(path, init, attempt + 1);
+        }
+        const body = await res.text().catch(() => "");
+        throw new Error(`Klaviyo ${res.status}: ${body}`);
+      }
+      // 202 / 204 returns may have empty body
+      if (res.status === 202 || res.status === 204) return undefined as T;
+      return res.json() as Promise<T>;
+    } catch (err) {
+      // fetch() itself rejected (network/DNS/reset). Retry — but never retry an
+      // HTTP error we already chose not to retry above, nor a caller abort.
+      const name = (err as { name?: string }).name;
+      const isHttpError = err instanceof Error && err.message.startsWith("Klaviyo ");
+      if (attempt < KLAVIYO_MAX_RETRIES && !isHttpError && name !== "AbortError") {
+        await klaviyoSleep(KLAVIYO_BACKOFF_MS * (attempt + 1));
+        return this.req<T>(path, init, attempt + 1);
+      }
+      throw err;
     }
-    // 202 / 204 returns may have empty body
-    if (res.status === 202 || res.status === 204) return undefined as T;
-    return res.json() as Promise<T>;
   }
 
   /**
