@@ -94,10 +94,11 @@ export function CancelTakeover({
             freeText={freeText}
             setFreeText={setFreeText}
             onContinue={async () => {
-              if (!reason) return;
+              // "Otro" exige texto sí o sí; el resto avanza solo con el motivo.
+              if (!reason || (reason === "other" && !freeText.trim())) return;
               await api("/api/subscription/cancel", {
                 method: "POST",
-                body: JSON.stringify({ step: 3, primaryReason: reason, freeText }),
+                body: JSON.stringify({ step: 3, primaryReason: reason, freeText: freeText.trim() }),
               });
               setStep(4);
             }}
@@ -113,7 +114,7 @@ export function CancelTakeover({
                 body: JSON.stringify({
                   step: 4,
                   primaryReason: reason,
-                  freeText,
+                  freeText: freeText.trim(),
                   effectiveAfterNextDelivery: true,
                   // Fast-path: lets the backend skip the 33-page Seal
                   // pagination scan that caused the step 4 timeout
@@ -317,6 +318,12 @@ function Step3({
     { value: "other", en: "Other", es: "Otro" },
   ];
 
+  // Si eligen "Otro" el texto es OBLIGATORIO — necesitamos saber el motivo
+  // real, no un campo vacío que no aporta nada al análisis de cancelaciones.
+  // El resto de motivos avanzan solo con la selección.
+  const needsFreeText = reason === "other";
+  const canContinue = reason !== null && (!needsFreeText || freeText.trim().length > 0);
+
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
@@ -349,7 +356,8 @@ function Step3({
         <textarea
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
-          placeholder={t({ en: "Tell us more (optional)", es: "Cuéntanos más (opcional)" })}
+          placeholder={t({ en: "Tell us why", es: "Cuéntanos por qué" })}
+          aria-required
           className="mt-3 w-full rounded-sm border border-[color:var(--color-brisky-cream)]/20 bg-transparent p-3 text-sm placeholder:opacity-40"
           rows={3}
         />
@@ -361,7 +369,7 @@ function Step3({
         <button
           type="button"
           onClick={onContinue}
-          disabled={!reason}
+          disabled={!canContinue}
           className="rounded-sm bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
         >
           <T en="Continue" es="Continuar" />
