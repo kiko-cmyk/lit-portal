@@ -46,6 +46,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     topic,
   });
   if (dedup.error?.code === "23505") {
+    // KNOWN RESIDUAL (Juan's review): if a handler runs longer than Shopify's
+    // ~5s timeout, Shopify fires a retry while the original is still running.
+    // The retry hits this PK conflict and returns dedup:true (200), so Shopify
+    // stops retrying — then if the original later throws, delete-on-failure
+    // removes the reservation and the event is lost. We do NOT return 500 here
+    // on processed_at-null instead: under real concurrency that would reprocess
+    // in parallel and double-fire the non-idempotent confirmation_sent Klaviyo
+    // event. Documented alongside the "process dies between reservation and
+    // catch" residual; both are far rarer than the bug this PR fixes.
     return NextResponse.json({ ok: true, dedup: true });
   }
 
