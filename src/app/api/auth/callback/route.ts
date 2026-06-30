@@ -189,16 +189,23 @@ export async function GET(req: NextRequest) {
   // ─────── 3) Create our own session in Supabase ───────
   // The raw `sessionId` is sent to the FE (URL fragment, then
   // localStorage) and NEVER stored server-side. We persist only
-  // its SHA-256 hash (audit 2026-05-21 LOW). The `session_id`
-  // column is kept temporarily for rollback safety; it stores
-  // the raw value too but no code reads it post-migration.
+  // its SHA-256 hash (audit 2026-05-21 LOW). Both columns store
+  // the hash: `session_id_hash` is what the code reads, and the
+  // legacy `session_id` (PK, NOT NULL, no readers) also gets the
+  // hash so NO plaintext token is ever written at rest. (The
+  // column itself is redundant and pending drop — gated by a
+  // verified backup; see master plan 3.6.)
   const sessionId = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
   try {
     const sb = supabaseAdmin();
+    const sessionIdHash = hashSessionId(sessionId);
     const { error: insertErr } = await sb.from("auth_sessions").insert({
-      session_id: sessionId,
-      session_id_hash: hashSessionId(sessionId),
+      // Legacy PK column: store the HASH (not the raw token). It has no
+      // readers; writing the hash keeps the unique/NOT-NULL PK valid while
+      // ensuring no plaintext session token is persisted. See comment above.
+      session_id: sessionIdHash,
+      session_id_hash: sessionIdHash,
       customer_id: customerId,
       email: customerEmail,
       expires_at: expiresAt.toISOString(),

@@ -303,7 +303,7 @@ create index if not exists idx_webhook_log_topic on webhook_log(topic, received_
 -- middleware (`withCustomer`) tries App Proxy first, then this table.
 
 create table if not exists auth_sessions (
-  session_id     text primary key,           -- raw token, KEPT FOR ROLLBACK only; pending drop
+  session_id     text primary key,           -- legacy PK, now stores the HASH too (no readers); redundant, pending drop
   session_id_hash text not null unique,       -- SHA-256 of raw token; this is the column code reads
   customer_id    text not null,
   email          text,                        -- TODO 2026-05-22: review whether still needed at rest
