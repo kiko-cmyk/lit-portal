@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -9,6 +10,8 @@ import { resolveActiveSubFast } from "@/lib/sub-resolve";
 // Allowed while we're still before the cutoff window of the originally-skipped
 // date.
 export const POST = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "skip-undo", { limit: 10, windowMs: 60_000 });
+
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
