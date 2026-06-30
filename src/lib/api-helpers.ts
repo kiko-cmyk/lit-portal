@@ -7,6 +7,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { alertSlackError } from "./alert";
 import { hashSessionId } from "./session";
 import { AppProxyAuthError, parseAuthRequest, type AppProxyContext } from "./shopify-app-proxy";
 import { supabaseAdmin } from "./supabase";
@@ -63,9 +64,11 @@ class SessionInvalidError extends Error {
 
 export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
   return async (req: NextRequest, routeCtx?: RouteContext<P>): Promise<NextResponse> => {
+    // Hoisted so the catch block can attribute a 5xx alert to the customer.
+    let customerId: string | null = null;
     try {
       const { appProxy, bearerToken } = parseAuthRequest(req);
-      let customerId: string | null = appProxy.customerId;
+      customerId = appProxy.customerId;
       let authMode: "app_proxy" | "bearer" | null =
         appProxy.customerId ? "app_proxy" : null;
       // Track auth failures with bearer so we can return a precise error
@@ -148,6 +151,13 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
       const internalMsg = err instanceof Error ? err.message : "Unknown error";
       const stack = err instanceof Error ? err.stack : undefined;
       console.error("[api-error]", { path: req.nextUrl.pathname, msg: internalMsg, stack });
+      // Fire-and-forget Slack alert (no-op when no webhook env set; dedupes).
+      alertSlackError({
+        path: req.nextUrl.pathname,
+        code: "internal_error",
+        msg: internalMsg,
+        customerId: customerId ?? undefined,
+      });
       return NextResponse.json(
         isDev
           ? { error: "internal_error", message: internalMsg, stack: stack?.split("\n").slice(0, 8) }
