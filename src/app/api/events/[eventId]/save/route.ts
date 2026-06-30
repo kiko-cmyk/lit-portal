@@ -6,6 +6,10 @@ export const POST = withCustomer<{ saved: boolean }, { eventId: string }>(
   async (_req, ctx, routeCtx) => {
     const { eventId } = (await routeCtx?.params) ?? { eventId: "" };
     if (!eventId) throw new ApiHttpError(400, "missing_event_id", "");
+    // Validate shape before the DB: a malformed id otherwise reaches the FK
+    // constraint and surfaces as a generic 500. event ids are UUIDs.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(eventId)) throw new ApiHttpError(400, "invalid_event_id", "");
 
     const sb = supabaseAdmin();
     const { data: existing } = await sb
