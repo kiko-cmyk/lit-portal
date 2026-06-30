@@ -20,6 +20,23 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 export const runtime = "nodejs";
 
+// CORS for the Reporting-API (`report-to`) path: the browser uploads reports
+// CROSS-ORIGIN (document on litsalt.com → this endpoint on the Vercel origin),
+// which requires a preflight + Access-Control-Allow-Origin or Chrome/Firefox
+// silently drop the upload. (The legacy `report-uri` path, the one Safari/iOS
+// honors, does NOT need CORS.) Reports carry no credentials/cookies, so '*' is
+// safe and maximizes coverage.
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Max-Age": "86400",
+};
+
+export function OPTIONS(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
 const MAX_BODY = 16 * 1024; // drop oversized payloads (abuse / junk)
 const DEDUPE_MS = 60_000;
 const lastSeen = new Map<string, number>();
@@ -89,5 +106,5 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch {
     // Malformed report — ignore. A report endpoint must never error.
   }
-  return new NextResponse(null, { status: 204 });
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
