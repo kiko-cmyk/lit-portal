@@ -93,6 +93,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error(`[seal-webhook] handler failed for ${eventType}`, err);
+    // Release the reservation so Seal's retry RE-PROCESSES this event. Without
+    // this, the retry hit the (provider,event_id) PK, returned dedup:true, and
+    // the event (cache sync, re-anchor) was lost forever. Handlers are
+    // idempotent on replay: syncSubscription is an upsert and
+    // applyReanchorIfPending is re-entrant by design (converges + clears the
+    // intent). Only delete our own un-processed reservation.
+    await sb
+      .from("webhook_log")
+      .delete()
+      .eq("provider", "seal")
+      .eq("event_id", eventId)
+      .is("processed_at", null);
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 }

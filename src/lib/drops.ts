@@ -32,21 +32,39 @@ export const REWARD_PIPELINE: RewardId[] = ["bottle_500", "merch_1000", "event_2
 export const PUZZLE_TOTAL_PIECES = 16 as const;
 
 /**
- * Award Drops for an action. Idempotency must be enforced upstream
- * via the `metadata` field (e.g., `{ shipmentId }` for box_shipped).
+ * Award Drops for an action.
+ *
+ * Pass `dedupKey` for awards that can be replayed (e.g. a webhook retry):
+ * a second insert with the same key is a silent no-op instead of a duplicate
+ * award, so handlers are safe to re-run. Relies on the unique index
+ * `uq_drops_events_dedup_key`. Awards WITHOUT a dedupKey behave as before
+ * (plain insert) — their idempotency, if any, is enforced elsewhere (e.g.
+ * `referral_conversions.converted_order_id` gates the referral award).
  */
 export async function awardDrops(
   customerId: string,
   action: DropsAction,
   amount: number,
   metadata?: Record<string, unknown>,
+  dedupKey?: string,
 ): Promise<void> {
-  const { error } = await supabaseAdmin().from("drops_events").insert({
+  const row = {
     customer_id: customerId,
     action,
     amount,
     metadata: metadata ?? null,
-  });
+    dedup_key: dedupKey ?? null,
+  };
+  if (dedupKey) {
+    // Idempotent: ON CONFLICT (dedup_key) DO NOTHING. A replay returns no rows
+    // and no error, so the trigger doesn't re-fire and no duplicate is written.
+    const { error } = await supabaseAdmin()
+      .from("drops_events")
+      .upsert(row, { onConflict: "dedup_key", ignoreDuplicates: true });
+    if (error) throw new Error(`awardDrops failed: ${error.message}`);
+    return;
+  }
+  const { error } = await supabaseAdmin().from("drops_events").insert(row);
   if (error) throw new Error(`awardDrops failed: ${error.message}`);
 }
 

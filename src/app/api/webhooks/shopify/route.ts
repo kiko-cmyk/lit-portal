@@ -78,6 +78,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error(`[shopify-webhook] handler failed for ${topic}`, err);
+    // Release the reservation so Shopify's retry RE-PROCESSES this event.
+    // Without this, the retry hit the (provider,event_id) PK, returned
+    // dedup:true, and the event (drops, confirmation/tier emails) was lost
+    // forever. Handlers are idempotent on replay: box_shipped via
+    // drops_events.dedup_key, referral via referral_conversions unique,
+    // confirmation_sent fires only after the referral section completes, and
+    // tier_unlocked is gated by the pre-award snapshot. Only delete our own
+    // un-processed reservation.
+    await sb
+      .from("webhook_log")
+      .delete()
+      .eq("provider", "shopify")
+      .eq("event_id", eventId)
+      .is("processed_at", null);
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 }
@@ -215,10 +229,14 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   const totalBoxes = (f.line_items ?? []).reduce((s, li) => s + (li.quantity ?? 0), 0);
 
   for (let i = 0; i < totalBoxes; i++) {
-    await awardDrops(customerId, "box_shipped", DROPS_AMOUNTS.box_shipped ?? 100, {
-      fulfillmentId: f.id,
-      boxIndex: i,
-    });
+    await awardDrops(
+      customerId,
+      "box_shipped",
+      DROPS_AMOUNTS.box_shipped ?? 100,
+      { fulfillmentId: f.id, boxIndex: i },
+      // Idempotency key so a webhook retry re-awards exactly once.
+      `box_shipped:${f.id}:${i}`,
+    );
   }
 
   // Check if this push crossed the INNER CIRCLE tier threshold for the first time
