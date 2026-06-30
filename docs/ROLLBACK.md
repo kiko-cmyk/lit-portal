@@ -4,13 +4,13 @@ The portal is customer-facing and in production. This is the "something broke, g
 
 ## Before you ever need it (verify once)
 
-- [ ] **Vercel deployment retention.** Project → Deployments: confirm prior **production** deployments are still listed and show **"Promote to Production"**. If retention is short, your only rollback is `git revert` (slower). The project is `kiko-5145s-projects/lit-portal`; prod branch is `main`.
+- [ ] **Vercel deployment retention.** Project → Deployments: confirm prior **production** deployments are still listed and show **"Promote to Production"**. If retention is short, your only rollback is `git revert` (slower). The project is `kiko-5145s-projects/lit-portal`; **prod branch is `feat/master-spec-rewrite`** (NOT `main` — `main` is stale, ~33 commits behind prod; see master plan punto 1).
 - [ ] **Supabase backups / PITR.** Project → Database → Backups: confirm a backup schedule / PITR is enabled and note the retention window. This is the **only** DB rollback path (migrations are forward-only, no down-steps).
 - [ ] **Env backup.** `vercel env pull .env.local` periodically so the full config can be restored. The required vars are in `.env.example`.
 
 ## Deploy model (so rollback makes sense)
 
-- Push to `main` → Vercel auto-deploys to **production**.
+- Push to `feat/master-spec-rewrite` (the prod branch) → Vercel auto-deploys to **production**. ⚠️ `main` does NOT deploy — never `git revert` on `main` expecting it to roll back prod.
 - Any branch push → Vercel **preview** deploy. ⚠️ Previews use **production** Supabase/Seal/Shopify credentials — never run mutating tests against a preview thinking it is isolated.
 - Static assets load from the Vercel origin via `assetPrefix`; HTML + `/api/*` go through the Shopify App Proxy (`litsalt.com/apps/portal/*`).
 
@@ -22,7 +22,7 @@ The portal is customer-facing and in production. This is the "something broke, g
    curl -s "https://lit-portal-drab.vercel.app/api/health/ready?token=$HEALTH_READY_TOKEN" | jq
    SMOKE_API_BASE=https://lit-portal-drab.vercel.app/api HEALTH_READY_TOKEN=… npm run smoke
    ```
-3. If "Promote" is unavailable (retention) OR to make the rollback permanent on `main`:
+3. If "Promote" is unavailable (retention) OR to make the rollback permanent on the prod branch (`feat/master-spec-rewrite`):
    ```bash
    git revert <bad-merge-sha> -m 1   # -m 1 for a merge commit
    git push                          # Vercel auto-deploys the revert
