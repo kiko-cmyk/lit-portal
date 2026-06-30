@@ -31,7 +31,16 @@ const ASSET_PREFIX =
  * and Next's nonce support. Do that as a dedicated step. Until then this
  * policy is for OBSERVATION (it validates the external-origin allowlist:
  * Vercel assets, Fontshare, Shopify CDN), not for removing inline scripts.
+ *
+ * Reporting: violations are sent to /api/csp-report on the Vercel origin
+ * directly (not via the App Proxy), so they arrive even cross-origin. We send
+ * BOTH `report-uri` (legacy, but the only one Safari/iOS honors — most LIT
+ * customers are on iPhone) and `report-to` (modern Reporting-API, paired with
+ * the `Reporting-Endpoints` header below). Without this, Report-Only reports
+ * only reach each visitor's console and we'd be flying blind before enforcing.
  */
+const CSP_REPORT_URI = `${ASSET_PREFIX}/api/csp-report`;
+
 const csp = [
   `default-src 'self'`,
   `script-src 'self' 'unsafe-inline' ${ASSET_PREFIX}`,
@@ -42,6 +51,8 @@ const csp = [
   `frame-ancestors 'self' https://litsalt.com`,
   `base-uri 'self'`,
   `form-action 'self'`,
+  `report-uri ${CSP_REPORT_URI}`,
+  `report-to csp-endpoint`,
 ].join("; ");
 
 const securityHeaders = [
@@ -52,6 +63,8 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
   },
+  // Reporting-API group referenced by `report-to` above.
+  { key: "Reporting-Endpoints", value: `csp-endpoint="${CSP_REPORT_URI}"` },
   // Report-Only for now — see the comment above before enforcing.
   { key: "Content-Security-Policy-Report-Only", value: csp },
 ];
