@@ -93,18 +93,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error(`[seal-webhook] handler failed for ${eventType}`, err);
-    // Release the reservation so Seal's retry RE-PROCESSES this event. Without
-    // this, the retry hit the (provider,event_id) PK, returned dedup:true, and
-    // the event (cache sync, re-anchor) was lost forever. Handlers are
-    // idempotent on replay: syncSubscription is an upsert and
-    // applyReanchorIfPending is re-entrant by design (converges + clears the
-    // intent). Only delete our own un-processed reservation.
-    await sb
-      .from("webhook_log")
-      .delete()
-      .eq("provider", "seal")
-      .eq("event_id", eventId)
-      .is("processed_at", null);
+    // NOTE: deliberately NO delete-on-failure here (unlike the shopify webhook).
+    // applyReanchorIfPending calls seal.reanchorCadence — a real, NON-idempotent
+    // Seal mutation that shifts billing attempts. A forced webhook replay after
+    // a partial failure would re-apply the offset to already-moved attempts and
+    // OVER-SHIFT the customer's billing schedule (the convergence guard only
+    // inspects the first attempt, so it wouldn't catch it). And Seal events are
+    // self-healing without a replay: syncSubscription is a cache mirror the next
+    // event/dashboard poll refreshes, and the re-anchor intent is driven to
+    // completion by the BOUNDED cron drain (reanchor-drain, MAX_ATTEMPTS). So we
+    // let the reservation stand and return 500 (baseline behavior); the customer
+    // impact that motivated delete-on-failure (lost confirmation emails / box
+    // drops) lives on the shopify webhook, not here.
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 }
