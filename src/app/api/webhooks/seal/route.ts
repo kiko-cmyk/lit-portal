@@ -93,6 +93,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error(`[seal-webhook] handler failed for ${eventType}`, err);
+    // NOTE: deliberately NO delete-on-failure here (unlike the shopify webhook).
+    // applyReanchorIfPending calls seal.reanchorCadence — a real, NON-idempotent
+    // Seal mutation that shifts billing attempts. A forced webhook replay after
+    // a partial failure would re-apply the offset to already-moved attempts and
+    // OVER-SHIFT the customer's billing schedule (the convergence guard only
+    // inspects the first attempt, so it wouldn't catch it). And Seal events
+    // mostly self-heal without a replay: syncSubscription is a cache mirror the
+    // NEXT Seal event re-upserts, and the re-anchor intent is driven to
+    // completion by the BOUNDED cron drain (reanchor-drain, MAX_ATTEMPTS). So we
+    // let the reservation stand and return 500 (baseline behavior); the customer
+    // impact that motivated delete-on-failure (lost confirmation emails / box
+    // drops) lives on the shopify webhook, not here.
+    //
+    // KNOWN GAP (Juan's review): syncSubscription is the ONLY writer of the
+    // cached subscriptions.status. If a cancel/pause webhook is lost and no
+    // further Seal event arrives, status stays 'active' indefinitely (the
+    // dashboard is unaffected — it reads Seal live — but the monthly-streak
+    // cron reads this cache and could award a streak Drop to a no-longer-active
+    // sub). Low severity (monthly cron, small leak). Follow-up: have
+    // monthly-streak verify status against Seal live before awarding, or add a
+    // nightly status re-sync.
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 }

@@ -72,6 +72,13 @@ create table if not exists drops_events (
 create index if not exists idx_drops_events_customer on drops_events(customer_id, created_at desc);
 create index if not exists idx_drops_events_action on drops_events(action, created_at desc);
 
+-- Idempotency key for REPLAYABLE awards (e.g. box_shipped re-fired by a webhook
+-- retry). awardDrops() upserts ON CONFLICT (dedup_key) DO NOTHING when a key is
+-- given, so a replay is a no-op instead of a duplicate award. NULLs are allowed
+-- and distinct, so awards that don't opt in are never deduped.
+alter table drops_events add column if not exists dedup_key text;
+create unique index if not exists uq_drops_events_dedup_key on drops_events(dedup_key);
+
 create table if not exists drops_balances (
   customer_id      text primary key,
   balance          int not null default 0,

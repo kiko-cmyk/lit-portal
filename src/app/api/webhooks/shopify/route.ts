@@ -46,6 +46,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     topic,
   });
   if (dedup.error?.code === "23505") {
+    // KNOWN RESIDUAL (Juan's review): if a handler runs longer than Shopify's
+    // ~5s timeout, Shopify fires a retry while the original is still running.
+    // The retry hits this PK conflict and returns dedup:true (200), so Shopify
+    // stops retrying — then if the original later throws, delete-on-failure
+    // removes the reservation and the event is lost. We do NOT return 500 here
+    // on processed_at-null instead: under real concurrency that would reprocess
+    // in parallel and double-fire the non-idempotent confirmation_sent Klaviyo
+    // event. Documented alongside the "process dies between reservation and
+    // catch" residual; both are far rarer than the bug this PR fixes.
     return NextResponse.json({ ok: true, dedup: true });
   }
 
@@ -70,16 +79,45 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       default:
         console.warn(`[shopify-webhook] unhandled topic ${topic}`);
     }
+  } catch (err) {
+    console.error(`[shopify-webhook] handler failed for ${topic}`, err);
+    // Release the reservation so Shopify's retry RE-PROCESSES this event.
+    // Without this, the retry hit the (provider,event_id) PK, returned
+    // dedup:true, and the event (drops, confirmation/tier emails) was lost
+    // forever. Replaying a FAILED handler is safe: box_shipped is idempotent
+    // via drops_events.dedup_key; referral is gated by referral_conversions
+    // unique (a retry won't double-award — note the pre-existing under-award
+    // edge if the award throws after the conversion row commits); and
+    // confirmation_sent is the LAST side effect in handleOrdersPaid, so any
+    // throw happens before it and it fires exactly once across attempts;
+    // tier_unlocked is gated by the pre-award snapshot. Only delete our own
+    // un-processed reservation. NOTE: the processed_at mark is OUTSIDE this
+    // try on purpose (below) — a failure to MARK must not trigger a replay,
+    // because the side effects already committed.
+    await sb
+      .from("webhook_log")
+      .delete()
+      .eq("provider", "shopify")
+      .eq("event_id", eventId)
+      .is("processed_at", null);
+    return NextResponse.json({ error: "handler_failed" }, { status: 500 });
+  }
+
+  // Handler succeeded. Mark processed — BEST EFFORT. If this throws (transient
+  // network blip) we do NOT delete the reservation: the work already ran, so a
+  // replay would re-fire ungated side effects (e.g. confirmation_sent). Worst
+  // case the row keeps processed_at = null; a duplicate delivery still hits the
+  // PK and is skipped as a dedup, so no replay and no double email.
+  try {
     await sb
       .from("webhook_log")
       .update({ processed_at: new Date().toISOString() })
       .eq("provider", "shopify")
       .eq("event_id", eventId);
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error(`[shopify-webhook] handler failed for ${topic}`, err);
-    return NextResponse.json({ error: "handler_failed" }, { status: 500 });
+  } catch (markErr) {
+    console.warn(`[shopify-webhook] handler ran but processed_at mark failed for ${topic}`, markErr);
   }
+  return NextResponse.json({ ok: true });
 }
 
 function verifyShopifyHmac(rawBody: string, hmacHeader: string | null): boolean {
@@ -215,10 +253,14 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   const totalBoxes = (f.line_items ?? []).reduce((s, li) => s + (li.quantity ?? 0), 0);
 
   for (let i = 0; i < totalBoxes; i++) {
-    await awardDrops(customerId, "box_shipped", DROPS_AMOUNTS.box_shipped ?? 100, {
-      fulfillmentId: f.id,
-      boxIndex: i,
-    });
+    await awardDrops(
+      customerId,
+      "box_shipped",
+      DROPS_AMOUNTS.box_shipped ?? 100,
+      { fulfillmentId: f.id, boxIndex: i },
+      // Idempotency key so a webhook retry re-awards exactly once.
+      `box_shipped:${f.id}:${i}`,
+    );
   }
 
   // Check if this push crossed the INNER CIRCLE tier threshold for the first time
