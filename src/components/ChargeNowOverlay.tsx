@@ -28,6 +28,11 @@ export function ChargeNowOverlay({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // `locked` = a charge is already in flight for this subscription (Seal
+  // returned `charge_already_scheduled`). We disable the confirm button so the
+  // customer can't fire a duplicate attempt, which is what generated the
+  // repeated P0 alerts on /charge-now.
+  const [locked, setLocked] = useState(false);
   const [done, setDone] = useState<ChargeNowResponse | null>(null);
   const t = useLang();
 
@@ -49,17 +54,30 @@ export function ChargeNowOverlay({
       onCharged(res.newNextShipDate);
     } catch (e) {
       const code = (e as { code?: string }).code;
-      setError(
-        code === "cutoff_passed"
-          ? t({
-              en: "Your next order is already on its way.",
-              es: "Tu próximo pedido ya está en camino.",
-            })
-          : t({
-              en: "Couldn't process the payment. Check your payment method or try again later.",
-              es: "No se pudo procesar el pago. Revisa tu método de pago o inténtalo más tarde.",
-            }),
-      );
+      if (code === "charge_already_scheduled") {
+        // A charge is already being processed for this subscription. Lock the
+        // button and show a calm, truthful message so the customer waits
+        // instead of re-tapping (which is what fired the duplicate alerts).
+        setLocked(true);
+        setError(
+          t({
+            en: "We're already processing an order for you. Give it a few minutes. No need to try again.",
+            es: "Ya estamos procesando un pedido tuyo. Espera unos minutos; no hace falta que vuelvas a intentarlo.",
+          }),
+        );
+      } else {
+        setError(
+          code === "cutoff_passed"
+            ? t({
+                en: "Your next order is already on its way.",
+                es: "Tu próximo pedido ya está en camino.",
+              })
+            : t({
+                en: "Couldn't process the payment. Check your payment method or try again later.",
+                es: "No se pudo procesar el pago. Revisa tu método de pago o inténtalo más tarde.",
+              }),
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -121,14 +139,20 @@ export function ChargeNowOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">
+              <div
+                className={
+                  locked
+                    ? "mt-4 rounded-sm bg-amber-50 px-4 py-3 text-xs text-amber-800"
+                    : "mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700"
+                }
+              >
                 {error}
               </div>
             )}
 
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || locked}
               onClick={handleCharge}
               className="mt-7 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-50"
             >

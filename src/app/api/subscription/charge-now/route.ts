@@ -4,6 +4,7 @@ import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import {
   getNextBillingAttempt,
+  isChargeAlreadyScheduledError,
   normalizeFrequency,
   seal,
   type SealSubscription,
@@ -75,7 +76,26 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
   }
 
   // Charge now + reset the schedule so the cadence re-anchors on today.
-  await seal.chargeNow(sub.id, { resetSchedule: true });
+  try {
+    await seal.chargeNow(sub.id, { resetSchedule: true });
+  } catch (err) {
+    // Seal refuses a second charge while one is already queued ("…already has
+    // an attempt scheduled for processing. Try again in 15 minutes."). That's
+    // an expected, transient condition — a charge is already in flight for
+    // this subscription and re-charging would risk a double charge. Surface it
+    // as a typed 409 so the customer gets a calm "already processing" message
+    // instead of a scary 500, and so `withCustomer` returns it WITHOUT firing
+    // an `internal_error` P0 in #n8n-errors. Any other Seal failure (card
+    // declined, real 503 outage, etc.) still bubbles up as a genuine alert.
+    if (isChargeAlreadyScheduledError(err)) {
+      throw new ApiHttpError(
+        409,
+        "charge_already_scheduled",
+        "A charge for this subscription is already being processed. Try again in a few minutes.",
+      );
+    }
+    throw err;
+  }
 
   // Best-effort estimate of the new next ship date (today + one cycle) for
   // instant UI feedback. Seal regenerates billing_attempts asynchronously,

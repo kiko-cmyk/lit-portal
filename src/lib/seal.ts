@@ -736,6 +736,25 @@ export class SealApiError extends Error {
   }
 }
 
+/**
+ * Seal replies HTTP 503 `"Could not create charge. This subscription already
+ * has an attempt scheduled for processing. Try again in 15 minutes."` when a
+ * charge attempt is already queued for the subscription — e.g. the customer
+ * already tapped "adelantar pedido", or Seal has an imminent scheduled attempt.
+ *
+ * This is an EXPECTED, transient business condition, NOT an internal fault:
+ * Seal is correctly refusing a second charge that would double-bill the card.
+ * Callers should translate it to a clean 4xx (never a 500) so it doesn't page
+ * `#n8n-errors` and the customer sees a calm "already processing" message.
+ *
+ * Matched on the message text (not the 503 status) so a genuine Seal outage —
+ * a 503 with a different body — still surfaces as a real internal_error alert.
+ */
+export function isChargeAlreadyScheduledError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /already has an attempt scheduled/i.test(msg);
+}
+
 // ============ Mapping helpers — Seal raw → portal Subscription ============
 
 import type { Frequency, Subscription, SubscriptionStatus } from "./types";
