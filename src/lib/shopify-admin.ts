@@ -75,6 +75,52 @@ async function getAdminToken(): Promise<string> {
   return json.access_token;
 }
 
+// Transient-failure retry budget for idempotent reads. Shopify occasionally
+// returns a 5xx / INTERNAL_SERVER_ERROR / THROTTLED on an otherwise healthy
+// call — e.g. 2026-07-01 a lone INTERNAL_SERVER_ERROR on the payment-method
+// read surfaced to a customer as a 500 + a false P0 alert, and the identical
+// read succeeded seconds later. One or two retries with backoff absorb the
+// common blip; persistent failures still propagate as before. Mirrors the
+// Seal client's retry (src/lib/seal.ts).
+const SHOPIFY_MAX_RETRIES = 2;
+const SHOPIFY_BACKOFF_MS = 300;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Shopify GraphQL error codes (in `errors[].extensions.code`) safe to retry on
+// an idempotent read. Everything else (validation, ACCESS_DENIED, user-level
+// errors) is terminal — retrying would just waste time.
+const RETRYABLE_GQL_CODES = new Set(["INTERNAL_SERVER_ERROR", "THROTTLED"]);
+
+function hasTransientGraphqlError(errors: unknown): boolean {
+  if (!Array.isArray(errors)) return false;
+  return errors.some((e) => {
+    const code = (e as { extensions?: { code?: string } })?.extensions?.code;
+    return typeof code === "string" && RETRYABLE_GQL_CODES.has(code);
+  });
+}
+
+// True ONLY when the document is confidently a read (a `query` or an anonymous
+// `{ ... }` query). Fail-safe by design: GraphQL always POSTs, so the HTTP verb
+// can't tell reads from writes, and anything we can't positively classify as a
+// read (mutations, subscriptions, or a doc with an unexpected leading token) is
+// treated as NON-retryable. A retried mutation would double-send the card
+// update email (customerPaymentMethodSendUpdateEmail), burn a single-use update
+// URL, or double-apply a subscription-contract commit — so when in doubt we
+// never retry. Leading whitespace and `#` comment lines are stripped first so a
+// commented mutation can't slip through as a "read".
+function isRetryableReadDocument(doc: string): boolean {
+  const head = doc.replace(/^(?:\s+|#[^\n]*\n?)+/, "");
+  return /^(?:query\b|\{)/.test(head);
+}
+
+/** Errors we deliberately threw from graphql() — terminal, never retried. */
+class ShopifyAdminError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ShopifyAdminError";
+  }
+}
+
 class ShopifyAdminClient {
   private endpoint(): string {
     if (!SHOPIFY_STORE) throw new Error("SHOPIFY_STORE not set");
@@ -82,19 +128,51 @@ class ShopifyAdminClient {
   }
 
   async graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    // Retry transient Shopify failures ONLY on idempotent reads. GraphQL always
+    // POSTs, so we classify the document itself; mutations are never retried
+    // (see isRetryableReadDocument).
+    const readRetryable = isRetryableReadDocument(query);
     const token = await getAdminToken();
-    const res = await fetch(this.endpoint(), {
-      method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query, variables }),
-    });
-    if (!res.ok) throw new Error(`Shopify Admin ${res.status}: ${await res.text()}`);
-    const json = (await res.json()) as { data?: T; errors?: unknown };
-    if (json.errors) throw new Error(`Shopify Admin errors: ${JSON.stringify(json.errors)}`);
-    return json.data as T;
+
+    for (let attempt = 0; ; attempt++) {
+      const canRetry = readRetryable && attempt < SHOPIFY_MAX_RETRIES;
+      try {
+        const res = await fetch(this.endpoint(), {
+          method: "POST",
+          headers: {
+            "X-Shopify-Access-Token": token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+        if (!res.ok) {
+          if (canRetry && (res.status === 429 || res.status >= 500)) {
+            await sleep(SHOPIFY_BACKOFF_MS * (attempt + 1));
+            continue;
+          }
+          throw new ShopifyAdminError(`Shopify Admin ${res.status}: ${await res.text()}`);
+        }
+        const json = (await res.json()) as { data?: T; errors?: unknown };
+        if (json.errors) {
+          if (canRetry && hasTransientGraphqlError(json.errors)) {
+            await sleep(SHOPIFY_BACKOFF_MS * (attempt + 1));
+            continue;
+          }
+          throw new ShopifyAdminError(`Shopify Admin errors: ${JSON.stringify(json.errors)}`);
+        }
+        return json.data as T;
+      } catch (err) {
+        // fetch() itself rejected (network / DNS / connection reset). Retry
+        // idempotent reads. Never retry a ShopifyAdminError we already chose to
+        // throw above (terminal), nor a caller-driven AbortError.
+        const name = (err as { name?: string })?.name;
+        if (canRetry && !(err instanceof ShopifyAdminError) && name !== "AbortError") {
+          await sleep(SHOPIFY_BACKOFF_MS * (attempt + 1));
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   /**
