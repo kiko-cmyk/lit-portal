@@ -26,16 +26,25 @@ import { supabaseAdmin } from "@/lib/supabase";
  * unreachable (null/throw) we fall back to the cache and award, so a transient
  * Seal blip never denies a legitimate streak.
  *
- * Scale (Juan's review): that live check is one Seal round-trip per active sub
- * (~1300 today). Running them serially would blow the `maxDuration: 60` cap and
- * cut the cron off mid-list — head subs paid, tail subs unpaid until next month
- * (Vercel Cron doesn't retry within the month). So candidates are processed in
- * bounded-concurrency waves of POOL, the same pattern as
- * `seal.listAllSubscriptions`. ~1300 checks fit in ~30-40s under the cap. If the
- * book keeps growing, the next step is to paginate the cron across invocations
- * (the dedupKey makes overlapping invocations safe).
+ * Scale (Juan's review, round 2): that live check is one Seal round-trip per
+ * active sub (~1300 today). Serially that blows the `maxDuration: 60` cap and
+ * cuts the cron off mid-list — head subs paid, tail subs unpaid until next month
+ * (Vercel Cron doesn't retry within the month). So the checks run through a
+ * sliding pool of POOL workers that each pull the next candidate off a shared
+ * cursor. This beats fixed waves (`Promise.all` over slices): with waves every
+ * worker idles until its batch's slowest Seal call returns (head-of-line
+ * blocking), so a POOL=12 wave run is ~62s typical (the earlier "~30-40s" was
+ * best-case, not typical) and brushes the cap. The sliding pool has no per-batch
+ * barrier, so wall-clock tracks the average call (~41s typical at POOL=12), and
+ * `AbortSignal.timeout` bounds any single hung call so it can't stall its worker.
+ * If the book keeps growing, the next step is to paginate the cron across
+ * invocations (the dedupKey makes overlapping invocations safe).
  */
 const POOL = 12;
+// Cap a single Seal status check so one hung call can't stall its pool worker.
+// On timeout getSubscriptionById throws AbortError → caught below → we fall back
+// to the cache and award (the same fail-open posture as any other Seal failure).
+const SEAL_CALL_TIMEOUT_MS = 6000;
 
 type Outcome = "awarded" | "skipped" | "staleSkipped" | "errored";
 
@@ -82,7 +91,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // transient Seal failure never denies a legitimate streak.
     if (sub.seal_subscription_id) {
       try {
-        const live = await seal.getSubscriptionById(Number(sub.seal_subscription_id));
+        const live = await seal.getSubscriptionById(
+          Number(sub.seal_subscription_id),
+          AbortSignal.timeout(SEAL_CALL_TIMEOUT_MS),
+        );
         if (live && mapStatus(live) !== "active") return "staleSkipped";
       } catch (err) {
         console.warn(
@@ -108,12 +120,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   };
 
   const tally: Record<Outcome, number> = { awarded: 0, skipped: 0, staleSkipped: 0, errored: 0 };
-  for (let start = 0; start < targets.length; start += POOL) {
-    const wave = targets.slice(start, start + POOL).map(processOne);
-    for (const outcome of await Promise.all(wave)) {
+
+  // Sliding pool: POOL workers each pull the next candidate off a shared cursor
+  // and keep going until the list drains — no per-batch barrier, so no worker
+  // idles behind another's slow Seal call. `cursor++` needs no lock: JS is
+  // single-threaded and there's no await between reading and incrementing it, so
+  // no two workers ever grab the same index (same for `tally[...]++`, which runs
+  // synchronously right after each await resolves).
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < targets.length) {
+      const outcome = await processOne(targets[cursor++]);
       tally[outcome]++;
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(POOL, targets.length) }, worker));
 
   return NextResponse.json({
     ok: true,
