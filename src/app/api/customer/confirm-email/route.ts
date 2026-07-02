@@ -212,10 +212,15 @@ export async function POST(req: NextRequest) {
         : "No pudimos aplicar el cambio de email. Inténtalo de nuevo desde tu cuenta o contacta con soporte.",
     );
   }
+  // Single-fire the consume: a rapid double-submit (double-click / button+Enter)
+  // could reach here twice before either marks the row. updateCustomer above is
+  // idempotent (same target email) so a duplicate is harmless, but gate the
+  // consume on consumed_at IS NULL so we never double-write it.
   await supabaseAdmin()
     .from("email_change_requests")
     .update({ consumed_at: new Date().toISOString() })
-    .eq("token", look.row.token);
+    .eq("token", look.row.token)
+    .is("consumed_at", null);
 
   // Back to the portal (in the customer's language) with the success flag the
   // account page renders as a toast. 303 so the browser GETs the page after the
