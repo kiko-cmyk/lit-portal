@@ -1,3 +1,4 @@
+import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError } from "@/lib/api-helpers";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -46,10 +47,19 @@ export async function enforceRateLimit(
     p_window_ms: cfg.windowMs,
   });
   if (error) {
-    // Don't fail the request if the limiter itself glitches — log
-    // and allow. Better to over-serve than to lock customers out of
-    // their portal because of a transient DB blip.
+    // The limiter is an abuse THROTTLE, not the auth boundary (that's the
+    // OIDC/JWKS session check). So we FAIL OPEN on a transient RPC/DB blip:
+    // better to briefly under-throttle than to lock legitimate customers out
+    // of their portal over a hiccup — this matters most on login, where
+    // fail-closed would lock people out on a DB blip. But no longer SILENTLY:
+    // alert so a persistent limiter outage is visible instead of a blind spot.
+    // (Audit 2026-06-30 / Kiko.)
     console.warn("[rate-limit] rpc error, allowing:", error);
+    alertSlackError({
+      path: `/rate-limit/${endpoint}`,
+      code: "rate_limit_rpc_error",
+      msg: `limiter failed open · subject=${subject} · ${error.message ?? String(error)}`,
+    });
     return;
   }
   const row = Array.isArray(data) ? data[0] : data;
