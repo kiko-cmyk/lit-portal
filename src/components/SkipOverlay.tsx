@@ -170,7 +170,7 @@ export function SkipOverlay({
   })();
 
   const handleContinueFromReason = () => {
-    if (!reason) return;
+    if (!reason || (reason === "other" && !freeText.trim())) return;
     // Within cutoff the spacing offer can't apply — go straight to confirm.
     setStep(offerAvailable ? "offer" : "confirm");
   };
@@ -334,7 +334,7 @@ export function SkipOverlay({
               <textarea
                 value={freeText}
                 onChange={(e) => setFreeText(e.target.value)}
-                placeholder={t({ en: "Tell us more (optional)", es: "Cuéntanos más (opcional)" })}
+                placeholder={t({ en: "Tell us what happened", es: "Cuéntanos qué ha pasado" })}
                 rows={2}
                 className="mt-3 w-full rounded-sm border border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-sharp-white)] p-3 text-sm placeholder:opacity-40"
               />
@@ -342,7 +342,7 @@ export function SkipOverlay({
 
             <button
               type="button"
-              disabled={!reason}
+              disabled={!reason || (reason === "other" && !freeText.trim())}
               onClick={handleContinueFromReason}
               className="mt-7 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-40"
             >

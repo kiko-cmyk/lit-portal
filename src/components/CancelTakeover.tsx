@@ -88,7 +88,7 @@ export function CancelTakeover({
   // Persist the reason (cancel API step 3), then route to the tailored solution
   // or straight to the 15%.
   const handleReasonContinue = async () => {
-    if (!reason) return;
+    if (!reason || (reason === "other" && !freeText.trim())) return;
     await api("/api/subscription/cancel", {
       method: "POST",
       body: JSON.stringify({ step: 3, primaryReason: reason, freeText }),
@@ -271,7 +271,7 @@ function Motivo({
         <textarea
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
-          placeholder={t({ en: "Tell us more (optional)", es: "Cuéntanos más (opcional)" })}
+          placeholder={t({ en: "Tell us what happened", es: "Cuéntanos qué ha pasado" })}
           className="mt-3 w-full rounded-sm border border-[color:var(--color-brisky-cream)]/20 bg-transparent p-3 text-sm placeholder:opacity-40"
           rows={3}
         />
@@ -283,7 +283,7 @@ function Motivo({
         <button
           type="button"
           onClick={onContinue}
-          disabled={!reason}
+          disabled={!reason || (reason === "other" && !freeText.trim())}
           className="rounded-sm bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
         >
           <T en="Continue" es="Continuar" />
