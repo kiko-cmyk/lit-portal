@@ -16,6 +16,18 @@
 -- `create or replace` with NO ordering dependency on the app code — safe to run
 -- against Supabase any time (before or after deploy).
 --
+-- Also fixes an int4 OVERFLOW surfaced 2026-07-03 by the new fail-open alert:
+-- v_age_ms was declared `int`, but v_age_ms = floor(epoch_seconds * 1000)
+-- overflows int4 (max 2_147_483_647 ms ≈ 24.8 days) once a bucket goes that
+-- long without resetting. Worse, the overflow throws on the assignment BEFORE
+-- the age >= window reset branch runs, so such a bucket gets stuck erroring on
+-- every hit (RPC error → fail-open → alert per retry). Declaring v_age_ms
+-- `bigint` removes the overflow AND self-heals stuck buckets: their next hit
+-- computes a huge age, takes the reset branch, and starts a fresh window — no
+-- manual cleanup. p_window_ms stays int (login windows are minutes, nowhere
+-- near the limit), so the signature is unchanged and this is still a clean
+-- create-or-replace with no ordering dependency.
+--
 -- Idempotent + additive: only replaces the function; no data change.
 
 create or replace function rate_limit_check(
@@ -27,7 +39,7 @@ create or replace function rate_limit_check(
 declare
   v_now timestamptz := now();
   v_row rate_buckets%rowtype;
-  v_age_ms int;
+  v_age_ms bigint; -- bigint, NOT int: age in ms overflows int4 after ~24.8 days
 begin
   -- Race-safe bucket creation: a fresh bucket is seeded at count = 0. A
   -- concurrent first call is absorbed by ON CONFLICT DO NOTHING (no error, no
