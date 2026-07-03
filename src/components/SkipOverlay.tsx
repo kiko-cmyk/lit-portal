@@ -40,7 +40,8 @@ import type {
 type Step = "reason" | "offer" | "confirm" | "done-skip" | "done-adjust";
 
 const REASONS: { value: SkipReason; en: string; es: string }[] = [
-  { value: "too_much_product", en: "I have too much product", es: "Tengo demasiado producto" },
+  { value: "not_using_enough", en: "I'm not using it enough", es: "No lo uso lo suficiente" },
+  { value: "taking_a_break", en: "Taking a break", es: "Me tomo un descanso" },
   { value: "traveling_or_break", en: "I'm away for a while", es: "Me voy de viaje un tiempo" },
   { value: "budget", en: "It's too expensive", es: "Me parece caro" },
   { value: "other", en: "Other", es: "Otro" },
@@ -144,6 +145,11 @@ export function SkipOverlay({
         return {
           en: "Still going through it? Let's stretch the gap between boxes.",
           es: "¿Aún te queda? Estiremos el tiempo entre cajas.",
+        };
+      case "taking_a_break":
+        return {
+          en: "Taking a break? Space it out instead of skipping just one.",
+          es: "¿Un descanso? Espácialo en vez de saltar solo uno.",
         };
       case "traveling_or_break":
         return {

@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { api, clearSessionToken } from "@/lib/api-client";
+import { addCycle, subCycle } from "@/lib/cadence";
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
 import type {
   CancelStep1Response,
   CancelStep4Response,
   CancellationReason,
   CustomerProfile,
+  Frequency,
   PricingResponse,
   Subscription,
 } from "@/lib/types";
@@ -18,9 +21,10 @@ import type {
  *
  *   logro     → "what you've built" (stats)
  *   motivo    → reason FIRST, so the offer can be tailored
- *   solucion  → tailored, no-discount solution per reason (pivots to the plan /
- *               skip overlay). "Me parece caro" → fewer boxes; "No lo uso" →
- *               space out; "Me tomo un descanso" → skip the next.
+ *   solucion  → tailored, no-discount solution INLINE per reason (same indigo
+ *               takeover): "Me parece caro" → fewer boxes (real price);
+ *               "No lo uso" → space out (real next-order date); "Me tomo un
+ *               descanso" → skip the next. Applied via /plan or /skip directly.
  *   descuento → 15% off the NEXT charge, only if they reject the solution (or
  *               directly for "No me gusta" / "Otro"). Last resort. Applied via
  *               /api/subscription/retention-discount (next-charge-only).
@@ -29,6 +33,7 @@ import type {
  * "No me gusta" / "Otro" have no plan fix, so they skip `solucion` → `descuento`.
  */
 type Step = "logro" | "motivo" | "solucion" | "descuento" | "done-stayed" | "confirmar" | "done";
+type StayMsg = { en: string; es: string };
 
 const REASONS: { value: CancellationReason; en: string; es: string }[] = [
   { value: "not_using_enough", en: "I'm not using it enough", es: "No lo uso lo suficiente" },
@@ -52,15 +57,13 @@ function solutionFor(reason: CancellationReason | null): "plan" | "skip" | null 
 }
 
 export function CancelTakeover({
-  customer: _customer,
   subscription,
   onClose,
-  onPivotToSkip,
-  onPivotToPlan,
 }: {
   customer: CustomerProfile;
   subscription: Subscription | null;
   onClose: () => void;
+  /** Legacy pivot callbacks (solutions are now inline; kept for call-site compat). */
   onPivotToSkip?: () => void;
   onPivotToPlan?: () => void;
 }) {
@@ -69,6 +72,7 @@ export function CancelTakeover({
   const [reason, setReason] = useState<CancellationReason | null>(null);
   const [freeText, setFreeText] = useState("");
   const [pricing, setPricing] = useState<PricingResponse | null>(null);
+  const [stayedMsg, setStayedMsg] = useState<StayMsg | null>(null);
   const [done, setDone] = useState<CancelStep4Response | null>(null);
 
   useEffect(() => {
@@ -121,10 +125,10 @@ export function CancelTakeover({
           <Solucion
             reason={reason}
             subscription={subscription}
-            onTakeSolution={() => {
-              onClose();
-              if (solutionFor(reason) === "skip") onPivotToSkip?.();
-              else onPivotToPlan?.();
+            pricing={pricing}
+            onStayed={() => {
+              setStayedMsg({ en: "Your plan is updated.", es: "Tu plan está actualizado." });
+              setStep("done-stayed");
             }}
             onDecline={() => setStep("descuento")}
             onBack={() => setStep("motivo")}
@@ -135,11 +139,17 @@ export function CancelTakeover({
             subscription={subscription}
             pricing={pricing}
             reason={reason}
-            onKept={() => setStep("done-stayed")}
+            onKept={() => {
+              setStayedMsg({
+                en: "Your 15% is set for your next order.",
+                es: "Tu 15% ya está listo para tu próximo pedido.",
+              });
+              setStep("done-stayed");
+            }}
             onDecline={() => setStep("confirmar")}
           />
         )}
-        {step === "done-stayed" && <DoneStayed onClose={onClose} />}
+        {step === "done-stayed" && <DoneStayed msg={stayedMsg} onClose={onClose} />}
         {step === "confirmar" && (
           <Confirmar
             subscription={subscription}
@@ -283,87 +293,304 @@ function Motivo({
   );
 }
 
+/**
+ * Inline tailored solution (indigo). Reuses the plan/skip engines directly so
+ * the customer never leaves the cancel flow (matches the approved deck).
+ */
 function Solucion({
   reason,
   subscription,
-  onTakeSolution,
+  pricing,
+  onStayed,
   onDecline,
   onBack,
 }: {
   reason: CancellationReason | null;
   subscription: Subscription | null;
-  onTakeSolution: () => void;
+  pricing: PricingResponse | null;
+  onStayed: () => void;
   onDecline: () => void;
   onBack: () => void;
 }) {
   const t = useLang();
-  const kind = solutionFor(reason);
-  const boxes = subscription?.boxCount ?? 2;
+  const lang = useLangValue();
+  const locale = lang === "es" ? "es-ES" : "en-US";
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const copy =
-    reason === "too_expensive"
-      ? {
-          h: { en: "Pay less, don't leave", es: "Paga menos, no te vayas" },
-          p: {
-            en: "Fewer boxes per shipment means a lower charge, without losing your bulk discount.",
-            es: "Menos cajas por envío es un cargo más bajo, sin perder tu descuento por cantidad.",
-          },
-          cta: { en: "Change my boxes", es: "Cambiar mis cajas" },
-        }
-      : reason === "taking_a_break"
-        ? {
-            h: { en: "Just take a breather", es: "Solo toma un respiro" },
-            p: {
-              en: "Skip your next order instead of cancelling. You resume whenever you want.",
-              es: "Salta tu próximo pedido en vez de cancelar. Retomas cuando quieras.",
-            },
-            cta: { en: "Skip the next one", es: "Saltar la próxima" },
-          }
-        : {
-            h: { en: "Space it out instead", es: "Espácialo en vez de dejarlo" },
-            p: {
-              en: "Getting more than you use? Receive it less often. No need to cancel.",
-              es: "¿Recibes más de lo que usas? Recíbelo más espaciado. No hace falta cancelar.",
-            },
-            cta: { en: "Space out my deliveries", es: "Espaciar mis entregas" },
-          };
+  const freq = subscription?.frequency ?? "1mo";
+  const boxCount = subscription?.boxCount ?? 1;
+  const currentShip = subscription?.nextShipDate ? new Date(subscription.nextShipDate) : null;
+  const fmt = (d: Date) => d.toLocaleDateString(locale, { day: "numeric", month: "long" });
 
-  return (
+  // Espaciar (No lo uso): offer a longer frequency; next order moves to
+  // (last charge + new interval). Preview via cadence.
+  const longer = longerFrequencies(freq);
+  const [offerFreq, setOfferFreq] = useState<Frequency>(longer[0] ?? freq);
+  const anchor = currentShip ? subCycle(currentShip, freq) : null;
+  const spacedShip = anchor ? addCycle(anchor, offerFreq) : null;
+
+  // Menos cajas (Me parece caro): default to 1 box (biggest saving).
+  const [offerBoxes, setOfferBoxes] = useState<number>(1);
+  const curPrice = pricing ? pricing.perBox[boxCount - 1] ?? null : null;
+  const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
+
+  // Saltar (Me tomo un descanso): next order moves forward one cycle.
+  const skipShip = currentShip ? addCycle(currentShip, freq) : null;
+
+  const planErr = (e: unknown): string => {
+    const code = (e as { code?: string; status?: number }).code;
+    const status = (e as { status?: number }).status;
+    if (code === "cutoff_passed")
+      return t({ en: "Too late, your next box ships within 24h.", es: "Demasiado tarde, tu próxima caja se envía en 24h." });
+    if (code === "gateway_timeout" || status === 504)
+      return t({ en: "The service is taking longer than usual. Try again in a moment.", es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento." });
+    return t({ en: "Couldn't update your plan. Try again or contact us.", es: "No se pudo cambiar el plan. Inténtalo de nuevo o escríbenos." });
+  };
+
+  const applyPlan = async (body: Record<string, unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/api/subscription/plan", {
+        method: "PATCH",
+        body: JSON.stringify({
+          sealSubscriptionId: subscription?.sealSubscriptionId,
+          mainItemId: subscription?.mainItemId,
+          currentVariantId: subscription?.currentVariantId,
+          currentFrequency: freq,
+          ...body,
+        }),
+      });
+      onStayed();
+    } catch (e) {
+      setError(planErr(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSkip = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/api/subscription/skip", {
+        method: "POST",
+        body: JSON.stringify({ sealSubscriptionId: subscription?.sealSubscriptionId, reason: "taking_a_break" }),
+      });
+      onStayed();
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      setError(
+        code === "already_charged" || code === "no_pending_attempt"
+          ? t({ en: "This order is already being processed and can't be skipped.", es: "Este pedido ya se está procesando y no se puede saltar." })
+          : t({ en: "Couldn't skip. Try again or contact us.", es: "No se pudo saltar. Inténtalo de nuevo o escríbenos." }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const errorBox = error && (
+    <div className="mt-4 rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+      {error}
+    </div>
+  );
+  const eyebrow = (
+    <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+      <T en="Before you cancel" es="Antes de cancelar" />
+    </div>
+  );
+  const secondary = (
     <>
-      <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
-        <T en="Before you cancel" es="Antes de cancelar" />
-      </div>
-      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">{t(copy.h)}</h1>
-      <p className="mt-5 max-w-md text-sm opacity-75">{t(copy.p)}</p>
-
-      {kind === "plan" && reason === "too_expensive" && (
-        <p className="mt-4 text-xs uppercase tracking-[0.15em] opacity-60">
-          <T en="Now" es="Ahora" />: {boxes} {boxes === 1 ? t({ en: "box", es: "caja" }) : t({ en: "boxes", es: "cajas" })} /{" "}
-          <T en="shipment" es="envío" />
-        </p>
-      )}
-
-      <div className="mt-9 space-y-3">
-        <button
-          type="button"
-          onClick={onTakeSolution}
-          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
-        >
-          {t(copy.cta)}
-        </button>
-        <button
-          type="button"
-          onClick={onDecline}
-          className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
-        >
-          <T en="No, keep cancelling" es="No, seguir con la cancelación" />
-        </button>
-      </div>
-
-      <div className="mt-8">
+      <button
+        type="button"
+        onClick={onDecline}
+        className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
+      >
+        <T en="Keep cancelling" es="Seguir con la cancelación" />
+      </button>
+      <div className="mt-6">
         <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-50">
           ← <T en="Back" es="Atrás" />
         </button>
+      </div>
+    </>
+  );
+
+  // ── Me parece caro → menos cajas ──
+  if (reason === "too_expensive") {
+    return (
+      <>
+        {eyebrow}
+        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
+          <T en="What if you get fewer boxes?" es="¿Y si recibes menos cajas?" />
+        </h1>
+        <p className="mt-5 max-w-md text-sm opacity-75">
+          <T
+            en="Fewer boxes means a lower charge per shipment, without losing your bulk discount."
+            es="Con menos cajas pagas menos por envío, sin perder tu descuento por cantidad."
+          />
+        </p>
+        <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
+          <T en="Boxes per shipment" es="Cajas por envío" />
+        </div>
+        <div className="mt-2 grid grid-cols-6 gap-2">
+          {BOX_OPTIONS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setOfferBoxes(n)}
+              className={`rounded-sm py-3 text-sm font-black ${
+                offerBoxes === n
+                  ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
+                  : "bg-[color:var(--color-darker-indigo)] opacity-60"
+              }`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+        {newPrice !== null && (
+          <div className="mt-4 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+              <T en="New charge per shipment" es="Nuevo importe por envío" />
+            </div>
+            <div className="mt-1 flex items-baseline gap-3">
+              <span className="font-display text-4xl font-black text-[color:var(--color-bold-yellow)]">
+                €{newPrice.toFixed(2)}
+              </span>
+              {curPrice !== null && curPrice !== newPrice && (
+                <span className="text-sm line-through opacity-50">€{curPrice.toFixed(2)}</span>
+              )}
+            </div>
+          </div>
+        )}
+        {errorBox}
+        <div className="mt-8 space-y-3">
+          <button
+            type="button"
+            disabled={busy || offerBoxes === boxCount}
+            onClick={() => applyPlan({ boxCount: offerBoxes, frequency: freq })}
+            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+          >
+            {busy ? (
+              <T en="Saving…" es="Guardando…" />
+            ) : (
+              <T en={`Change to ${offerBoxes} ${offerBoxes === 1 ? "box" : "boxes"}`} es={`Cambiar a ${offerBoxes} ${offerBoxes === 1 ? "caja" : "cajas"}`} />
+            )}
+          </button>
+          {secondary}
+        </div>
+      </>
+    );
+  }
+
+  // ── Me tomo un descanso → saltar la próxima ──
+  if (reason === "taking_a_break") {
+    return (
+      <>
+        {eyebrow}
+        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
+          <T en="What if you just skip the next one?" es="¿Y si solo te saltas la próxima?" />
+        </h1>
+        <p className="mt-5 max-w-md text-sm opacity-75">
+          <T
+            en="A breather without cancelling. You resume whenever you want."
+            es="Un respiro sin darte de baja. Retomas cuando quieras."
+          />
+        </p>
+        {skipShip && currentShip && (
+          <div className="mt-6 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+              <T en="Your next box would ship on" es="Tu próxima caja saldría el" />
+            </div>
+            <div className="mt-1 font-display text-xl font-black uppercase">{fmt(skipShip)}</div>
+            <div className="mt-1 text-[11px] uppercase tracking-[0.12em] opacity-45 line-through">
+              {fmt(currentShip)}
+            </div>
+          </div>
+        )}
+        {errorBox}
+        <div className="mt-8 space-y-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={doSkip}
+            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+          >
+            {busy ? <T en="Skipping…" es="Saltando…" /> : <T en="Skip the next one" es="Saltar la próxima" />}
+          </button>
+          {secondary}
+        </div>
+      </>
+    );
+  }
+
+  // ── No lo uso lo suficiente (default plan) → espaciar la frecuencia ──
+  return (
+    <>
+      {eyebrow}
+      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
+        <T en="What if you space it out?" es="¿Y si lo espacias en vez de dejarlo?" />
+      </h1>
+      <p className="mt-5 max-w-md text-sm opacity-75">
+        <T
+          en="Getting more than you use? Receive it less often. No need to cancel."
+          es="¿Recibes más de lo que usas? Recíbelo más espaciado. No hace falta cancelar."
+        />
+      </p>
+      {longer.length > 0 && (
+        <div className="mt-6">
+          <div className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
+            <T en="Receive it every" es="Recíbelo cada" />
+          </div>
+          <select
+            value={offerFreq}
+            onChange={(e) => setOfferFreq(e.target.value as Frequency)}
+            className="mt-2 w-full rounded-sm bg-[color:var(--color-darker-indigo)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em] text-[color:var(--color-brisky-cream)]"
+          >
+            {longer.map((f) => (
+              <option key={f} value={f}>
+                {t({
+                  en: FREQUENCIES.find((x) => x.value === f)?.en ?? f,
+                  es: FREQUENCIES.find((x) => x.value === f)?.es ?? f,
+                })}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {spacedShip && currentShip && (
+        <div className="mt-4 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+          <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+            <T en="Your next order would move to" es="Tu próximo pedido pasaría al" />
+          </div>
+          <div className="mt-1 font-display text-xl font-black uppercase">{fmt(spacedShip)}</div>
+          <div className="mt-1 text-[11px] uppercase tracking-[0.12em] opacity-45 line-through">
+            {fmt(currentShip)}
+          </div>
+        </div>
+      )}
+      {curPrice !== null && (
+        <p className="mt-3 text-[11px] opacity-60 leading-relaxed">
+          <T
+            en={`You keep paying €${curPrice.toFixed(2)} per shipment, just fewer times a year.`}
+            es={`Sigues pagando €${curPrice.toFixed(2)} por envío, solo que menos veces al año.`}
+          />
+        </p>
+      )}
+      {errorBox}
+      <div className="mt-8 space-y-3">
+        <button
+          type="button"
+          disabled={busy || longer.length === 0}
+          onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "natural" })}
+          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+        >
+          {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Space out my deliveries" es="Espaciar mis entregas" />}
+        </button>
+        {secondary}
       </div>
     </>
   );
@@ -401,7 +628,6 @@ function Descuento({
       onKept();
     } catch (e) {
       const code = (e as { code?: string }).code;
-      // Not eligible (already used / not first cancel) → let them proceed to cancel.
       if (code === "already_used" || code === "not_first_cancel") {
         onDecline();
         return;
@@ -583,17 +809,16 @@ function Confirmar({
   );
 }
 
-function DoneStayed({ onClose }: { onClose: () => void }) {
+function DoneStayed({ msg, onClose }: { msg: StayMsg | null; onClose: () => void }) {
+  const t = useLang();
   return (
     <>
       <h1 className="font-display text-5xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-6xl">
         <T en="Great, you're staying" es="Genial, te quedas" />
       </h1>
       <p className="mt-8 text-sm opacity-80">
-        <T
-          en="Your 15% is set for your next order. See you soon."
-          es="Tu 15% ya está listo para tu próximo pedido. Nos vemos pronto."
-        />
+        {msg ? `${t(msg)} ` : ""}
+        <T en="See you soon." es="Nos vemos pronto." />
       </p>
       <button
         type="button"

@@ -36,6 +36,7 @@ export type CancellationReason =
 export type SkipReason =
   | "too_much_product"
   | "not_using_enough"
+  | "taking_a_break"
   | "traveling_or_break"
   | "budget"
   | "other";
