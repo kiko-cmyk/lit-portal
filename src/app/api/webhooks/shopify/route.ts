@@ -148,11 +148,13 @@ interface ShopifyOrderPayload {
 }
 
 interface ShopifyFulfillmentPayload {
-  fulfillment?: {
-    id: number;
-    order_id: number;
-    line_items?: Array<{ quantity: number; variant_id?: number }>;
-  };
+  // Shopify sends the fulfillment fields at the ROOT of the fulfillments/create
+  // body (same as orders/paid), NOT nested under a `.fulfillment` key. Reading
+  // `payload.fulfillment` here was always undefined, so the handler returned
+  // early and box_shipped Drops were never awarded.
+  id?: number;
+  order_id?: number;
+  line_items?: Array<{ quantity: number; variant_id?: number }>;
 }
 
 async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
@@ -222,8 +224,11 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
 }
 
 async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Promise<void> {
-  const f = payload.fulfillment;
-  if (!f) return;
+  // Fulfillment fields live at the payload root (see ShopifyFulfillmentPayload).
+  // Reading payload.fulfillment was always undefined → box_shipped Drops were
+  // never awarded (prod: 4,633 fulfillments/create processed, 0 box_shipped).
+  const f = payload;
+  if (!f.id || !f.order_id) return;
 
   // Look up the customer for this order
   const order = await shopifyAdmin
