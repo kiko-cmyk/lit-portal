@@ -255,7 +255,7 @@ create table if not exists cancellations (
   customer_id                 text not null,
   status                      text not null default 'pending' check (status in ('pending','committing','confirmed')),
   primary_reason              text check (primary_reason in (
-                                  'too_expensive','too_much_product','not_using_enough','taking_a_break','other'
+                                  'too_expensive','too_much_product','not_using_enough','taking_a_break','dont_like','other'
                                 )),
   free_text                   text,
   step_completed              int not null default 1 check (step_completed between 1 and 4),

@@ -56,12 +56,15 @@ async function trackEventWithRetry(
 // in schema.sql. Validated at runtime because `CancellationReason` is a
 // compile-time type only: a client can POST anything, and an out-of-set value
 // would otherwise reach the insert and blow the CHECK as a 500 instead of a
-// clean 400.
+// clean 400. Must stay in sync with BOTH the DB CHECK and the reasons the UI
+// offers (src/components/CancelTakeover.tsx): `dont_like` ("No me gusta") was in
+// the UI but missing here and in the CHECK, so choosing it made cancel fail.
 const CANCELLATION_REASONS = new Set<string>([
   "too_expensive",
   "too_much_product",
   "not_using_enough",
   "taking_a_break",
+  "dont_like",
   "other",
 ]);
 
