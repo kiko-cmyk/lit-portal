@@ -52,6 +52,19 @@ async function trackEventWithRetry(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+// Valid cancellation reasons — mirrors the `cancellations.primary_reason` CHECK
+// in schema.sql. Validated at runtime because `CancellationReason` is a
+// compile-time type only: a client can POST anything, and an out-of-set value
+// would otherwise reach the insert and blow the CHECK as a 500 instead of a
+// clean 400.
+const CANCELLATION_REASONS = new Set<string>([
+  "too_expensive",
+  "too_much_product",
+  "not_using_enough",
+  "taking_a_break",
+  "other",
+]);
+
 /**
  * POST /apps/portal/api/subscription/cancel
  *
@@ -70,6 +83,14 @@ export const POST = withCustomer(async (req, ctx) => {
   const body = (await req.json().catch(() => ({}))) as CancelBody;
   if (![1, 2, 3, 4].includes(body.step)) {
     throw new ApiHttpError(400, "invalid_step", "step must be 1..4");
+  }
+
+  // Validate the reason value up front (every insert path uses it). Without this
+  // a bogus primaryReason reaches the cancellations CHECK and surfaces as a 500;
+  // reject it here as a clean 400. Absent is still allowed (step 3 enforces its
+  // own presence check; step 4 inserts null).
+  if (body.primaryReason !== undefined && !CANCELLATION_REASONS.has(body.primaryReason)) {
+    throw new ApiHttpError(400, "invalid_reason", "primaryReason is not a valid cancellation reason");
   }
 
   // Rate limit applies only to step 4 (the destructive one). Steps 1-3
