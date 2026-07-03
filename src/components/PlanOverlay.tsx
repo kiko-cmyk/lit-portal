@@ -3,20 +3,8 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang } from "@/lib/i18n";
+import { BOX_OPTIONS, FREQUENCIES } from "@/lib/plan-options";
 import type { Frequency, PricingResponse, Subscription } from "@/lib/types";
-
-const FREQUENCIES: { value: Frequency; en: string; es: string }[] = [
-  { value: "15d", en: "Every 15 days", es: "Cada 15 días" },
-  { value: "1mo", en: "Every 1 month", es: "Cada 1 mes" },
-  { value: "45d", en: "Every 45 days", es: "Cada 45 días" },
-  { value: "2mo", en: "Every 2 months", es: "Cada 2 meses" },
-  { value: "3mo", en: "Every 3 months", es: "Cada 3 meses" },
-  { value: "4mo", en: "Every 4 months", es: "Cada 4 meses" },
-  { value: "5mo", en: "Every 5 months", es: "Cada 5 meses" },
-  { value: "6mo", en: "Every 6 months", es: "Cada 6 meses" },
-];
-
-const BOX_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
 
 interface PricingWithCompare extends PricingResponse {
   compareAtPerBox?: (number | null)[];

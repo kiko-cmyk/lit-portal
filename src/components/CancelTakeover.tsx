@@ -8,17 +8,51 @@ import type {
   CancelStep4Response,
   CancellationReason,
   CustomerProfile,
+  PricingResponse,
   Subscription,
 } from "@/lib/types";
 
-type Step = 1 | 2 | 3 | 4 | "done";
-
 /**
- * Cancel takeover — full-screen Board 3 (dark indigo). 4 steps + done state.
- * Per Master Spec § 7. Bilingual EN/ES via lib/i18n.
+ * Cancel takeover — full-screen Board 3 (dark indigo). Retention redesign
+ * (2026-07-03), bilingual EN/ES:
+ *
+ *   logro     → "what you've built" (stats)
+ *   motivo    → reason FIRST, so the offer can be tailored
+ *   solucion  → tailored, no-discount solution per reason (pivots to the plan /
+ *               skip overlay). "Me parece caro" → fewer boxes; "No lo uso" →
+ *               space out; "Me tomo un descanso" → skip the next.
+ *   descuento → 15% off the NEXT charge, only if they reject the solution (or
+ *               directly for "No me gusta" / "Otro"). Last resort. Applied via
+ *               /api/subscription/retention-discount (next-charge-only).
+ *   confirmar → final cancellation.
+ *
+ * "No me gusta" / "Otro" have no plan fix, so they skip `solucion` → `descuento`.
  */
+type Step = "logro" | "motivo" | "solucion" | "descuento" | "done-stayed" | "confirmar" | "done";
+
+const REASONS: { value: CancellationReason; en: string; es: string }[] = [
+  { value: "not_using_enough", en: "I'm not using it enough", es: "No lo uso lo suficiente" },
+  { value: "taking_a_break", en: "Taking a break", es: "Me tomo un descanso" },
+  { value: "dont_like", en: "I don't like it", es: "No me gusta" },
+  { value: "too_expensive", en: "Too expensive", es: "Me parece caro" },
+  { value: "other", en: "Other", es: "Otro" },
+];
+
+/** Tailored no-discount solution per reason (null → straight to the 15%). */
+function solutionFor(reason: CancellationReason | null): "plan" | "skip" | null {
+  switch (reason) {
+    case "not_using_enough":
+    case "too_expensive":
+      return "plan"; // space out / fewer boxes
+    case "taking_a_break":
+      return "skip"; // skip the next one
+    default:
+      return null; // dont_like, other, too_much_product
+  }
+}
+
 export function CancelTakeover({
-  customer,
+  customer: _customer,
   subscription,
   onClose,
   onPivotToSkip,
@@ -27,16 +61,14 @@ export function CancelTakeover({
   customer: CustomerProfile;
   subscription: Subscription | null;
   onClose: () => void;
-  /** Callbacks que cierran el takeover Y abren los overlays equivalentes
-   * en el padre. Sin esto, el step 2 cerraba la cancelación pero no abría
-   * nada — el cliente clicaba "Saltar próxima" y no pasaba nada. */
   onPivotToSkip?: () => void;
   onPivotToPlan?: () => void;
 }) {
-  const [step, setStep] = useState<Step>(1);
+  const [step, setStep] = useState<Step>("logro");
   const [stats, setStats] = useState<CancelStep1Response["data"] | null>(null);
   const [reason, setReason] = useState<CancellationReason | null>(null);
   const [freeText, setFreeText] = useState("");
+  const [pricing, setPricing] = useState<PricingResponse | null>(null);
   const [done, setDone] = useState<CancelStep4Response | null>(null);
 
   useEffect(() => {
@@ -46,7 +78,19 @@ export function CancelTakeover({
     })
       .then((r) => setStats(r.data))
       .catch(() => null);
+    api<PricingResponse>("/api/pricing").then(setPricing).catch(() => null);
   }, []);
+
+  // Persist the reason (cancel API step 3), then route to the tailored solution
+  // or straight to the 15%.
+  const handleReasonContinue = async () => {
+    if (!reason) return;
+    await api("/api/subscription/cancel", {
+      method: "POST",
+      body: JSON.stringify({ step: 3, primaryReason: reason, freeText }),
+    }).catch(() => null);
+    setStep(solutionFor(reason) ? "solucion" : "descuento");
+  };
 
   return (
     <div className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#0F0E1A] text-[color:var(--color-brisky-cream)]">
@@ -60,53 +104,44 @@ export function CancelTakeover({
       </button>
 
       <div className="mx-auto max-w-md px-6 pt-16 pb-10 sm:max-w-lg md:max-w-2xl">
-        {/* Step 1 monta la estructura inmediatamente; los stats llegan
-            cuando la API responde (puede tardar 1-2 s por las llamadas en
-            paralelo a Shopify + Seal + Supabase). Antes esperábamos a
-            tener stats para renderizar nada → la modal aparecía vacía y
-            "tardaba" en cargar. */}
-        {step === 1 && (
-          <Step1
-            customer={customer}
-            stats={stats}
-            onContinue={() => setStep(2)}
-            onKeepGoing={onClose}
-          />
+        {step === "logro" && (
+          <Logro stats={stats} onStay={onClose} onContinue={() => setStep("motivo")} />
         )}
-        {step === 2 && (
-          <Step2
-            onSkipClick={() => {
-              onClose();
-              onPivotToSkip?.();
-            }}
-            onPlanClick={() => {
-              onClose();
-              onPivotToPlan?.();
-            }}
-            onContinue={() => setStep(3)}
-            onBack={() => setStep(1)}
-          />
-        )}
-        {step === 3 && (
-          <Step3
+        {step === "motivo" && (
+          <Motivo
             reason={reason}
             setReason={setReason}
             freeText={freeText}
             setFreeText={setFreeText}
-            onContinue={async () => {
-              // "Otro" exige texto sí o sí; el resto avanza solo con el motivo.
-              if (!reason || (reason === "other" && !freeText.trim())) return;
-              await api("/api/subscription/cancel", {
-                method: "POST",
-                body: JSON.stringify({ step: 3, primaryReason: reason, freeText: freeText.trim() }),
-              });
-              setStep(4);
-            }}
-            onBack={() => setStep(2)}
+            onContinue={handleReasonContinue}
+            onBack={() => setStep("logro")}
           />
         )}
-        {step === 4 && (
-          <Step4
+        {step === "solucion" && (
+          <Solucion
+            reason={reason}
+            subscription={subscription}
+            onTakeSolution={() => {
+              onClose();
+              if (solutionFor(reason) === "skip") onPivotToSkip?.();
+              else onPivotToPlan?.();
+            }}
+            onDecline={() => setStep("descuento")}
+            onBack={() => setStep("motivo")}
+          />
+        )}
+        {step === "descuento" && (
+          <Descuento
+            subscription={subscription}
+            pricing={pricing}
+            reason={reason}
+            onKept={() => setStep("done-stayed")}
+            onDecline={() => setStep("confirmar")}
+          />
+        )}
+        {step === "done-stayed" && <DoneStayed onClose={onClose} />}
+        {step === "confirmar" && (
+          <Confirmar
             subscription={subscription}
             onConfirm={async () => {
               const res = await api<CancelStep4Response>("/api/subscription/cancel", {
@@ -114,35 +149,31 @@ export function CancelTakeover({
                 body: JSON.stringify({
                   step: 4,
                   primaryReason: reason,
-                  freeText: freeText.trim(),
+                  freeText,
                   effectiveAfterNextDelivery: true,
-                  // Fast-path: lets the backend skip the 33-page Seal
-                  // pagination scan that caused the step 4 timeout
-                  // (Juan 2026-05-21).
                   sealSubscriptionId: subscription?.sealSubscriptionId,
                 }),
               });
               setDone(res);
               setStep("done");
             }}
-            onBack={() => setStep(3)}
+            onBack={() => setStep("descuento")}
           />
         )}
-        {step === "done" && done && <DoneState done={done} onClose={onClose} />}
+        {step === "done" && done && <DoneState onClose={onClose} />}
       </div>
     </div>
   );
 }
 
-function Step1({
+function Logro({
   stats,
+  onStay,
   onContinue,
-  onKeepGoing,
 }: {
-  customer: CustomerProfile;
   stats: CancelStep1Response["data"] | null;
+  onStay: () => void;
   onContinue: () => void;
-  onKeepGoing: () => void;
 }) {
   const t = useLang();
   const loading = stats === null;
@@ -153,15 +184,8 @@ function Step1({
         <br />
         <T en="you've built" es="has construido" />
       </h1>
-      {/* Drops y Cards omitidos en MVP — no estamos awardando ninguno
-          de los dos así que mostrar siempre 0 ofende. Reintroducir
-          cuando launchemos drops + collection. (Juan 2026-05-21) */}
       <div className="mt-10 grid grid-cols-2 gap-4">
-        <Stat
-          label={t({ en: "Boxes received", es: "Cajas recibidas" })}
-          value={stats?.boxes ?? 0}
-          loading={loading}
-        />
+        <Stat label={t({ en: "Boxes received", es: "Cajas recibidas" })} value={stats?.boxes ?? 0} loading={loading} />
         <Stat
           label={t({ en: "Months in inner circle", es: "Meses en inner circle" })}
           value={stats?.monthsInCircle ?? 0}
@@ -171,7 +195,7 @@ function Step1({
       <div className="mt-10 space-y-3">
         <button
           type="button"
-          onClick={onKeepGoing}
+          onClick={onStay}
           className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
         >
           <T en="Stay with LIT" es="Seguir con LIT" />
@@ -188,113 +212,7 @@ function Step1({
   );
 }
 
-function Step2({
-  onSkipClick,
-  onPlanClick,
-  onContinue,
-  onBack,
-}: {
-  onSkipClick: () => void;
-  onPlanClick: () => void;
-  onContinue: () => void;
-  onBack: () => void;
-}) {
-  return (
-    <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="We can adjust" es="Podemos ajustar" />
-        <br />
-        <T en="your subscription" es="tu suscripción" />
-      </h1>
-      <div className="mt-8 space-y-3">
-        <Alternative
-          labelEn="Skip the next one"
-          labelEs="Saltar la próxima"
-          subEn="Take a breather. Resume any time."
-          subEs="Toma aire. Reanuda cuando quieras."
-          onClick={onSkipClick}
-        />
-        <Alternative
-          labelEn="Change your plan"
-          labelEs="Cambia tu plan"
-          subEn="Fewer boxes, longer cadence, your call."
-          subEs="Menos cajas, más espaciadas, tú decides."
-          onClick={onPlanClick}
-        />
-        <Alternative
-          labelEn="New flavors in June"
-          labelEs="Sabores nuevos en junio"
-          subEn="Hold tight, Salty Peach is coming."
-          subEs="Aguanta, Salty Peach está al caer."
-          disabled
-        />
-      </div>
-      <div className="mt-10 flex justify-between">
-        <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
-          ← <T en="Back" es="Atrás" />
-        </button>
-        <button
-          type="button"
-          onClick={onContinue}
-          className="text-[11px] uppercase tracking-[0.18em] underline"
-        >
-          <T en="None of these. Cancel" es="Ninguna. Cancelar" /> →
-        </button>
-      </div>
-    </>
-  );
-}
-
-function Alternative({
-  labelEn,
-  labelEs,
-  subEn,
-  subEs,
-  onClick,
-  disabled,
-}: {
-  labelEn: string;
-  labelEs: string;
-  subEn: string;
-  subEs: string;
-  onClick?: () => void;
-  /** Estado deshabilitado: gris, no clicable. Útil para alternativas
-   * teóricas que no podemos ejecutar (ej. "Nuevos sabores en junio" —
-   * no hay un endpoint real para reservar el sabor futuro). */
-  disabled?: boolean;
-}) {
-  if (disabled) {
-    return (
-      <div
-        aria-disabled
-        className="block w-full rounded-2xl border border-[color:var(--color-brisky-cream)]/8 bg-[color:var(--color-darker-indigo)]/40 px-5 py-4 text-left opacity-50"
-      >
-        <div className="font-display text-lg font-black uppercase">
-          <T en={labelEn} es={labelEs} />
-        </div>
-        <div className="mt-1 text-xs opacity-60">
-          <T en={subEn} es={subEs} />
-        </div>
-      </div>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="block w-full rounded-2xl border border-[color:var(--color-brisky-cream)]/15 bg-[color:var(--color-darker-indigo)] px-5 py-4 text-left transition-colors hover:border-[color:var(--color-bold-yellow)]/40"
-    >
-      <div className="font-display text-lg font-black uppercase">
-        <T en={labelEn} es={labelEs} />
-      </div>
-      <div className="mt-1 text-xs opacity-60">
-        <T en={subEn} es={subEs} />
-      </div>
-    </button>
-  );
-}
-
-function Step3({
+function Motivo({
   reason,
   setReason,
   freeText,
@@ -310,26 +228,15 @@ function Step3({
   onBack: () => void;
 }) {
   const t = useLang();
-  const REASONS: { value: CancellationReason; en: string; es: string }[] = [
-    { value: "too_expensive", en: "Too expensive", es: "Demasiado caro" },
-    { value: "too_much_product", en: "Too much product", es: "Demasiado producto" },
-    { value: "not_using_enough", en: "Not using enough", es: "No lo uso lo suficiente" },
-    { value: "taking_a_break", en: "Taking a break", es: "Me tomo un descanso" },
-    { value: "other", en: "Other", es: "Otro" },
-  ];
-
-  // Si eligen "Otro" el texto es OBLIGATORIO — necesitamos saber el motivo
-  // real, no un campo vacío que no aporta nada al análisis de cancelaciones.
-  // El resto de motivos avanzan solo con la selección.
-  const needsFreeText = reason === "other";
-  const canContinue = reason !== null && (!needsFreeText || freeText.trim().length > 0);
-
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="Why are you" es="¿Por qué te" />
+      <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+        <T en="Help us understand" es="Ayúdanos a entender" />
+      </div>
+      <h1 className="mt-2 font-display text-5xl font-black uppercase leading-none md:text-6xl">
+        <T en="Why are you" es="¿Por qué lo" />
         <br />
-        <T en="leaving" es="vas" />
+        <T en="leaving" es="dejas" />
         <span className="text-[color:var(--color-bold-yellow)]">?</span>
       </h1>
       <ul className="mt-8 space-y-2">
@@ -345,9 +252,7 @@ function Step3({
               }`}
             >
               <span>{t({ en: r.en, es: r.es })}</span>
-              {reason === r.value && (
-                <span className="text-[color:var(--color-bold-yellow)]">●</span>
-              )}
+              {reason === r.value && <span className="text-[color:var(--color-bold-yellow)]">●</span>}
             </button>
           </li>
         ))}
@@ -356,8 +261,7 @@ function Step3({
         <textarea
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
-          placeholder={t({ en: "Tell us why", es: "Cuéntanos por qué" })}
-          aria-required
+          placeholder={t({ en: "Tell us more (optional)", es: "Cuéntanos más (opcional)" })}
           className="mt-3 w-full rounded-sm border border-[color:var(--color-brisky-cream)]/20 bg-transparent p-3 text-sm placeholder:opacity-40"
           rows={3}
         />
@@ -369,7 +273,7 @@ function Step3({
         <button
           type="button"
           onClick={onContinue}
-          disabled={!canContinue}
+          disabled={!reason}
           className="rounded-sm bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
         >
           <T en="Continue" es="Continuar" />
@@ -379,7 +283,200 @@ function Step3({
   );
 }
 
-function Step4({
+function Solucion({
+  reason,
+  subscription,
+  onTakeSolution,
+  onDecline,
+  onBack,
+}: {
+  reason: CancellationReason | null;
+  subscription: Subscription | null;
+  onTakeSolution: () => void;
+  onDecline: () => void;
+  onBack: () => void;
+}) {
+  const t = useLang();
+  const kind = solutionFor(reason);
+  const boxes = subscription?.boxCount ?? 2;
+
+  const copy =
+    reason === "too_expensive"
+      ? {
+          h: { en: "Pay less, don't leave", es: "Paga menos, no te vayas" },
+          p: {
+            en: "Fewer boxes per shipment means a lower charge, without losing your bulk discount.",
+            es: "Menos cajas por envío es un cargo más bajo, sin perder tu descuento por cantidad.",
+          },
+          cta: { en: "Change my boxes", es: "Cambiar mis cajas" },
+        }
+      : reason === "taking_a_break"
+        ? {
+            h: { en: "Just take a breather", es: "Solo toma un respiro" },
+            p: {
+              en: "Skip your next order instead of cancelling. You resume whenever you want.",
+              es: "Salta tu próximo pedido en vez de cancelar. Retomas cuando quieras.",
+            },
+            cta: { en: "Skip the next one", es: "Saltar la próxima" },
+          }
+        : {
+            h: { en: "Space it out instead", es: "Espácialo en vez de dejarlo" },
+            p: {
+              en: "Getting more than you use? Receive it less often. No need to cancel.",
+              es: "¿Recibes más de lo que usas? Recíbelo más espaciado. No hace falta cancelar.",
+            },
+            cta: { en: "Space out my deliveries", es: "Espaciar mis entregas" },
+          };
+
+  return (
+    <>
+      <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+        <T en="Before you cancel" es="Antes de cancelar" />
+      </div>
+      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">{t(copy.h)}</h1>
+      <p className="mt-5 max-w-md text-sm opacity-75">{t(copy.p)}</p>
+
+      {kind === "plan" && reason === "too_expensive" && (
+        <p className="mt-4 text-xs uppercase tracking-[0.15em] opacity-60">
+          <T en="Now" es="Ahora" />: {boxes} {boxes === 1 ? t({ en: "box", es: "caja" }) : t({ en: "boxes", es: "cajas" })} /{" "}
+          <T en="shipment" es="envío" />
+        </p>
+      )}
+
+      <div className="mt-9 space-y-3">
+        <button
+          type="button"
+          onClick={onTakeSolution}
+          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+        >
+          {t(copy.cta)}
+        </button>
+        <button
+          type="button"
+          onClick={onDecline}
+          className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
+        >
+          <T en="No, keep cancelling" es="No, seguir con la cancelación" />
+        </button>
+      </div>
+
+      <div className="mt-8">
+        <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-50">
+          ← <T en="Back" es="Atrás" />
+        </button>
+      </div>
+    </>
+  );
+}
+
+function Descuento({
+  subscription,
+  pricing,
+  reason,
+  onKept,
+  onDecline,
+}: {
+  subscription: Subscription | null;
+  pricing: PricingResponse | null;
+  reason: CancellationReason | null;
+  onKept: () => void;
+  onDecline: () => void;
+}) {
+  const t = useLang();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const boxCount = subscription?.boxCount ?? null;
+  const current = pricing && boxCount ? pricing.perBox[boxCount - 1] ?? null : null;
+  const discounted = current !== null ? current * 0.85 : null;
+
+  const handleKeep = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/api/subscription/retention-discount", {
+        method: "POST",
+        body: JSON.stringify({ sealSubscriptionId: subscription?.sealSubscriptionId, reason }),
+      });
+      onKept();
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      // Not eligible (already used / not first cancel) → let them proceed to cancel.
+      if (code === "already_used" || code === "not_first_cancel") {
+        onDecline();
+        return;
+      }
+      setError(
+        t({
+          en: "Couldn't apply the discount. Try again or contact us.",
+          es: "No se pudo aplicar el descuento. Inténtalo de nuevo o escríbenos.",
+        }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+        <T en="Wait" es="Espera" />
+      </div>
+      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
+        <T en="This one's on us" es="Esta va por nuestra cuenta" />
+      </h1>
+      <p className="mt-5 max-w-md text-sm opacity-75">
+        <T
+          en="15% off your next order, on top of your bulk discount. Just for staying."
+          es="Un 15% en tu próximo pedido, además de tu descuento por cantidad. Solo por quedarte."
+        />
+      </p>
+
+      {discounted !== null && current !== null && (
+        <div className="mt-7 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5">
+          <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+            <T en="Your next order" es="Tu próximo pedido" />
+          </div>
+          <div className="mt-1 flex items-baseline gap-3">
+            <span className="font-display text-4xl font-black text-[color:var(--color-bold-yellow)]">
+              €{discounted.toFixed(2)}
+            </span>
+            <span className="text-sm line-through opacity-50">€{current.toFixed(2)}</span>
+            <span className="rounded-full border border-[color:var(--color-bold-yellow)]/50 px-2 py-0.5 text-[11px] font-bold tracking-[0.1em] text-[color:var(--color-bold-yellow)]">
+              −15%
+            </span>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-4 rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-9 space-y-3">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={handleKeep}
+          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
+        >
+          {busy ? <T en="Applying…" es="Aplicando…" /> : <T en="Keep my 15%" es="Quedarme con el 15%" />}
+        </button>
+        <button
+          type="button"
+          onClick={onDecline}
+          className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
+        >
+          <T en="Cancel anyway" es="Cancelar de todas formas" />
+        </button>
+      </div>
+    </>
+  );
+}
+
+function Confirmar({
   subscription,
   onConfirm,
   onBack,
@@ -393,11 +490,6 @@ function Step4({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Si el próximo envío está dentro de la ventana de 24h, ya está
-  // "bloqueado" para envío y Seal lo procesará pese a cancelar. El
-  // cliente lo recibe igualmente y la sub se cierra después.
-  // Si está fuera de las 24h, la cancelación es realmente inmediata —
-  // no sale más nada.
   const willShipNext = !!subscription?.withinCutoff && !!subscription?.nextShipDate;
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
   const nextDateLabel =
@@ -416,7 +508,7 @@ function Step4({
         <br />
         <T en="cancellation" es="cancelación" />
       </h1>
-      <p className="mt-6 text-sm opacity-70 max-w-md">
+      <p className="mt-6 max-w-md text-sm opacity-70">
         {willShipNext ? (
           <T
             en="Your next shipment is already within 24h, so it'll go out. After that, no more shipments and no more charges."
@@ -431,10 +523,7 @@ function Step4({
       </p>
       <div className="mt-8 space-y-3 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5 text-sm">
         {willShipNext && nextDateLabel && (
-          <Detail
-            label={t({ en: "Last shipment", es: "Último envío" })}
-            value={nextDateLabel}
-          />
+          <Detail label={t({ en: "Last shipment", es: "Último envío" })} value={nextDateLabel} />
         )}
         <Detail
           label={t({ en: "Status", es: "Estado" })}
@@ -444,13 +533,10 @@ function Step4({
               : t({ en: "Cancelled on confirm", es: "Cancelada al confirmar" })
           }
         />
-        <Detail
-          label={t({ en: "Next billing", es: "Próximo cobro" })}
-          value={t({ en: "None", es: "Ninguno" })}
-        />
+        <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
       </div>
       {error && (
-        <div className="mt-4 rounded-sm bg-red-50/10 border border-[color:var(--color-danger)]/40 px-4 py-3 text-xs text-[#ff9b9b]">
+        <div className="mt-4 rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
           {error}
         </div>
       )}
@@ -467,25 +553,13 @@ function Step4({
             try {
               await onConfirm();
             } catch (e) {
-              const err = e as { code?: string; status?: number; message?: string };
-              console.error("[cancel-step4] failed", e);
-              // Map the few error codes we actually care about to friendly
-              // localized copy. Anything else falls back to a generic
-              // retry message — we never dump the raw English error text
-              // (e.g. "The service didn't respond in time…") into the
-              // Spanish UI, which is what happened pre-2026-05-21.
+              const err = e as { code?: string; status?: number };
+              console.error("[cancel-confirm] failed", e);
               if (err.code === "gateway_timeout" || err.status === 504) {
                 setError(
                   t({
                     en: "The service is taking longer than usual. Wait a moment and try again.",
                     es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
-                  }),
-                );
-              } else if (err.code === "seal_cancel_failed") {
-                setError(
-                  t({
-                    en: "Couldn't cancel right now. Try again in a moment or contact us.",
-                    es: "No se pudo cancelar ahora. Inténtalo de nuevo en un momento o escríbenos.",
                   }),
                 );
               } else {
@@ -502,25 +576,41 @@ function Step4({
           }}
           className="rounded-sm border border-[color:var(--color-brisky-cream)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] disabled:opacity-30"
         >
-          {busy ? (
-            <T en="Cancelling…" es="Cancelando…" />
-          ) : (
-            <T en="Cancel subscription" es="Cancelar suscripción" />
-          )}
+          {busy ? <T en="Cancelling…" es="Cancelando…" /> : <T en="Cancel subscription" es="Cancelar suscripción" />}
         </button>
       </div>
     </>
   );
 }
 
-function DoneState({ onClose: _onClose }: { done: CancelStep4Response; onClose: () => void }) {
+function DoneStayed({ onClose }: { onClose: () => void }) {
+  return (
+    <>
+      <h1 className="font-display text-5xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-6xl">
+        <T en="Great, you're staying" es="Genial, te quedas" />
+      </h1>
+      <p className="mt-8 text-sm opacity-80">
+        <T
+          en="Your 15% is set for your next order. See you soon."
+          es="Tu 15% ya está listo para tu próximo pedido. Nos vemos pronto."
+        />
+      </p>
+      <button
+        type="button"
+        onClick={onClose}
+        className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+      >
+        <T en="Back to LIT" es="Volver a LIT" />
+      </button>
+    </>
+  );
+}
+
+function DoneState({ onClose: _onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
 
-  // After cancel, "Back to LIT" should DROP the user out of the portal
-  // entirely, not just close the takeover — otherwise they land back on
-  // /cuenta with stale state showing the sub still active (Juan
-  // 2026-05-21 incident). Flow: clear our session, best-effort logout
-  // on backend, then hard redirect to the LIT homepage.
+  // After a real cancel, "Back to LIT" DROPS the user out of the portal (clear
+  // session + hard redirect) so they don't land on stale ACTIVE-sub state.
   const handleExit = async () => {
     if (busy) return;
     setBusy(true);
@@ -537,16 +627,10 @@ function DoneState({ onClose: _onClose }: { done: CancelStep4Response; onClose: 
   return (
     <>
       <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-7xl">
-        <T
-          en="Thank you for trusting LIT"
-          es="Muchas gracias por haber confiado en LIT"
-        />
+        <T en="Thank you for trusting LIT" es="Gracias por confiar en LIT" />
       </h1>
       <p className="mt-8 text-sm opacity-80">
-        <T
-          en="Hope to have you back soon."
-          es="Ojalá poder tenerte de vuelta pronto."
-        />
+        <T en="Hope to have you back soon." es="Aquí te esperamos cuando quieras volver." />
       </p>
       <button
         type="button"
@@ -554,25 +638,13 @@ function DoneState({ onClose: _onClose }: { done: CancelStep4Response; onClose: 
         disabled={busy}
         className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
       >
-        {busy ? (
-          <T en="Closing…" es="Cerrando…" />
-        ) : (
-          <T en="Back to LIT" es="Volver a LIT" />
-        )}
+        {busy ? <T en="Closing…" es="Cerrando…" /> : <T en="Back to LIT" es="Volver a LIT" />}
       </button>
     </>
   );
 }
 
-function Stat({
-  label,
-  value,
-  loading,
-}: {
-  label: string;
-  value: number;
-  loading?: boolean;
-}) {
+function Stat({ label, value, loading }: { label: string; value: number; loading?: boolean }) {
   return (
     <div className="rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
       <div

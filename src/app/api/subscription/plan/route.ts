@@ -1,7 +1,8 @@
-import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
+import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { getLastCompletedChargeDate, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -90,8 +91,27 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
      * silently undoes a prior skip. See re-anchor block near the end.
      */
     preserveNextShipDate?: string | null;
+    /**
+     * Re-anchor policy after a frequency change:
+     *   - "preserve" (default): keep the current next-ship date (don't move the
+     *     imminent order or undo a prior skip). This is the normal plan-change
+     *     behaviour for the Change Plan overlay.
+     *   - "natural": let the next order land on Seal's natural regenerated date
+     *     (last completed charge + new interval). Used by the skip retention
+     *     flow when a customer chooses to space out their cadence instead of
+     *     skipping — the imminent order moves later as the customer expects.
+     */
+    reanchorMode?: "preserve" | "natural";
+    /** Simulación: compute + return the projected result without mutating Seal. */
+    dryRun?: boolean;
   };
   log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
+
+  const dryRun = isDryRunRequest(req, body);
+  const reanchorMode: "preserve" | "natural" = body.reanchorMode === "natural" ? "natural" : "preserve";
+  // Pre-mutation subscription, captured during resolution below. Needed to read
+  // the last completed charge date when computing the natural re-anchor target.
+  let preMutationSub: SealSubscription | null = null;
 
   if (
     body.boxCount !== undefined &&
@@ -153,6 +173,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
     }
     assertSubscriptionBelongsToCustomer(matched, email, "subscription/plan");
+    preMutationSub = matched;
 
     const main = matched.items.find((it) => !it.is_one_time_item) ?? matched.items[0];
     if (!main) {
@@ -182,6 +203,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // already has the sub object). Cheap enough either way.
   if (body.sealSubscriptionId !== undefined) {
     const subForCheck = await seal.getSubscriptionById(sealSubscriptionId);
+    preMutationSub = subForCheck;
     const ownsItem = (subForCheck?.items ?? []).some(
       (it) => Number(it.id) === Number(mainItemNumericId) && !it.is_one_time_item,
     );
@@ -235,7 +257,30 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const variantChanged = newVariantNumeric !== null && newVariantNumeric !== mainItemVariantId;
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
 
-  log("change-detected", { variantChanged, planChanged, targetFrequency, targetBoxCount });
+  // Skip retention "espaciar": with reanchorMode="natural" the next order should
+  // land on Seal's natural regenerated date (last completed charge + new
+  // interval) instead of being pinned to the current next-ship date. We compute
+  // that date and feed it as the preserve target, so the SAME re-anchor
+  // machinery (intent → dashboard drain → reanchorCadence) drives the schedule
+  // onto it and the Hub's silent re-poll works unchanged. reanchorCadence only
+  // ever shifts FORWARD by a uniform offset, so even if our calendar math is a
+  // day off Seal's, the result is bounded to that small delta — never a full
+  // extra cycle. (2026-06-19)
+  function computeNaturalYYYYMMDD(): string | null {
+    let anchorIso = preMutationSub ? getLastCompletedChargeDate(preMutationSub) : null;
+    if (!anchorIso && nextAttemptDate) {
+      anchorIso = subCycle(new Date(nextAttemptDate), currentFrequency).toISOString();
+    }
+    if (!anchorIso) return null;
+    return addCycle(new Date(anchorIso), targetFrequency).toISOString().slice(0, 10);
+  }
+  const naturalYYYYMMDD =
+    reanchorMode === "natural" && planChanged ? computeNaturalYYYYMMDD() : null;
+  // Target the optimistic date + re-anchor intent at: natural date (skip
+  // retention) when available, else the preserved current date (normal change).
+  const effectivePreserveYYYYMMDD = naturalYYYYMMDD ?? preserveYYYYMMDD;
+
+  log("change-detected", { variantChanged, planChanged, targetFrequency, targetBoxCount, reanchorMode, naturalYYYYMMDD });
   if (!variantChanged && !planChanged) {
     log("no-op");
     // No-op: return a synthetic sub matching the input state. We don't
@@ -247,6 +292,36 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       mainItemVariantId,
       currentFrequency,
       ctx.customerId,
+    );
+  }
+
+  const intervalLabelByFrequency: Record<Frequency, string> = {
+    "15d": "15 day",
+    "1mo": "1 month",
+    "45d": "45 day",
+    "2mo": "2 month",
+    "3mo": "3 month",
+    "4mo": "4 month",
+    "5mo": "5 month",
+    "6mo": "6 month",
+  };
+  const expectedInterval = intervalLabelByFrequency[targetFrequency];
+
+  // Dry-run ("simulación"): short-circuit BEFORE any Seal OR Shopify call
+  // (including the Shopify Admin variant lookup below) so local testing never
+  // touches an external service. Return the projected post-change subscription
+  // including the new next-ship date. Honoured only in non-prod
+  // (api-helpers.dryRunAllowed). (2026-06-19)
+  if (dryRun) {
+    const projectedDate = planChanged ? effectivePreserveYYYYMMDD : preserveYYYYMMDD;
+    log("dry-run-short-circuit", { projectedDate, reanchorMode, variantChanged, planChanged });
+    return synthesizePostMutationSub(
+      sealSubscriptionId,
+      mainItemNumericId,
+      variantChanged ? newVariantNumeric! : mainItemVariantId,
+      expectedInterval,
+      ctx.customerId,
+      projectedDate,
     );
   }
 
@@ -284,18 +359,6 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // Plus: a 500 ms delay between each Seal mutation. Seal's billing_attempts
   // regenerator needs ~300-500 ms to settle between calls; without this
   // pause we've seen the third mutation get silently dropped.
-  const intervalLabelByFrequency: Record<Frequency, string> = {
-    "15d": "15 day",
-    "1mo": "1 month",
-    "45d": "45 day",
-    "2mo": "2 month",
-    "3mo": "3 month",
-    "4mo": "4 month",
-    "5mo": "5 month",
-    "6mo": "6 month",
-  };
-  const expectedInterval = intervalLabelByFrequency[targetFrequency];
-
   // ───── Step 1: change delivery_interval FIRST (if needed) ─────
   //
   // Send ONLY delivery_interval. We used to send billing_interval too,
@@ -534,12 +597,12 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     // re-poll and the cron drain are backstops. We respond optimistically with
     // the preserved date so the customer sees it immediately.
     let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
-    if (planChanged && preserveYYYYMMDD && !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) {
-      await writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD).catch((e) =>
+    if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
+      await writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD).catch((e) =>
         log("reanchor-intent-write-failed", { msg: String(e) }),
       );
-      finalNextShipDate = `${preserveYYYYMMDD}T13:00:00Z`; // optimistic; webhook/cron makes it real
-      log("reanchor-intent-recorded", { preserveYYYYMMDD });
+      finalNextShipDate = `${effectivePreserveYYYYMMDD}T13:00:00Z`; // optimistic; webhook/cron makes it real
+      log("reanchor-intent-recorded", { effectivePreserveYYYYMMDD, reanchorMode });
     }
 
     log("done-verified", {
@@ -559,11 +622,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // sub state). Record a re-anchor intent so the cron drain
   // (/api/cron/reanchor-drain) preserves the prior next-ship date once Seal
   // finishes regenerating. This is exactly the case the safety net exists for.
-  if (preserveYYYYMMDD && !isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) {
-    await writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD).catch((e) =>
+  if (effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
+    await writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD).catch((e) =>
       log("reanchor-intent-write-failed", { msg: String(e) }),
     );
-    log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, preserveYYYYMMDD, verifyOutcome });
+    log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
   }
   log("done-unverified", {
     sealSubscriptionId,
@@ -577,7 +640,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     variantChanged ? variantDetails.variantId : mainItemVariantId,
     expectedInterval,
     ctx.customerId,
-    preserveYYYYMMDD,
+    effectivePreserveYYYYMMDD,
   );
 });
 

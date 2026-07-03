@@ -496,6 +496,14 @@ export default function AccountPage() {
         <SkipOverlay
           subscription={subscription}
           onClose={() => setSkipOpen(false)}
+          onAdjusted={(updated) => {
+            // Spaced out / fewer boxes instead of skipping. Mirror the plan
+            // overlay handler: a frequency change wipes Seal's billing_attempts
+            // so the local skip flag would lie — clear it and take the new sub.
+            clearJustSkipped();
+            setJustSkipped(false);
+            setSubscription(updated);
+          }}
           onSkipped={(newDate) => {
             // Persist the "just-skipped" flag so the Hub picks it up next
             // time the customer navigates back (banner + skipped hero).

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { isWithinCutoff } from "@/lib/cutoff";
 import {
+  findAppliedDiscountCodeId,
   getNextBillingAttempt,
   mapStatus,
   mapToSubscription,
@@ -78,6 +79,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "billing_attempt.succeeded":
         // Charge succeeded → next ship moved. Refresh the cache.
         await syncSubscription(payload as { subscription: SealSubscription });
+        // If a retention discount (cancel-flow 15%) was riding on this charge,
+        // remove it NOW so it never hits a later charge — the "15% next charge
+        // only" guarantee (Juan, IMPORTANTÍSIMO).
+        await removeRetentionDiscountIfPending((payload as { subscription?: SealSubscription }).subscription);
         break;
       case "billing_attempt.failed":
         // TODO: notify customer via Klaviyo + log
@@ -199,6 +204,59 @@ async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promis
   // firstDay === preserve, so we converge and clear the intent.
   const moved = await seal.reanchorCadence(Number(sealSubId), preserve);
   console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved, from: firstDay });
+}
+
+/**
+ * Cancel-flow retention discount: remove the 15% code right after its first
+ * (discounted) charge succeeds, so no later charge ever gets it. Idempotent and
+ * retryable — if removal fails we leave the row `pending_charge` and the next
+ * billing_attempt.succeeded retries (and the Shopify 1-cycle limit is a backstop).
+ */
+async function removeRetentionDiscountIfPending(subFromPayload?: SealSubscription): Promise<void> {
+  const sealSubId = subFromPayload?.id;
+  if (!sealSubId) return;
+
+  const sb = supabaseAdmin();
+  const { data: row } = await sb
+    .from("retention_discounts")
+    .select("customer_id, discount_code_id, code")
+    .eq("seal_subscription_id", String(sealSubId))
+    .eq("status", "pending_charge")
+    .maybeSingle();
+  if (!row) return;
+
+  // Prefer the UUID captured at apply time; fall back to reading it off fresh state.
+  let discountCodeId = (row.discount_code_id as string | null) ?? null;
+  if (!discountCodeId) {
+    const fresh = await seal.getSubscriptionById(Number(sealSubId));
+    discountCodeId = fresh ? findAppliedDiscountCodeId(fresh, row.code as string) : null;
+  }
+
+  const markRemoved = () =>
+    sb
+      .from("retention_discounts")
+      .update({ status: "removed", removed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("customer_id", row.customer_id);
+
+  if (!discountCodeId) {
+    // Code is already gone (Shopify 1-cycle limit dropped it, or a prior run
+    // removed it) → nothing to delete, just close the row.
+    await markRemoved();
+    console.log("[seal-webhook] retention discount already absent, marked removed", { sealSubId });
+    return;
+  }
+
+  try {
+    await seal.removeDiscountCode(Number(sealSubId), discountCodeId);
+    await markRemoved();
+    console.log("[seal-webhook] retention discount removed after first charge", { sealSubId });
+  } catch (e) {
+    console.error("[seal-webhook] retention discount removal failed (will retry next charge)", {
+      sealSubId,
+      msg: e instanceof Error ? e.message : String(e),
+    });
+    // Leave pending_charge: retry on the next billing_attempt.succeeded.
+  }
 }
 
 /**

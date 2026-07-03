@@ -1,4 +1,4 @@
-import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, seal, type SealSubscription } from "@/lib/seal";
@@ -32,7 +32,13 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
 
   const body = (await req.json().catch(() => ({}))) as {
     sealSubscriptionId?: number | string;
+    /** Skip retention flow: why the customer is skipping (for Klaviyo). */
+    reason?: string;
+    freeText?: string;
+    /** Simulación: compute the result without calling Seal/Klaviyo. */
+    dryRun?: boolean;
   };
+  const dryRun = isDryRunRequest(req, body);
 
   let sub: SealSubscription | null = null;
   let email: string | null = null;
@@ -63,6 +69,21 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
 
   const next = getNextBillingAttempt(sub);
   if (!next) throw new ApiHttpError(400, "no_pending_attempt", "Subscription has no upcoming billing attempt");
+
+  // Dry-run ("simulación"): compute the post-skip next date locally and return,
+  // without touching Seal or firing the Klaviyo event. Honoured only in non-prod
+  // (api-helpers.dryRunAllowed). Mirrors the local computation done below.
+  if (dryRun) {
+    const remaining = (sub.billing_attempts ?? []).map((a) =>
+      a.id === next.id ? { ...a, skipped_on: new Date().toISOString() } : a,
+    );
+    const newNext = remaining.find((a) => !a.completed_at && !a.status && !a.skipped_on) ?? null;
+    return {
+      skipped: true,
+      newNextShipDate: newNext?.date ?? next.date,
+      undoExpiresAt: newNext?.date ?? next.date,
+    };
+  }
 
   try {
     await seal.skipBillingAttempt(next.id, sub.id);
@@ -96,6 +117,8 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
     .trackEvent("subscription_skip", email, {
       newNextShipDate: newNext?.date ?? next.date,
       sealSubscriptionId: String(sub.id),
+      ...(body.reason ? { reason: body.reason } : {}),
+      ...(body.freeText ? { freeText: body.freeText } : {}),
     })
     .catch((err) => console.warn("[skip] klaviyo event failed:", err));
 

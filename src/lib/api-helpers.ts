@@ -171,3 +171,31 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
 export function jsonError(status: number, error: string, message?: string): NextResponse {
   return NextResponse.json({ error, message }, { status });
 }
+
+/**
+ * Whether dry-run ("simulación") is permitted in this environment. Dry-run lets
+ * a mutation route compute and return its projected result WITHOUT calling Seal /
+ * Shopify / Klaviyo — so the skip retention flow (and future subscription
+ * changes) can be exercised locally without mutating anything.
+ *
+ * Gated OFF in production. The dev App Proxy bypass (`__dev_customer`) already
+ * requires NODE_ENV=development, so on a real signed prod request this is always
+ * false — closing the audit concern about gating purely on NODE_ENV. The
+ * explicit `ALLOW_DRY_RUN=true` escape hatch lets a non-prod preview opt in
+ * deliberately without flipping NODE_ENV.
+ */
+export function dryRunAllowed(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.ALLOW_DRY_RUN === "true";
+}
+
+/**
+ * Read the dry-run flag for a request: honoured only when {@link dryRunAllowed}.
+ * Accepts it either in the JSON body (`{ dryRun: true }`) or as the `__dry_run`
+ * query param (forwarded by the FE api-client alongside `__dev_customer`).
+ */
+export function isDryRunRequest(req: NextRequest, body?: { dryRun?: boolean }): boolean {
+  if (!dryRunAllowed()) return false;
+  if (body?.dryRun === true) return true;
+  const v = new URL(req.url).searchParams.get("__dry_run");
+  return v === "1" || v === "true";
+}

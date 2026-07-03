@@ -25,6 +25,19 @@ export type CancellationReason =
   | "too_much_product"
   | "not_using_enough"
   | "taking_a_break"
+  | "dont_like"
+  | "other";
+
+/**
+ * Why a customer is skipping their next order. Captured in the skip retention
+ * flow to route the offer (e.g. "too much product" → fewer boxes / longer
+ * cadence) and to measure skip reasons + save rate in Klaviyo.
+ */
+export type SkipReason =
+  | "too_much_product"
+  | "not_using_enough"
+  | "traveling_or_break"
+  | "budget"
   | "other";
 
 export type DropsAction =

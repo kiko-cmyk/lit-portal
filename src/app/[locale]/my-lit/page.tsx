@@ -379,6 +379,10 @@ export default function HubPage() {
         <SkipOverlay
           subscription={sub}
           onClose={() => setShowSkip(false)}
+          // Adjusting (spacing/fewer boxes) instead of skipping runs through the
+          // same plan-change handler: optimistic update + syncing banner +
+          // silent re-poll until Seal finishes regenerating the cadence.
+          onAdjusted={handlePlanUpdated}
           onSkipped={(newDate) => {
             // Persistir la marca de "saltado" con la nueva fecha como
             // expiry. El banner se mantendrá hasta que esa fecha pase

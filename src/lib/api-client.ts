@@ -11,11 +11,17 @@ function withDevParams(path: string): string {
   const dev = new URLSearchParams(window.location.search);
   const devCustomer = dev.get("__dev_customer");
   const devEmail = dev.get("__dev_email");
-  if (!devCustomer && !devEmail) return path;
+  // `__dry_run` ("simulación"): forwarded so mutation routes return their
+  // projected result without touching Seal/Shopify/Klaviyo. Honoured server-side
+  // only in non-prod (see api-helpers.dryRunAllowed). Lets Juan walk the whole
+  // skip retention flow locally (?__dev_customer=…&__dry_run=1) safely.
+  const dryRun = dev.get("__dry_run");
+  if (!devCustomer && !devEmail && !dryRun) return path;
   const sep = path.includes("?") ? "&" : "?";
   const extras: string[] = [];
   if (devCustomer) extras.push(`__dev_customer=${encodeURIComponent(devCustomer)}`);
   if (devEmail) extras.push(`__dev_email=${encodeURIComponent(devEmail)}`);
+  if (dryRun) extras.push(`__dry_run=${encodeURIComponent(dryRun)}`);
   return `${path}${sep}${extras.join("&")}`;
 }
 

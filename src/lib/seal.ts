@@ -42,6 +42,12 @@ export interface SealBillingAttempt {
   skipped_on?: string;
 }
 
+export interface SealDiscountCode {
+  id: string; // UUID — required to remove via DELETE /subscription-discount-code
+  code: string;
+  amount: string;
+}
+
 export interface SealItem {
   id: number;
   product_id: string;
@@ -60,6 +66,9 @@ export interface SealItem {
   is_one_time_item: 0 | 1;
   selling_plan_id: string;
   selling_plan_name: string;
+  /** Discount codes applied to this line (from Seal). The `id` UUID is required
+   *  to remove a code via DELETE /subscription-discount-code. */
+  discount_codes?: SealDiscountCode[];
 }
 
 export interface SealSubscription {
@@ -496,6 +505,49 @@ class SealClient {
   }
 
   /**
+   * Retention discount (cancel flow): apply a Shopify discount code to a
+   * subscription. Contract per Seal merchant API docs (verified 2026-07-03):
+   *   PUT /subscription-discount-code { subscription_id, action:"apply", discount_code }
+   *
+   * IMPORTANT: a Seal discount code recurs on EVERY future charge until removed.
+   * The "15% next charge only" guarantee comes from removing it in the
+   * `billing_attempt.succeeded` webhook right after the first discounted charge
+   * (see removeDiscountCode + /api/webhooks/seal). The Shopify code is also
+   * created with a 1-cycle limit as a second safety net.
+   */
+  async applyDiscountCode(subscriptionId: number, code: string): Promise<void> {
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription-discount-code",
+      {
+        method: "PUT",
+        body: JSON.stringify({ subscription_id: subscriptionId, action: "apply", discount_code: code }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal apply-discount rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
+   * Remove a discount code from a subscription so it stops applying to future
+   * charges. `discountCodeId` is the UUID from item.discount_codes[].id.
+   * DELETE /subscription-discount-code?subscription_id=X&discount_code_id=Y
+   */
+  async removeDiscountCode(subscriptionId: number, discountCodeId: string): Promise<void> {
+    const qs = new URLSearchParams({
+      subscription_id: String(subscriptionId),
+      discount_code_id: discountCodeId,
+    });
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      `/subscription-discount-code?${qs.toString()}`,
+      { method: "DELETE" },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal remove-discount rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
    * Skip a specific billing attempt.
    * Per reference_seal_api.md: action="skip" needs id + subscription_id.
    *
@@ -825,6 +877,35 @@ export function getNextBillingAttempt(s: SealSubscription): SealBillingAttempt |
     .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on && ba.date)
     .sort((a, b) => a.date.localeCompare(b.date));
   return pending[0] ?? null;
+}
+
+/**
+ * Date (ISO) of the most recent COMPLETED charge — the anchor Seal uses when it
+ * regenerates the schedule after a frequency change ("last completed charge +
+ * interval"). Used by the skip retention flow to compute the natural next-ship
+ * date when a customer spaces out their cadence instead of skipping. Returns
+ * null for a brand-new subscription with no completed charges yet.
+ */
+export function getLastCompletedChargeDate(s: SealSubscription): string | null {
+  const completed = (s.billing_attempts ?? [])
+    .filter((ba) => ba.completed_at && ba.date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return completed[0]?.date ?? null;
+}
+
+/**
+ * UUID of an applied discount code on a subscription (searched across items),
+ * matched by code string (case-insensitive). Returns null if not applied.
+ * Used to remove the retention discount after its first (discounted) charge.
+ */
+export function findAppliedDiscountCodeId(s: SealSubscription, code: string): string | null {
+  const target = code.trim().toLowerCase();
+  for (const it of s.items ?? []) {
+    for (const dc of it.discount_codes ?? []) {
+      if (dc.code?.trim().toLowerCase() === target) return dc.id;
+    }
+  }
+  return null;
 }
 
 /**
