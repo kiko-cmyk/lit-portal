@@ -154,7 +154,6 @@ interface ShopifyFulfillmentPayload {
   // early and box_shipped Drops were never awarded.
   id?: number;
   order_id?: number;
-  line_items?: Array<{ quantity: number; variant_id?: number }>;
 }
 
 async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
@@ -230,10 +229,23 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   const f = payload;
   if (!f.id || !f.order_id) return;
 
-  // Look up the customer for this order
+  // Look up the customer AND the order's subscription line items. box_shipped
+  // Drops are for SUBSCRIPTION boxes only — a one-time / B2B / extras-only
+  // fulfillment must earn nothing. The fulfillments/create payload doesn't carry
+  // selling-plan info, so we read it from the order.
   const order = await shopifyAdmin
-    .graphql<{ order: { customer: { id: string } | null } | null }>(
-      `query orderCustomer($id: ID!) { order(id: $id) { customer { id } } }`,
+    .graphql<{
+      order: {
+        customer: { id: string } | null;
+        lineItems: { nodes: Array<{ quantity: number; sellingPlan: { name: string } | null }> };
+      } | null;
+    }>(
+      `query orderForDrops($id: ID!) {
+        order(id: $id) {
+          customer { id }
+          lineItems(first: 100) { nodes { quantity sellingPlan { name } } }
+        }
+      }`,
       { id: `gid://shopify/Order/${f.order_id}` },
     )
     .catch(() => null);
@@ -244,6 +256,15 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   }
   const customerId = customerGid.replace(/^gid:\/\/shopify\/Customer\//, "");
 
+  // Count ONLY subscription boxes (order line items with a selling plan). This
+  // gates out B2B / one-time orders (0 subscription lines → skip) and excludes
+  // extras / free gifts shipped in the same box. B2B is live, so a wholesale
+  // fulfillment must NOT mint Drops.
+  const subscriptionBoxes = (order?.order?.lineItems?.nodes ?? [])
+    .filter((li) => li.sellingPlan)
+    .reduce((s, li) => s + (li.quantity ?? 0), 0);
+  if (subscriptionBoxes === 0) return;
+
   // Snapshot tier state before awarding (to detect first-time crossing)
   const sb = supabaseAdmin();
   const { data: pre } = await sb
@@ -253,11 +274,7 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
     .maybeSingle();
   const wasTierEarned = !!pre?.tier_earned_at;
 
-  // Total boxes = sum of quantities of line items (excluding any one-time products
-  // tagged as Extras — we'd ideally filter, but for MVP count all line items).
-  const totalBoxes = (f.line_items ?? []).reduce((s, li) => s + (li.quantity ?? 0), 0);
-
-  for (let i = 0; i < totalBoxes; i++) {
+  for (let i = 0; i < subscriptionBoxes; i++) {
     await awardDrops(
       customerId,
       "box_shipped",
