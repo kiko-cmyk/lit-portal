@@ -77,7 +77,10 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
     const remaining = (sub.billing_attempts ?? []).map((a) =>
       a.id === next.id ? { ...a, skipped_on: new Date().toISOString() } : a,
     );
-    const newNext = remaining.find((a) => !a.completed_at && !a.status && !a.skipped_on) ?? null;
+    const newNext =
+      remaining
+        .filter((a) => !a.completed_at && !a.status && !a.skipped_on && a.date)
+        .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
     return {
       skipped: true,
       newNextShipDate: newNext?.date ?? next.date,
@@ -104,9 +107,12 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   const remainingAttempts = (sub.billing_attempts ?? []).map((a) =>
     a.id === next.id ? { ...a, skipped_on: new Date().toISOString() } : a,
   );
-  const newNext = remainingAttempts.find(
-    (a) => !a.completed_at && !a.status && !a.skipped_on,
-  ) ?? null;
+  // EARLIEST pending attempt by date — Seal doesn't guarantee chronological
+  // array order, so sort rather than trust .find() (matches getNextBillingAttempt).
+  const newNext =
+    remainingAttempts
+      .filter((a) => !a.completed_at && !a.status && !a.skipped_on && a.date)
+      .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
 
   // Undo window: until the new cutoff (24h before the kept attempt), or until
   // the original attempt date — whichever comes first.

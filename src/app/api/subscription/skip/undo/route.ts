@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -34,6 +35,18 @@ export const POST = withCustomer(async (req, ctx) => {
 
   if (!skipped) {
     throw new ApiHttpError(400, "no_skip_to_undo", "No skipped attempt found");
+  }
+
+  // Don't resurrect a charge that's already past or inside the 24h cutoff:
+  // un-skipping it would re-queue an imminent/overdue attempt (unexpected
+  // charge). isWithinCutoff is true when now >= date-24h, i.e. also for past
+  // dates. Undo is only valid while safely before the originally-skipped date.
+  if (isWithinCutoff(skipped.date)) {
+    throw new ApiHttpError(
+      409,
+      "skip_undo_expired",
+      "This order's date has passed — it can no longer be un-skipped.",
+    );
   }
 
   await seal.unskipBillingAttempt(skipped.id, sub.id);

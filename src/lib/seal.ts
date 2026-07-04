@@ -859,7 +859,15 @@ export function getBoxCount(s: SealSubscription): number {
   if (!main) return 1;
   const fromVariant = BOX_COUNT_BY_VARIANT[String(main.variant_id)];
   if (fromVariant) return fromVariant;
-  return main.quantity ?? 1;
+  // Legacy/manual/bundle sub whose variant isn't mapped. Clamp to the DB's
+  // allowed range (subscriptions.box_count CHECK is 1..6): an out-of-range
+  // quantity here silently failed the webhook + hub cache upserts (check_violation),
+  // leaving that customer's cache stale/absent.
+  const q = main.quantity ?? 1;
+  if (q < 1 || q > 6) {
+    console.warn(`[getBoxCount] unmapped variant ${main.variant_id} qty ${q} — clamping to 1..6`);
+  }
+  return Math.min(6, Math.max(1, q));
 }
 
 /**
