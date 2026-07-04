@@ -182,7 +182,7 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
           .getCustomerEmail(codeRow.customer_id)
           .catch(() => null);
         if (referrerEmail) {
-          klaviyo
+          await klaviyo
             .trackEvent("referral_converted" as never, referrerEmail, {
               orderId: payload.id,
               dropsAwarded: 250,
@@ -204,7 +204,11 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     // vs one-time purchases without parsing plan_label (e.g. the
     // "Área personal - Bienvenida" welcome triggers on is_subscription = true).
     const isSubscription = payload.line_items.some((li) => li.selling_plan_allocation);
-    klaviyo
+    // AWAIT: on Vercel the function can freeze once the response is sent, so a
+    // fire-and-forget trackEvent (and the confirmation/welcome email it drives)
+    // could be dropped after processed_at is marked, with no retry. Awaiting
+    // lets the Klaviyo POST complete before we return; .catch keeps it non-fatal.
+    await klaviyo
       .trackEvent("confirmation_sent", email, {
         order_id: payload.id,
         order_number: payload.order_number,
@@ -294,7 +298,7 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   if (!wasTierEarned && post?.tier_earned_at && (post?.lifetime_earned ?? 0) >= TIER_THRESHOLD) {
     const email = await shopifyAdmin.getCustomerEmail(customerId).catch(() => null);
     if (email) {
-      klaviyo
+      await klaviyo
         .trackEvent("tier_unlocked", email, {
           earnedAt: post.tier_earned_at,
           lifetimeDrops: post.lifetime_earned,
