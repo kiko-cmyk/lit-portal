@@ -393,10 +393,16 @@ export const POST = withCustomer(async (req, ctx) => {
         .filter("metadata->>cancellationId", "eq", cancellationId)
         .maybeSingle();
       if (!existingReset) {
-        await awardDrops(ctx.customerId, "cancel_reset", -currentBalance, {
-          reason: "second_plus_cancel",
-          cancellationId,
-        });
+        // dedupKey makes the reset atomic on top of the existingReset guard
+        // above: a concurrent re-drive that also read no existing row can't
+        // double-deduct (unique index on dedup_key collapses it to one).
+        await awardDrops(
+          ctx.customerId,
+          "cancel_reset",
+          -currentBalance,
+          { reason: "second_plus_cancel", cancellationId },
+          `cancel_reset:${cancellationId}`,
+        );
       }
     }
 

@@ -146,12 +146,19 @@ create table if not exists claimed_rewards (
   merch_option           text,                    -- only for merch_1000: 'socks'|'tee'|'hoodie'
   fulfillment_method     text not null check (fulfillment_method in ('next_shipment','seat_reserved')),
   fulfillment_status     text not null default 'pending'
-                              check (fulfillment_status in ('pending','fulfilled','failed')),
+                              -- 'confirmed' = Seal side-effect succeeded; 'failed_rollback' =
+                              -- side-effect failed AFTER the drops deduction (drops get refunded).
+                              -- Must match the values rewards/claim writes.
+                              check (fulfillment_status in ('pending','confirmed','failed_rollback')),
   fulfillment_metadata   jsonb,
   claimed_at             timestamptz not null default now()
 );
 
 create index if not exists idx_claimed_rewards_customer on claimed_rewards(customer_id, claimed_at desc);
+-- Idempotency: the claim route relies on this unique index to turn a double-claim
+-- race into a 23505 (→ 409 already_claimed). Without it two rapid clicks both
+-- insert and double-fulfill (and double-deduct drops).
+create unique index if not exists uq_claimed_rewards_customer_reward on claimed_rewards(customer_id, reward_id);
 
 create table if not exists referral_codes (
   customer_id  text primary key,

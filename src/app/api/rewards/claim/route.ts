@@ -161,12 +161,16 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     throw new Error(`claim insert failed: ${claimErr.message}`);
   }
 
-  // Step 2: deduct drops (negative event tagged with claimId — idempotent if
-  // the awardDrops helper checks metadata.claimId in its unique index).
-  await awardDrops(ctx.customerId, "reward_claim", -threshold, {
-    rewardId: body.rewardId,
-    claimId: claim?.id,
-  });
+  // Step 2: deduct drops (negative event). dedupKey makes the deduction
+  // idempotent at the DB layer (unique index on dedup_key) so a retry/redrive
+  // of this claim can't double-debit.
+  await awardDrops(
+    ctx.customerId,
+    "reward_claim",
+    -threshold,
+    { rewardId: body.rewardId, claimId: claim?.id },
+    `reward_claim:${claim?.id}`,
+  );
 
   // Step 3: event reservation (also persisted before Seal side-effect).
   if (body.rewardId === "event_2500" && claim) {
@@ -181,28 +185,46 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
   if (pendingSideEffect && claim) {
     try {
       await pendingSideEffect();
-      await sb
+      const { error: confErr } = await sb
         .from("claimed_rewards")
         .update({ fulfillment_status: "confirmed" })
         .eq("id", claim.id);
+      // Don't fail the request over the status write — the side-effect already
+      // succeeded, so the reward IS fulfilled. Just log; the row stays 'pending'
+      // but the (customer_id, reward_id) uniqueness still blocks a re-claim.
+      if (confErr) console.error(`[claim] confirm status update failed for ${claim.id}: ${confErr.message}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[claim] seal side-effect failed for claim ${claim.id}: ${msg}`);
-      await sb
+      // Refund the drops deducted in step 2 — the customer got nothing, so they
+      // must not stay debited. Idempotent via a distinct dedupKey so a redrive
+      // can't double-refund (and it nets against the step-2 deduction to 0).
+      await awardDrops(
+        ctx.customerId,
+        "reward_claim",
+        threshold,
+        { rewardId: body.rewardId, claimId: claim.id, refundOf: "seal_side_effect_failed" },
+        `reward_claim_refund:${claim.id}`,
+      ).catch((refundErr) =>
+        console.error(`[claim] REFUND FAILED for claim ${claim.id} — drops left debited:`, refundErr),
+      );
+      const { error: rbErr } = await sb
         .from("claimed_rewards")
         .update({
           fulfillment_status: "failed_rollback",
           fulfillment_metadata: { ...fulfillmentMetadata, sealError: msg },
         })
         .eq("id", claim.id);
+      if (rbErr) console.error(`[claim] failed_rollback status update failed for ${claim.id}: ${rbErr.message}`);
       throw new ApiHttpError(502, "seal_side_effect_failed", msg);
     }
   } else if (claim) {
     // event_2500 had no external side-effect — already complete.
-    await sb
+    const { error: confErr } = await sb
       .from("claimed_rewards")
       .update({ fulfillment_status: "confirmed" })
       .eq("id", claim.id);
+    if (confErr) console.error(`[claim] confirm status update failed for ${claim.id}: ${confErr.message}`);
   }
 
   // Re-read balance for response
