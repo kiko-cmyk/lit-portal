@@ -75,14 +75,38 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   // never did. Custom X-* headers pass through cleanly.
   // The backend `withCustomer` reads either header for back-compat.
   const sessionToken = getSessionToken();
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(sessionToken ? { "X-LIT-Session": sessionToken } : {}),
-      ...(init.headers ?? {}),
-    },
-  });
+  // Client-side timeout. Without it a stalled connection (flaky mobile, App
+  // Proxy hanging with no response) never resolves and overlays sit at
+  // "Procesando…/Saving…" forever. 65s is just above the server's 60s
+  // maxDuration, so we only abort a genuinely stuck request (the server would
+  // already have returned/timed out by then), not a slow-but-live one — which
+  // avoids aborting a mutation the server is still completing. On abort we
+  // surface `gateway_timeout`, the code the overlays already render as "try again".
+  const timeoutCtrl = new AbortController();
+  const timeoutId = setTimeout(() => timeoutCtrl.abort(), 65_000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      signal: init.signal ?? timeoutCtrl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(sessionToken ? { "X-LIT-Session": sessionToken } : {}),
+        ...(init.headers ?? {}),
+      },
+    });
+  } catch (err) {
+    if ((err as { name?: string })?.name === "AbortError") {
+      throw new ApiClientError(
+        504,
+        "gateway_timeout",
+        "The service didn't respond in time. Try again in a moment.",
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!res.ok) {
     // Read as text first so we can surface the raw body when Vercel or the
     // runtime returns an HTML / plain-text error page (504, function crash,
