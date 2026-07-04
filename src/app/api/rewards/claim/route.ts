@@ -1,3 +1,4 @@
+import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { REWARD_THRESHOLDS, awardDrops } from "@/lib/drops";
 import { klaviyo } from "@/lib/klaviyo";
@@ -218,6 +219,16 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
         })
         .eq("id", claim.id);
       if (rbErr) console.error(`[claim] failed_rollback status update failed for ${claim.id}: ${rbErr.message}`);
+      // Ping Slack: drops were refunded (money-safe) but the reward was NOT
+      // fulfilled, and nothing auto-retries a failed_rollback claim — it needs
+      // manual fulfilment. withCustomer only alerts on unexpected 500s and this
+      // is a handled 502, so alert explicitly here.
+      alertSlackError({
+        path: "/api/rewards/claim",
+        code: "reward_failed_rollback",
+        msg: `claim ${claim.id} (${body.rewardId}) failed at Seal, drops refunded — needs manual fulfilment: ${msg}`,
+        customerId: ctx.customerId,
+      });
       throw new ApiHttpError(502, "seal_side_effect_failed", msg);
     }
   } else if (claim) {
