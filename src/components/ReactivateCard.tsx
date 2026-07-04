@@ -7,6 +7,8 @@ interface ReactivateCardProps {
   dropsHeldDays?: number;
   cardsKept?: number;
   onReactivate: () => void;
+  /** Disables the CTA and swaps the label while reactivation is in flight. */
+  busy?: boolean;
 }
 
 /**
@@ -20,6 +22,7 @@ export function ReactivateCard({
   dropsHeldDays,
   cardsKept,
   onReactivate,
+  busy,
 }: ReactivateCardProps) {
   return (
     <section
@@ -58,9 +61,14 @@ export function ReactivateCard({
       <button
         type="button"
         onClick={onReactivate}
-        className="mt-5 rounded-[2px] bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]"
+        disabled={busy}
+        className="mt-5 rounded-[2px] bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] disabled:opacity-60"
       >
-        <T en="Reactivate" es="Reactivar" />
+        {busy ? (
+          <T en="Reactivating…" es="Reactivando…" />
+        ) : (
+          <T en="Reactivate" es="Reactivar" />
+        )}
       </button>
     </section>
   );
