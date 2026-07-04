@@ -54,10 +54,14 @@ export async function GET(req: NextRequest) {
   // to a constant so a missing header doesn't bypass the limit (rare,
   // but defensive). 30/min per IP is generous — bot abuse would hit it
   // well before a real customer does.
+  // Resolve to a BARE ip and prefix once below. Previously this was
+  // double-prefixed ("ip:ip:...") and the header-less fallback ("ip:unknown")
+  // put every header-less caller in one shared bucket. Use || so an empty
+  // string from a stray header also falls through to the next source.
   const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    req.headers.get("x-real-ip") ??
-    "ip:unknown";
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "unknown";
   try {
     await enforceRateLimit(`ip:${ip}`, "login", { limit: 30, windowMs: 60_000 });
   } catch (e) {

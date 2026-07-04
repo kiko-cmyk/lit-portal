@@ -1,5 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { awardDrops, DROPS_AMOUNTS } from "@/lib/drops";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -13,6 +14,7 @@ import { supabaseAdmin } from "@/lib/supabase";
  * Idempotent: only awards Drops once (looks at customer_preferences for prior opt-in).
  */
 export const POST = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "first-login-whatsapp", { limit: 10, windowMs: 60_000 });
   const body = (await req.json().catch(() => ({}))) as { optIn?: boolean };
   if (typeof body.optIn !== "boolean") {
     throw new ApiHttpError(400, "missing_opt_in", "optIn (boolean) required");

@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -11,6 +12,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 // language never updated the field the content routes read, so dynamic
 // content stayed in the onboarding language. (2026-06-10)
 export const PATCH = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "customer-language", { limit: 10, windowMs: 60_000 });
   const body = (await req.json().catch(() => ({}))) as { language?: string };
   if (body.language !== "en" && body.language !== "es") {
     throw new ApiHttpError(400, "invalid_language", "language must be 'en' or 'es'");
