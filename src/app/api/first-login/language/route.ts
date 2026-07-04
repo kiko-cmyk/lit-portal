@@ -1,10 +1,12 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 
 // POST /apps/portal/api/first-login/language
 // Body: { language: "en" | "es" }
 export const POST = withCustomer(async (req, ctx) => {
+  await enforceRateLimit(ctx.customerId, "first-login-language", { limit: 10, windowMs: 60_000 });
   const body = (await req.json().catch(() => ({}))) as { language?: string };
   if (body.language !== "en" && body.language !== "es") {
     throw new ApiHttpError(400, "invalid_language", "language must be 'en' or 'es'");
