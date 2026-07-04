@@ -110,7 +110,7 @@ export function AddressOverlay({
   return (
     <div
       className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
-      onClick={onClose}
+      onClick={busy ? undefined : onClose}
     >
       <div
         className="zone-cream relative mx-auto w-full max-w-md rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
@@ -119,8 +119,9 @@ export function AddressOverlay({
         <button
           type="button"
           onClick={onClose}
+          disabled={busy}
           aria-label="Close"
-          className="absolute right-4 top-4 text-2xl opacity-60"
+          className="absolute right-4 top-4 text-2xl opacity-60 disabled:opacity-30"
         >
           ×
         </button>
