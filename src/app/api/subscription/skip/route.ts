@@ -79,7 +79,7 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
     );
     const newNext =
       remaining
-        .filter((a) => !a.completed_at && !a.status && !a.skipped_on)
+        .filter((a) => !a.completed_at && !a.status && !a.skipped_on && a.date)
         .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
     return {
       skipped: true,
@@ -111,7 +111,7 @@ export const POST = withCustomer<SkipResponse>(async (req, ctx) => {
   // array order, so sort rather than trust .find() (matches getNextBillingAttempt).
   const newNext =
     remainingAttempts
-      .filter((a) => !a.completed_at && !a.status && !a.skipped_on)
+      .filter((a) => !a.completed_at && !a.status && !a.skipped_on && a.date)
       .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
 
   // Undo window: until the new cutoff (24h before the kept attempt), or until
