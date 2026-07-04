@@ -196,18 +196,20 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[claim] seal side-effect failed for claim ${claim.id}: ${msg}`);
-      // Refund the drops deducted in step 2 — the customer got nothing, so they
-      // must not stay debited. Idempotent via a distinct dedupKey so a redrive
-      // can't double-refund (and it nets against the step-2 deduction to 0).
-      await awardDrops(
-        ctx.customerId,
-        "reward_claim",
-        threshold,
-        { rewardId: body.rewardId, claimId: claim.id, refundOf: "seal_side_effect_failed" },
-        `reward_claim_refund:${claim.id}`,
-      ).catch((refundErr) =>
-        console.error(`[claim] REFUND FAILED for claim ${claim.id} — drops left debited:`, refundErr),
-      );
+      // Undo the step-2 deduction so the customer isn't debited for a reward
+      // they never received. We DELETE the deduction event rather than writing a
+      // compensating +threshold award, because `lifetime_earned` is summed from
+      // POSITIVE amounts only (recompute_drops_balance) — a positive refund
+      // would inflate lifetime even though the balance nets to 0. The trigger
+      // fires on DELETE and restores the balance. Idempotent: a redrive deletes
+      // 0 rows.
+      const { error: refundErr } = await sb
+        .from("drops_events")
+        .delete()
+        .eq("dedup_key", `reward_claim:${claim.id}`);
+      if (refundErr) {
+        console.error(`[claim] REFUND FAILED for claim ${claim.id} — drops left debited: ${refundErr.message}`);
+      }
       const { error: rbErr } = await sb
         .from("claimed_rewards")
         .update({
