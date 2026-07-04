@@ -28,7 +28,9 @@ import { supabaseAdmin } from "@/lib/supabase";
  */
 
 const MAX_ATTEMPTS = 5;
-const INTENT_TTL_MS = 30 * 60_000;
+// 6h — Seal billing_attempt regeneration can take a while (minutes, occasionally
+// longer). Don't drop a money-affecting intent too eagerly (see TTL branch).
+const INTENT_TTL_MS = 6 * 60 * 60_000;
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
@@ -57,13 +59,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const subId = Number(intent.seal_subscription_id);
     const preserve = String(intent.preserve_date).slice(0, 10);
 
-    // TTL: stop chasing an intent that never converged.
+    // TTL: an intent that never converged. NEVER silently DELETE it — dropping it
+    // unapplied lets Seal's early regenerated attempt stand and the customer gets
+    // billed BEFORE the preserved next-ship date. Mark it 'failed' (kept for
+    // reconciliation, and the cron stops chasing it) and log loudly.
     if (Date.now() - new Date(intent.created_at).getTime() > INTENT_TTL_MS) {
       await sb
         .from("subscription_reanchor_intents")
-        .delete()
+        .update({ status: "failed", updated_at: new Date().toISOString() })
         .eq("customer_id", intent.customer_id);
       expired++;
+      console.error(
+        "[reanchor-drain] intent expired unconverged — marked failed (customer may be billed early)",
+        {
+          customerId: intent.customer_id,
+          subId,
+          preserve,
+          ageMin: Math.round((Date.now() - new Date(intent.created_at).getTime()) / 60000),
+        },
+      );
       continue;
     }
 

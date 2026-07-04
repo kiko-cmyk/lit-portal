@@ -26,6 +26,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const now = Date.now();
   const day = 24 * 60 * 60 * 1000;
 
+  // Dedup: each winback event fires at most ONCE per customer. The window below
+  // is deliberately 2 days wide (resilient to a missed daily run), which WITHOUT
+  // dedup double-sent the same event on two consecutive runs. Mirror the
+  // renewal-reminder pattern: one upfront email_logs lookup + a row written after
+  // each successful fire (template_id = the event name).
+  const { data: sentRows, error: dedupErr } = await sb
+    .from("email_logs")
+    .select("customer_id, template_id")
+    .in("template_id", ["winback_d14", "winback_d30"])
+    .gte("sent_at", new Date(now - 45 * day).toISOString());
+  if (dedupErr) throw new Error(`winback dedup query failed: ${dedupErr.message}`);
+  const alreadySent = new Set<string>(
+    ((sentRows ?? []) as Array<{ customer_id: string; template_id: string }>).map(
+      (r) => `${r.customer_id}:${r.template_id}`,
+    ),
+  );
+
   // Window: cancellations confirmed between (today-15) and (today-13) → fire D14
   // Window: cancellations confirmed between (today-31) and (today-29) → fire D30
   const fireFor = async (offset: 14 | 30): Promise<number> => {
@@ -39,20 +56,33 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .lt("confirmed_at", upper);
     if (error) throw new Error(`winback ${offset}: ${error.message}`);
     let fired = 0;
+    const event = offset === 14 ? "winback_d14" : "winback_d30";
     for (const row of data ?? []) {
+      // Already sent this event to this customer → skip (dedup).
+      if (alreadySent.has(`${row.customer_id}:${event}`)) continue;
       const email = await shopifyAdmin.getCustomerEmail(row.customer_id).catch(() => null);
       if (!email) continue;
-      const event = offset === 14 ? "winback_d14" : "winback_d30";
       try {
         await klaviyo.trackEvent(event, email, {
           cancelledAt: row.confirmed_at,
           windowDay: offset,
         });
-        fired++;
       } catch (err) {
         // PII sweep 2026-05-22: log customer_id not email.
         console.warn(`[winback ${offset}] klaviyo failed for customer ${row.customer_id}:`, err);
+        continue;
       }
+      // Persist the dedup marker right after the successful fire so the 2-day
+      // window never double-sends. A lost marker (insert error) is logged and at
+      // worst risks one resend, never a crash.
+      const { error: logErr } = await sb
+        .from("email_logs")
+        .insert({ customer_id: row.customer_id, template_id: event, metadata: { windowDay: offset } });
+      if (logErr) {
+        console.warn(`[winback ${offset}] email_logs insert failed for customer ${row.customer_id}:`, logErr.message);
+      }
+      alreadySent.add(`${row.customer_id}:${event}`);
+      fired++;
     }
     return fired;
   };
