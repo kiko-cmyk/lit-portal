@@ -42,7 +42,9 @@ export function LangProvider({
       method: "PATCH",
       body: JSON.stringify({ language: l }),
     }).catch(() => {});
-    router.push(swapLocale(pathname, l));
+    router.push(
+      swapLocale(pathname, l, typeof window !== "undefined" ? window.location.search : ""),
+    );
   };
 
   return <LangCtx.Provider value={{ lang: locale, setLang }}>{children}</LangCtx.Provider>;
