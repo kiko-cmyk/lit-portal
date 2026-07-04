@@ -338,6 +338,21 @@ create index if not exists idx_auth_sessions_customer on auth_sessions(customer_
 create index if not exists idx_auth_sessions_expires on auth_sessions(expires_at);
 
 -- ============================================================
+-- 5c. Charge-now idempotency lock
+-- ============================================================
+-- Short-lived per-subscription mutex so two near-simultaneous "charge now"
+-- requests can't both reach Seal (defense-in-depth on top of Seal's own
+-- "already scheduled" rejection). The route acquires this before calling Seal
+-- and releases it in a finally; a stale row left by a crashed request is
+-- self-healed after ~2 min. Acquisition is FAIL-OPEN — a lock-table error never
+-- blocks a legitimate charge.
+create table if not exists charge_now_locks (
+  seal_subscription_id bigint primary key,
+  customer_id          text not null,
+  created_at           timestamptz not null default now()
+);
+
+-- ============================================================
 -- 6. RLS policies
 -- ============================================================
 -- Service role bypasses RLS; portal API routes always run with service role.
@@ -362,6 +377,7 @@ alter table cancellations          enable row level security;
 alter table email_logs             enable row level security;
 alter table webhook_log            enable row level security;
 alter table auth_sessions          enable row level security;
+alter table charge_now_locks       enable row level security;
 -- NOTE: email_change_requests and rate_buckets are created in their own
 -- migration files (database/migrations/2026-05-22_*.sql) and enable RLS
 -- there. They are NOT created here, so don't add their ALTER statements to

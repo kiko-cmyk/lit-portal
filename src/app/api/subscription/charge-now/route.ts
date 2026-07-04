@@ -12,7 +12,12 @@ import {
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
+import { supabaseAdmin } from "@/lib/supabase";
 import type { ChargeNowResponse, Frequency } from "@/lib/types";
+
+// Max plausible duration of a chargeNow call — a lock older than this is
+// treated as stale (a crashed prior request) and reclaimed.
+const CHARGE_LOCK_STALE_MS = 120_000;
 
 // POST /apps/portal/api/subscription/charge-now
 //
@@ -75,6 +80,40 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     throw new ApiHttpError(400, "cutoff_passed", "Next order already ships within 24h");
   }
 
+  // Idempotency mutex: acquire a per-subscription lock BEFORE calling Seal so
+  // two near-simultaneous charge-now requests can't both reach Seal and
+  // double-charge. FAIL-OPEN — any lock-infra error just proceeds (Seal's own
+  // "already scheduled" guard still applies); the lock can only ADD protection,
+  // never block a legitimate charge.
+  const sb = supabaseAdmin();
+  let lockHeld = false;
+  try {
+    // Self-heal a stale lock left by a crashed request.
+    await sb
+      .from("charge_now_locks")
+      .delete()
+      .eq("seal_subscription_id", sub.id)
+      .lt("created_at", new Date(Date.now() - CHARGE_LOCK_STALE_MS).toISOString());
+    const { error: lockErr } = await sb
+      .from("charge_now_locks")
+      .insert({ seal_subscription_id: sub.id, customer_id: ctx.customerId });
+    if (lockErr) {
+      if ((lockErr as { code?: string }).code === "23505") {
+        throw new ApiHttpError(
+          409,
+          "charge_already_scheduled",
+          "A charge for this subscription is already being processed. Try again in a few minutes.",
+        );
+      }
+      console.error("[charge-now] lock acquire failed, proceeding (fail-open):", lockErr.message);
+    } else {
+      lockHeld = true;
+    }
+  } catch (e) {
+    if (e instanceof ApiHttpError) throw e; // the 409 above
+    console.error("[charge-now] lock error, proceeding (fail-open):", e);
+  }
+
   // Charge now + reset the schedule so the cadence re-anchors on today.
   try {
     await seal.chargeNow(sub.id, { resetSchedule: true });
@@ -95,6 +134,13 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
       );
     }
     throw err;
+  } finally {
+    // Release the lock (best-effort) so a later legitimate charge isn't blocked.
+    // On success, Seal's own "already scheduled" guard covers any request that
+    // arrives after this point.
+    if (lockHeld) {
+      await sb.from("charge_now_locks").delete().eq("seal_subscription_id", sub.id);
+    }
   }
 
   // Best-effort estimate of the new next ship date (today + one cycle) for
