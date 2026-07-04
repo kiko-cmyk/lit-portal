@@ -49,8 +49,16 @@ export const POST = withCustomer(async (req, ctx) => {
   if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
   const subs = await seal.getSubscriptionsByEmail(email);
-  // Find the most recent subscription (cancelled or otherwise) for this customer
-  const sub = subs.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
+  // Reactivation targets a CANCELLED subscription. For multi-sub customers,
+  // "most recent" alone could pick a still-ACTIVE sub and reactivate the wrong
+  // one — prefer a cancelled (or scheduled-to-cancel) sub, and only fall back to
+  // most-recent if none is found. Single-sub customers are unaffected.
+  const cancelled = subs.filter(
+    (s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for,
+  );
+  const sub = [...(cancelled.length ? cancelled : subs)].sort((a, b) =>
+    b.order_placed.localeCompare(a.order_placed),
+  )[0];
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/reactivate");
 
