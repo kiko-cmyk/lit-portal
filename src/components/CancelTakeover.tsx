@@ -60,7 +60,9 @@ export function CancelTakeover({
   subscription,
   onClose,
 }: {
-  customer: CustomerProfile;
+  /** Unused inside the component; optional so the Hub can open the flow even
+   *  when the /api/customer profile fetch failed (customer === null). */
+  customer?: CustomerProfile | null;
   subscription: Subscription | null;
   onClose: () => void;
   /** Legacy pivot callbacks (solutions are now inline; kept for call-site compat). */

@@ -59,6 +59,7 @@ export default function HubPage() {
   const [showSkip, setShowSkip] = useState(false);
   const [showChargeNow, setShowChargeNow] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
   const [justSkipped, setJustSkipped] = useState<boolean>(
     () => readJustSkipped() !== null,
   );
@@ -145,6 +146,8 @@ export default function HubPage() {
     // reproduces the "sub orfana 13635794" incident. Now we call the proper
     // endpoint; only on `reactivation_window_expired` (90d hold elapsed) or
     // `second_cancel_no_reactivation` do we send them to the storefront.
+    if (reactivating) return; // guard against a double-tap firing two POSTs
+    setReactivating(true);
     try {
       await api("/api/subscription/reactivate", { method: "POST" });
       // Refetch dashboard so the Hub flips out of post-cancel mode.
@@ -158,6 +161,8 @@ export default function HubPage() {
       }
       console.error("[hub] reactivate failed", e);
       setError(code ?? "reactivate_failed");
+    } finally {
+      setReactivating(false);
     }
   };
 
@@ -275,6 +280,7 @@ export default function HubPage() {
             dropsHeld={drops.balance}
             cardsKept={collectionEarned}
             onReactivate={handleReactivate}
+            busy={reactivating}
           />
         ) : (
           <>
@@ -426,11 +432,17 @@ export default function HubPage() {
           }}
         />
       )}
-      {showCancel && customer && (
+      {showCancel && (
         <CancelTakeover
           customer={customer}
           subscription={sub}
-          onClose={() => setShowCancel(false)}
+          onClose={() => {
+            setShowCancel(false);
+            // Reflect the cancellation (or any change the wizard made) in the
+            // Hub without a manual reload — mirrors account/page.tsx. Without
+            // this the Hub kept showing the active state after cancelling.
+            api<HubDashboard>("/api/hub/dashboard").then(setData).catch(() => {});
+          }}
           onPivotToSkip={() => {
             setShowCancel(false);
             setShowSkip(true);
