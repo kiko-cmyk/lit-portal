@@ -456,6 +456,8 @@ class SealClient {
       price?: string;       // per-unit; omit to let Seal use Shopify default
       sellingPlanId?: string;
       properties?: Record<string, unknown>;
+      /** Add-to-next-order only: Seal removes it after the next renewal. */
+      oneTime?: boolean;
     }>,
   ): Promise<void> {
     const body = {
@@ -469,7 +471,7 @@ class SealClient {
         sku: it.sku,
         taxable: it.taxable === false ? 0 : 1,
         requires_shipping: it.requiresShipping === false ? 0 : 1,
-        one_time: 0,
+        one_time: it.oneTime ? 1 : 0,
         ...(it.price !== undefined ? { price: it.price } : {}),
         ...(it.sellingPlanId !== undefined ? { selling_plan_id: it.sellingPlanId } : {}),
         ...(it.properties !== undefined ? { properties: it.properties } : {}),
@@ -763,19 +765,39 @@ class SealClient {
   }
 
   /**
-   * Add a one-time product to the next billing/shipment.
-   * Used by Extras (rewards: Bottle, Merch) and Add-to-Box.
-   * Best-guess key: `one_time_items` array. To be verified against sandbox.
+   * Add a one-time product to the NEXT order (Seal removes it after that
+   * renewal). Used by Extras (add-to-box) and rewards/claim (Bottle, Merch).
+   *
+   * Correct Seal contract (verified against the Merchant API docs 2026-07-04):
+   * the SAME `add_items` action used for plan swaps, with `one_time: 1` on the
+   * item — NOT a separate `one_time_items` key. The old key was an unverified
+   * guess that silently no-op'd (Seal returned success while adding nothing).
+   * add_items needs the full line (product_id, title, price, …), so we resolve
+   * it from Shopify first.
    */
   async addOneTimeProduct(
     subscriptionId: number,
     variantId: string,
     quantity: number,
   ): Promise<void> {
-    const numericVariantId = variantId.replace(/^gid:\/\/shopify\/ProductVariant\//, "");
-    await this.editSubscription(subscriptionId, {
-      one_time_items: [{ variant_id: numericVariantId, quantity }],
-    });
+    const { shopifyAdmin } = await import("@/lib/shopify-admin");
+    const v = await shopifyAdmin.getVariantForSealAddItems(variantId);
+    if (!v) {
+      throw new SealApiError(400, `addOneTimeProduct: variant ${variantId} not found in Shopify`);
+    }
+    await this.addItems(subscriptionId, [
+      {
+        productId: v.productId,
+        variantId: v.variantId,
+        quantity,
+        title: v.title,
+        sku: v.sku,
+        taxable: v.taxable,
+        requiresShipping: v.requiresShipping,
+        price: v.price,
+        oneTime: true,
+      },
+    ]);
   }
 }
 

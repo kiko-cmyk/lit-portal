@@ -47,7 +47,13 @@ export const POST = withCustomer(async (req, ctx) => {
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/extras");
 
   const next = getNextBillingAttempt(sub);
-  if (next && isWithinCutoff(next.date)) {
+  if (!next) {
+    // No upcoming order to attach the extra to (Seal mid-regeneration, or the
+    // sub has no pending attempt). Don't silently attach to whatever Seal
+    // generates next with no cutoff protection — reject so the customer retries.
+    throw new ApiHttpError(409, "no_pending_attempt", "No upcoming order to add this to yet. Please try again in a moment.");
+  }
+  if (isWithinCutoff(next.date)) {
     throw new ApiHttpError(400, "cutoff_passed", "Cannot add extras within 24h of next ship");
   }
 
