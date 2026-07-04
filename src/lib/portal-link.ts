@@ -40,7 +40,21 @@ export function orderDetailHref(locale: Lang, orderId: string): string {
  * slug in whichever locale they're currently on, NOT the canonical EN
  * post-rewrite), so we look up the route in both locales' slug maps.
  */
-export function swapLocale(currentPathname: string, nextLocale: Lang): string {
+export function swapLocale(
+  currentPathname: string,
+  nextLocale: Lang,
+  search = "",
+): string {
+  // Preserve the query string (e.g. `?action=skip` from the renewal-reminder
+  // deep-link, or the `?__dev_customer`/`?__dry_run` testing params) so a
+  // language toggle keeps you on the same page in the same state instead of
+  // dropping everything after the path.
+  const q =
+    search && search !== "?"
+      ? search.startsWith("?")
+        ? search
+        : `?${search}`
+      : "";
   const parts = currentPathname.split("/");
   const slug = parts[2];
   // Preserve any trailing segments (e.g. an order id in /es/pedidos/12345) so
@@ -51,9 +65,9 @@ export function swapLocale(currentPathname: string, nextLocale: Lang): string {
   const route = routes.find(
     (r) => SLUGS.en[r] === slug || SLUGS.es[r] === slug,
   );
-  if (!route) return `${BASE}/${nextLocale}/${SLUGS[nextLocale].home}`;
+  if (!route) return `${BASE}/${nextLocale}/${SLUGS[nextLocale].home}${q}`;
   const base = portalHref(nextLocale, route);
-  return rest.length ? `${base}/${rest.join("/")}` : base;
+  return (rest.length ? `${base}/${rest.join("/")}` : base) + q;
 }
 
 /**
