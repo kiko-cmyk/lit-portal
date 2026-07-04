@@ -271,9 +271,14 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
     .graphql<{ customers: { edges: Array<{ node: { id: string } }> } }>(
       `query findByEmail($q: String!) { customers(first: 1, query: $q) { edges { node { id } } } }`,
       { q: `email:"${s.email.replace(/"/g, '\\"')}"` },
-    )
-    .catch(() => null);
-  const customerGid = customer?.customers.edges[0]?.node.id;
+    );
+  // Intentionally NO `.catch(() => null)`: a THROWN Shopify error (network / 5xx
+  // / throttle, after shopify-admin's own retries) must propagate so the seal
+  // webhook returns 500 and Seal REDELIVERS. Swallowing it silently dropped a
+  // subscription.cancelled/paused/updated event on a transient blip, leaving the
+  // cache stale-'active'. A genuine "customer not found" is empty edges (not a
+  // throw) and is handled by the guard below.
+  const customerGid = customer?.customers?.edges?.[0]?.node?.id;
   if (!customerGid) {
     console.warn(`[seal-webhook] no Shopify customer for Seal sub ${s.id}`);
     return;
