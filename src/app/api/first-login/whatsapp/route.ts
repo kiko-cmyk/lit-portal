@@ -45,7 +45,16 @@ export const POST = withCustomer(async (req, ctx) => {
   let dropsAwarded = 0;
   if (body.optIn && !wasOptedIn) {
     const amount = DROPS_AMOUNTS.whatsapp_optin ?? 50;
-    await awardDrops(ctx.customerId, "whatsapp_optin", amount, { source: "first_login" });
+    // dedupKey makes the +50 award idempotent per customer, closing the TOCTOU
+    // race between the `wasOptedIn` read above and this insert (two concurrent
+    // opt-ins would otherwise both award).
+    await awardDrops(
+      ctx.customerId,
+      "whatsapp_optin",
+      amount,
+      { source: "first_login" },
+      `whatsapp_optin:${ctx.customerId}`,
+    );
     dropsAwarded = amount;
   }
 

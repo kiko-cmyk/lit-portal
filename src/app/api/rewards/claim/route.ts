@@ -161,12 +161,16 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     throw new Error(`claim insert failed: ${claimErr.message}`);
   }
 
-  // Step 2: deduct drops (negative event tagged with claimId — idempotent if
-  // the awardDrops helper checks metadata.claimId in its unique index).
-  await awardDrops(ctx.customerId, "reward_claim", -threshold, {
-    rewardId: body.rewardId,
-    claimId: claim?.id,
-  });
+  // Step 2: deduct drops (negative event). dedupKey makes the deduction
+  // idempotent at the DB layer (unique index on dedup_key) so a retry/redrive
+  // of this claim can't double-debit.
+  await awardDrops(
+    ctx.customerId,
+    "reward_claim",
+    -threshold,
+    { rewardId: body.rewardId, claimId: claim?.id },
+    `reward_claim:${claim?.id}`,
+  );
 
   // Step 3: event reservation (also persisted before Seal side-effect).
   if (body.rewardId === "event_2500" && claim) {
@@ -181,28 +185,48 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
   if (pendingSideEffect && claim) {
     try {
       await pendingSideEffect();
-      await sb
+      const { error: confErr } = await sb
         .from("claimed_rewards")
         .update({ fulfillment_status: "confirmed" })
         .eq("id", claim.id);
+      // Don't fail the request over the status write — the side-effect already
+      // succeeded, so the reward IS fulfilled. Just log; the row stays 'pending'
+      // but the (customer_id, reward_id) uniqueness still blocks a re-claim.
+      if (confErr) console.error(`[claim] confirm status update failed for ${claim.id}: ${confErr.message}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[claim] seal side-effect failed for claim ${claim.id}: ${msg}`);
-      await sb
+      // Undo the step-2 deduction so the customer isn't debited for a reward
+      // they never received. We DELETE the deduction event rather than writing a
+      // compensating +threshold award, because `lifetime_earned` is summed from
+      // POSITIVE amounts only (recompute_drops_balance) — a positive refund
+      // would inflate lifetime even though the balance nets to 0. The trigger
+      // fires on DELETE and restores the balance. Idempotent: a redrive deletes
+      // 0 rows.
+      const { error: refundErr } = await sb
+        .from("drops_events")
+        .delete()
+        .eq("dedup_key", `reward_claim:${claim.id}`);
+      if (refundErr) {
+        console.error(`[claim] REFUND FAILED for claim ${claim.id} — drops left debited: ${refundErr.message}`);
+      }
+      const { error: rbErr } = await sb
         .from("claimed_rewards")
         .update({
           fulfillment_status: "failed_rollback",
           fulfillment_metadata: { ...fulfillmentMetadata, sealError: msg },
         })
         .eq("id", claim.id);
+      if (rbErr) console.error(`[claim] failed_rollback status update failed for ${claim.id}: ${rbErr.message}`);
       throw new ApiHttpError(502, "seal_side_effect_failed", msg);
     }
   } else if (claim) {
     // event_2500 had no external side-effect — already complete.
-    await sb
+    const { error: confErr } = await sb
       .from("claimed_rewards")
       .update({ fulfillment_status: "confirmed" })
       .eq("id", claim.id);
+    if (confErr) console.error(`[claim] confirm status update failed for ${claim.id}: ${confErr.message}`);
   }
 
   // Re-read balance for response
