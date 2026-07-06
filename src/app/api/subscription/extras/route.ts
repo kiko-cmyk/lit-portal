@@ -43,11 +43,13 @@ export const POST = withCustomer(async (req, ctx) => {
   }
 
   const subs = await seal.getSubscriptionsByEmail(email);
-  // Multi-sub: if a specific sub is requested, use it (subs are already
-  // email-owned, so matching by id within this list is ownership-safe); else
+  // Multi-sub: the selected sub comes from ?seal_subscription_id (injected by
+  // api-client from the chooser) with the body as fallback; subs are already
+  // email-owned, so matching by id within this list is ownership-safe. Absent →
   // auto-pick the active one.
-  const sub = body.sealSubscriptionId
-    ? subs.find((s) => String(s.id) === String(body.sealSubscriptionId))
+  const subSel = url.searchParams.get("seal_subscription_id") ?? body.sealSubscriptionId;
+  const sub = subSel
+    ? subs.find((s) => String(s.id) === String(subSel))
     : subs.find((s) => s.status === "ACTIVE");
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No matching sub for ${email}`);
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/extras");

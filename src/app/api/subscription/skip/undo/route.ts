@@ -21,13 +21,10 @@ export const POST = withCustomer(async (req, ctx) => {
   }
 
   const body = (await req.json().catch(() => ({}))) as { sealSubscriptionId?: number | string };
-  let sub: SealSubscription | null = await resolveActiveSubFast(
-    ctx.customerId,
-    email,
-    body.sealSubscriptionId,
-  );
-  if (!sub && body.sealSubscriptionId) {
-    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${body.sealSubscriptionId}`);
+  const subSel = url.searchParams.get("seal_subscription_id") ?? body.sealSubscriptionId;
+  let sub: SealSubscription | null = await resolveActiveSubFast(ctx.customerId, email, subSel);
+  if (!sub && subSel) {
+    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${subSel}`);
   }
   if (!sub) {
     const subs = await seal.getSubscriptionsByEmail(email);

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { SubscriptionGate } from "@/components/SubscriptionGate";
 import { LangProvider, type Lang } from "@/lib/i18n";
 
 /**
@@ -19,7 +20,11 @@ export default async function LocaleLayout({
 }) {
   const { locale } = await params;
   if (!LOCALES.includes(locale as Lang)) notFound();
-  return <LangProvider locale={locale as Lang}>{children}</LangProvider>;
+  return (
+    <LangProvider locale={locale as Lang}>
+      <SubscriptionGate>{children}</SubscriptionGate>
+    </LangProvider>
+  );
 }
 
 export function generateStaticParams() {

@@ -64,8 +64,53 @@ export function clearSessionToken() {
   }
 }
 
+const SELECTED_SUB_KEY = "lit_selected_subscription_id";
+
+export function getSelectedSubscription(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(SELECTED_SUB_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setSelectedSubscription(id: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SELECTED_SUB_KEY, id);
+  } catch {
+    // ignore
+  }
+}
+
+export function clearSelectedSubscription() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(SELECTED_SUB_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Multi-sub: append the chosen subscription (picked on the first-screen chooser)
+ * as `?seal_subscription_id` to EVERY API call, so the whole portal — Hub,
+ * Account, and mutations — operates on the selected sub. Absent for single-sub
+ * customers (nothing ever set) → no param → auto-pick, identical to before. An
+ * explicit param already on the path wins.
+ */
+function withSelectedSub(path: string): string {
+  if (typeof window === "undefined") return path;
+  if (/[?&]seal_subscription_id=/.test(path)) return path;
+  const sel = getSelectedSubscription();
+  if (!sel) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}seal_subscription_id=${encodeURIComponent(sel)}`;
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const url = `${BASE}${withDevParams(withLang(path))}`;
+  const url = `${BASE}${withDevParams(withLang(withSelectedSub(path)))}`;
   // Attach our own session token (issued after Customer Account API
   // OAuth). We send it as `X-LIT-Session`, NOT `Authorization: Bearer`:
   // Shopify App Proxy intercepts `Authorization` on POST/PATCH/DELETE
@@ -144,6 +189,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     // unauthorized, plus the page itself handles 401-ish codes).
     if (code === "session_expired" || code === "session_invalid") {
       clearSessionToken();
+    }
+
+    // Multi-sub self-heal: a selected subscription that no longer resolves
+    // (cancelled/deleted, or a stale localStorage pick) would otherwise 404 the
+    // whole portal. Drop the selection so the next load re-shows the chooser /
+    // falls back to auto-pick.
+    if (code === "subscription_not_found" && getSelectedSubscription()) {
+      clearSelectedSubscription();
     }
 
     throw new ApiClientError(res.status, code, message);
