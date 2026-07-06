@@ -21,6 +21,17 @@ const SEAL_MAX_RETRIES = 2;
 const SEAL_BACKOFF_MS = 300;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Backoff with jitter, honouring Seal's `Retry-After` header when present.
+// Jitter avoids retry stampedes across concurrent requests; Retry-After avoids
+// hammering an already-throttled Seal (which just deepens the throttle). Capped.
+function backoffMs(attempt: number, res?: Response): number {
+  const raSec = Number(res?.headers.get("retry-after") ?? 0);
+  const retryAfter = Number.isFinite(raSec) && raSec > 0 ? raSec * 1000 : 0;
+  const base = SEAL_BACKOFF_MS * (attempt + 1);
+  const jitter = Math.floor(Math.random() * 250);
+  return Math.min(Math.max(base, retryAfter) + jitter, 5000);
+}
+
 function token(): string {
   const t = process.env.SEAL_API_TOKEN;
   if (!t) throw new Error("SEAL_API_TOKEN not set");
@@ -138,7 +149,7 @@ class SealClient {
           attempt < SEAL_MAX_RETRIES &&
           (res.status === 429 || res.status >= 500)
         ) {
-          await sleep(SEAL_BACKOFF_MS * (attempt + 1));
+          await sleep(backoffMs(attempt, res));
           return this.req<T>(path, init, attempt + 1);
         }
         const body = await res.text().catch(() => "");
@@ -156,7 +167,7 @@ class SealClient {
         name !== "AbortError" &&
         !(err instanceof SealApiError)
       ) {
-        await sleep(SEAL_BACKOFF_MS * (attempt + 1));
+        await sleep(backoffMs(attempt));
         return this.req<T>(path, init, attempt + 1);
       }
       throw err;
