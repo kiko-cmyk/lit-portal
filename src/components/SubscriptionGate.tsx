@@ -104,13 +104,15 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
 
   return (
     <SwitchContext.Provider value={{ canSwitch: subs.length > 1, openChooser: () => setPhase("chooser") }}>
+      {/* Desktop switches from the TopNav ("Cambiar de cuenta"). This floating
+          pill is MOBILE-ONLY, where the compact header has no menu bar. */}
       {subs.length > 1 && (
         <button
           type="button"
           onClick={() => setPhase("chooser")}
-          className="fixed right-3 top-3 z-[60] rounded-full border border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-brisky-cream)]/90 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.15em] opacity-70 backdrop-blur transition hover:opacity-100"
+          className="fixed right-3 top-3 z-[60] rounded-full border border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-brisky-cream)]/90 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.15em] opacity-70 backdrop-blur transition hover:opacity-100 md:hidden"
         >
-          <T en="Switch" es="Cambiar" />
+          <T en="Switch account" es="Cambiar de cuenta" />
         </button>
       )}
       {children}
