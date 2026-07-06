@@ -61,6 +61,16 @@ export const POST = withCustomer(async (req, ctx) => {
   const requested = subSel
     ? subs.find((s) => String(s.id) === String(subSel))
     : null;
+  // Requested-but-unresolved must 404, never silently fall back to a different
+  // sub (audit 2026-07-06 — same policy as every other route). And reactivating
+  // a sub that is plainly ACTIVE is a client-state bug: reject it instead of
+  // poking Seal.
+  if (subSel && !requested) {
+    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${subSel}`);
+  }
+  if (requested && requested.status === "ACTIVE" && !requested.cancellation_scheduled_for) {
+    throw new ApiHttpError(400, "subscription_not_cancelled", "Subscription is already active");
+  }
   const cancelled = subs.filter(
     (s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for,
   );

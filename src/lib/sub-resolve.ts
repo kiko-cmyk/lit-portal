@@ -56,20 +56,27 @@ export async function resolveActiveSubFast(
   email: string,
   sealSubId?: number | string | null,
 ): Promise<SealSubscription | null> {
-  try {
-    // Explicit sub requested (multi-sub selector / ?seal_subscription_id): resolve
-    // that exact sub and only return it if it belongs to this customer (email
-    // match = ownership). Status is validated by the caller — routes reject a
-    // non-active sub where they must — so we don't force ACTIVE here: a selected
-    // scheduled-to-cancel sub is still viewable.
-    if (sealSubId !== undefined && sealSubId !== null && String(sealSubId).length > 0) {
-      const sub = await seal.getSubscriptionById(Number(sealSubId));
-      if (sub && sub.email?.trim().toLowerCase() === email.trim().toLowerCase()) {
-        return sub;
-      }
-      return null;
+  // Explicit sub requested (multi-sub selector / ?seal_subscription_id): resolve
+  // that exact sub and only return it if it belongs to this customer (email
+  // match = ownership). Status is validated by the caller — routes reject a
+  // non-active sub where they must — so we don't force ACTIVE here: a selected
+  // scheduled-to-cancel sub is still viewable.
+  //
+  // OUTSIDE the swallow-all below, with throwTransient: a Seal 429/5xx here
+  // must surface as a retryable 503 seal_busy, NOT null — callers turn null
+  // into 404 subscription_not_found, which the FE treats as permanent ("no
+  // subscription") and uses to clear the multi-sub selection (audit 2026-07-06).
+  if (sealSubId !== undefined && sealSubId !== null && String(sealSubId).length > 0) {
+    const sub = await seal.getSubscriptionById(Number(sealSubId), undefined, {
+      throwTransient: true,
+    });
+    if (sub && sub.email?.trim().toLowerCase() === email.trim().toLowerCase()) {
+      return sub;
     }
+    return null;
+  }
 
+  try {
     // Default (no explicit id): auto-pick from the cache. `.order().limit(1)`
     // avoids the PostgREST ">1 row" throw once a customer has multiple cached
     // subs (after the multi-sub PK flip) — deterministically picks the
