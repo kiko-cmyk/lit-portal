@@ -10,6 +10,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { QAIcons } from "@/components/QuickActionButton";
+import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -63,6 +64,7 @@ export default function AccountPage() {
   const [emailChangeConfirmed, setEmailChangeConfirmed] = useState(false);
   const t = useLang();
   const lang = useLangValue();
+  const { canSwitch, openChooser } = useSubscriptionSwitch();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
 
   useEffect(() => {
@@ -241,6 +243,19 @@ export default function AccountPage() {
             </div>
           </div>
         </section>
+
+        {canSwitch && (
+          <button
+            type="button"
+            onClick={openChooser}
+            className="mx-6 mb-5 flex w-[calc(100%-3rem)] items-center justify-between rounded-2xl border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-5 py-3.5 text-left transition hover:border-[color:var(--color-lit-grey)]/40 md:mx-0 md:w-full"
+          >
+            <span className="text-sm font-semibold text-[color:var(--color-lit-grey)]">
+              <T en="Switch subscription" es="Cambiar de suscripción" />
+            </span>
+            <span className="text-lg opacity-40">⇄</span>
+          </button>
+        )}
 
         {subActive && (
           <section className="mx-6 mb-5 grid grid-cols-3 gap-1.5 md:mx-0 md:grid-cols-5">
