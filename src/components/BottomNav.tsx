@@ -131,18 +131,20 @@ export function TopNav() {
               </Link>
             );
           })}
+          {/* LangToggle siempre visible — el cliente lo quiere en el header
+              tanto en mobile como en desktop (Juan 2026-05-19). */}
+          <LangToggle />
+          {/* Multi-sub switch: pill al extremo derecho, etiqueta corta
+              "CAMBIAR" para que quepa (Juan 2026-07-06). */}
           {canSwitch && (
             <button
               type="button"
               onClick={openChooser}
-              className="cursor-pointer text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/55 transition-colors hover:text-[color:var(--color-lit-grey)]"
+              className="cursor-pointer rounded-full border border-[color:var(--color-lit-grey)]/25 bg-[color:var(--color-sharp-white)]/60 px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]/70 transition hover:border-[color:var(--color-lit-grey)]/50 hover:text-[color:var(--color-lit-grey)]"
             >
-              {t({ en: "Switch account", es: "Cambiar de cuenta" })}
+              {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
-          {/* LangToggle siempre visible — el cliente lo quiere en el header
-              tanto en mobile como en desktop (Juan 2026-05-19). */}
-          <LangToggle />
         </div>
       </div>
     </nav>
