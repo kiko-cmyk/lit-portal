@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, getSelectedSubscription, setSelectedSubscription } from "@/lib/api-client";
 import { SubscriptionChooser } from "@/components/SubscriptionChooser";
 import { T } from "@/lib/i18n";
 import type { Subscription } from "@/lib/types";
+
+/**
+ * Lets any page (e.g. Account) offer a "switch subscription" control that
+ * re-opens the chooser, and know whether the customer even has >1 sub.
+ */
+type SubscriptionSwitch = { canSwitch: boolean; openChooser: () => void };
+const SwitchContext = createContext<SubscriptionSwitch>({ canSwitch: false, openChooser: () => {} });
+export function useSubscriptionSwitch(): SubscriptionSwitch {
+  return useContext(SwitchContext);
+}
 
 /**
  * Portal-wide gate for multi-subscription customers. Wraps every [locale] page
@@ -59,7 +69,7 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   }
 
   return (
-    <>
+    <SwitchContext.Provider value={{ canSwitch: subs.length > 1, openChooser: () => setGate(true) }}>
       {subs.length > 1 && (
         <button
           type="button"
@@ -70,6 +80,6 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
         </button>
       )}
       {children}
-    </>
+    </SwitchContext.Provider>
   );
 }
