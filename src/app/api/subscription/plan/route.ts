@@ -7,6 +7,7 @@ import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT }
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
+import { requestedSubIdFrom } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { Frequency, Subscription } from "@/lib/types";
 
@@ -169,9 +170,14 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       throw new ApiHttpError(404, "customer_not_found", `No email for ${ctx.customerId}`);
     }
     const sealSubsList = await seal.getSubscriptionsByEmail(email);
-    const matched =
-      sealSubsList.find((s) => s.status === "ACTIVE") ??
-      sealSubsList.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
+    // Multi-sub: if the FE named a sub (body/query id) but the fast-path missed
+    // (cache gap / Seal blip), we must still change THAT sub's plan — never
+    // "the first ACTIVE" one. No id → old auto-pick (older payloads).
+    const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+    const matched = requestedSubId
+      ? sealSubsList.find((s) => String(s.id) === requestedSubId) ?? null
+      : sealSubsList.find((s) => s.status === "ACTIVE") ??
+        sealSubsList.sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0];
     if (!matched) {
       throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
     }

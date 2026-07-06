@@ -2,6 +2,43 @@ import { seal, type SealSubscription } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
+ * The sub a request explicitly targets: body value first, else the
+ * `?seal_subscription_id` param api-client injects on every call once a
+ * multi-sub customer picks a subscription in the chooser. Null = nothing
+ * requested (single-sub behaviour).
+ */
+export function requestedSubIdFrom(
+  req: { url: string },
+  bodyId?: number | string | null,
+): string | null {
+  if (bodyId !== undefined && bodyId !== null && String(bodyId).length > 0) {
+    return String(bodyId);
+  }
+  return new URL(req.url).searchParams.get("seal_subscription_id");
+}
+
+/**
+ * Multi-sub slow-path guard (audit 2026-07-06): when the request names a
+ * specific subscription, the email-scan fallback must resolve THAT sub — never
+ * silently act on "the first ACTIVE" one, which for a multi-sub customer can be
+ * a DIFFERENT subscription (wrong-sub charge/skip/cancel/plan/discount). The
+ * pre-fix pattern hit exactly that whenever the fast-path missed: the cache
+ * lacks most multi-sub second rows, so verifyOwnershipFast=false → email scan →
+ * first ACTIVE. Returns null when the requested sub isn't in the customer's
+ * list (callers 404 — the scan is email-scoped, so ownership is inherent).
+ * With no requested id, auto-picks the first ACTIVE sub (unchanged).
+ */
+export function pickRequestedSub(
+  subs: SealSubscription[],
+  requestedSubId: string | null,
+): SealSubscription | null {
+  if (requestedSubId) {
+    return subs.find((s) => String(s.id) === requestedSubId) ?? null;
+  }
+  return subs.find((s) => s.status === "ACTIVE") ?? null;
+}
+
+/**
  * Fast-resolve the customer's ACTIVE Seal subscription via the cached
  * `seal_subscription_id` in Supabase `subscriptions` (populated by the Hub),
  * using Seal's singular by-id endpoint — ~1 quick call instead of the full

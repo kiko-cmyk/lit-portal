@@ -5,6 +5,7 @@ import { findAppliedDiscountCodeId, seal, type SealSubscription } from "@/lib/se
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
+import { pickRequestedSub, requestedSubIdFrom } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -63,10 +64,11 @@ export const POST = withCustomer<{ applied: boolean; code: string }>(async (req,
   // ── Resolve the subscription (fast-path, slow-path fallback — like /skip). ──
   let sub: SealSubscription | null = null;
   let email: string | null = null;
-  if (body.sealSubscriptionId !== undefined) {
-    const owns = await verifyOwnershipFast(Number(body.sealSubscriptionId), ctx.customerId);
+  const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+  if (requestedSubId) {
+    const owns = await verifyOwnershipFast(Number(requestedSubId), ctx.customerId);
     if (owns) {
-      sub = await seal.getSubscriptionById(Number(body.sealSubscriptionId));
+      sub = await seal.getSubscriptionById(Number(requestedSubId));
       if (sub) {
         email = sub.email ?? null;
         assertSubscriptionBelongsToCustomer(sub, email ?? "", "retention-discount:fast");
@@ -77,7 +79,8 @@ export const POST = withCustomer<{ applied: boolean; code: string }>(async (req,
     email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
     if (!email) throw new ApiHttpError(404, "customer_not_found", "");
     const subs = await seal.getSubscriptionsByEmail(email);
-    sub = subs.find((s) => s.status === "ACTIVE") ?? null;
+    // Multi-sub: never discount a DIFFERENT sub than the one requested.
+    sub = pickRequestedSub(subs, requestedSubId);
     if (!sub) throw new ApiHttpError(404, "subscription_not_found", "No active subscription");
     assertSubscriptionBelongsToCustomer(sub, email, "retention-discount");
   }

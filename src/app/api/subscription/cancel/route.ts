@@ -6,6 +6,7 @@ import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
+import { requestedSubIdFrom } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CancelStep1Response, CancelStep4Response, CancellationReason } from "@/lib/types";
 
@@ -112,7 +113,13 @@ export const POST = withCustomer(async (req, ctx) => {
     let boxes = 0;
     if (email) {
       const subs = await seal.getSubscriptionsByEmail(email);
-      const sub = subs.find((s) => s.status === "ACTIVE") ?? subs[0];
+      // Multi-sub: stats must describe the sub being cancelled (body/query id),
+      // not "the first ACTIVE" — otherwise the takeover shows the other sub's
+      // box count. No id → old auto-pick (single-sub payloads).
+      const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+      const sub = requestedSubId
+        ? subs.find((s) => String(s.id) === requestedSubId) ?? null
+        : subs.find((s) => s.status === "ACTIVE") ?? subs[0];
       if (sub) {
         assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step1");
         boxes = (sub.billing_attempts ?? []).filter((a) => a.completed_at).length;
@@ -264,13 +271,14 @@ export const POST = withCustomer(async (req, ctx) => {
     // Vercel's budget.
     let sub: SealSubscription | null = null;
     let email: string | null = null;
-    if (body.sealSubscriptionId !== undefined) {
+    const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+    if (requestedSubId) {
       const owns = await verifyOwnershipFast(
-        Number(body.sealSubscriptionId),
+        Number(requestedSubId),
         ctx.customerId,
       );
       if (owns) {
-        sub = await seal.getSubscriptionById(Number(body.sealSubscriptionId));
+        sub = await seal.getSubscriptionById(Number(requestedSubId));
         if (sub) {
           email = sub.email ?? null;
           assertSubscriptionBelongsToCustomer(sub, email ?? "", "subscription/cancel:step4-fast");
@@ -281,9 +289,14 @@ export const POST = withCustomer(async (req, ctx) => {
       email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
       if (!email) throw new ApiHttpError(404, "customer_not_found", "");
       const subs = await seal.getSubscriptionsByEmail(email);
-      sub =
-        subs.find((s) => s.status === "ACTIVE") ??
-        (isRedrive ? subs.find((s) => s.status === "CANCELLED") ?? subs[0] ?? null : null);
+      // Multi-sub: never cancel a DIFFERENT sub than the one requested —
+      // resolve the requested id from the email-scoped list (any status, so a
+      // re-drive whose Seal cancel already went through still resolves), or
+      // 404. Only auto-pick when nothing was requested (single-sub payloads).
+      sub = requestedSubId
+        ? subs.find((s) => String(s.id) === requestedSubId) ?? null
+        : subs.find((s) => s.status === "ACTIVE") ??
+          (isRedrive ? subs.find((s) => s.status === "CANCELLED") ?? subs[0] ?? null : null);
       if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
       assertSubscriptionBelongsToCustomer(sub, email, "subscription/cancel:step4");
     }
