@@ -10,6 +10,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { QAIcons } from "@/components/QuickActionButton";
+import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -63,6 +64,7 @@ export default function AccountPage() {
   const [emailChangeConfirmed, setEmailChangeConfirmed] = useState(false);
   const t = useLang();
   const lang = useLangValue();
+  const { canSwitch, openChooser } = useSubscriptionSwitch();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
 
   useEffect(() => {
@@ -192,6 +194,17 @@ export default function AccountPage() {
             visible={tier?.earned ?? false}
             tierEarnedAt={tier?.earnedAt ?? null}
           />
+          {/* Multi-sub switch: pill al extremo derecho del header móvil (Juan
+              2026-07-06 — antes flotaba y solapaba el nombre). */}
+          {canSwitch && (
+            <button
+              type="button"
+              onClick={openChooser}
+              className="shrink-0 cursor-pointer rounded-full border border-[color:var(--color-lit-grey)]/25 bg-[color:var(--color-sharp-white)]/60 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[color:var(--color-lit-grey)]/70 transition hover:text-[color:var(--color-lit-grey)]"
+            >
+              {t({ en: "Switch", es: "Cambiar" })}
+            </button>
+          )}
         </div>
       </header>
 
