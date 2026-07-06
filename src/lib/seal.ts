@@ -193,6 +193,17 @@ class SealClient {
     const target = email.trim().toLowerCase();
     const fetchPage = (page: number) => {
       const params = new URLSearchParams({
+        // Server-side email filter. WITHOUT this, Seal returns EVERY
+        // subscription in the store (now 51 pages) and we filter client-side —
+        // which fires ~50 parallel page reads on every call and reliably trips
+        // Seal's rate limit (429 → this throws → the whole portal reads as "no
+        // subscription"). With `query`, Seal returns just this email's subs
+        // (total_pages=1 for a normal customer), turning a 51-page store scan
+        // into a single cheap call. `query` is Seal's fuzzy search (email +
+        // name), so we STILL apply the exact-email filter below as a guard.
+        // Fixes the chooser vanishing for multi-sub customers + the sustained
+        // 429s Kiko flagged. (2026-07-06)
+        query: target,
         "with-items": "true",
         "with-billing-attempts": "true",
         page: String(page),
@@ -207,7 +218,8 @@ class SealClient {
       );
     };
 
-    // Round 1: page 1 alone, to learn how many pages there are.
+    // Round 1: page 1 alone, to learn how many pages there are (usually 1 now
+    // that the result set is scoped to a single email).
     const page1 = await fetchPage(1);
     const totalPages = page1?.payload?.total_pages ?? 1;
 
