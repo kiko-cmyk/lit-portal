@@ -461,7 +461,10 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       log("seal-remove-items-failed", { msg });
       let compensated = false;
       try {
-        const afterAdd = await seal.getSubscription(sealSubscriptionId);
+        // Singular by-id endpoint (1 call) — the legacy getSubscription scans
+        // the whole store (~50 pages in parallel) and trips Seal's rate limit,
+        // worst possible move mid-rollback (audit 2026-07-06).
+        const afterAdd = await seal.getSubscriptionById(sealSubscriptionId);
         const added = (afterAdd?.items ?? []).find(
           (it) =>
             !it.is_one_time_item &&
@@ -523,7 +526,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const verifyController = new AbortController();
   const verifyTimer = setTimeout(() => verifyController.abort(), 4_000);
   try {
-    verified = await seal.getSubscription(sealSubscriptionId, verifyController.signal);
+    // Singular by-id endpoint (1 call). The legacy getSubscription paginated
+    // the WHOLE store (~50 pages, Promise.all) on every plan change — firing
+    // exactly while Seal regenerates attempts and the FE re-polls, i.e. the
+    // remaining 429 stampede after the 2026-07-06 getSubscriptionsByEmail fix.
+    verified = await seal.getSubscriptionById(sealSubscriptionId, verifyController.signal);
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") {
       verifyOutcome = "timeout";

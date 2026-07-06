@@ -294,7 +294,22 @@ class SealClient {
    * instead of the 33-page scan `getSubscription` does. Use this when
    * you already know the id (fast-path callers from /plan, /cancel, etc).
    */
-  async getSubscriptionById(id: number, signal?: AbortSignal): Promise<SealSubscription | null> {
+  async getSubscriptionById(
+    id: number,
+    signal?: AbortSignal,
+    opts?: {
+      /**
+       * Rethrow transient Seal failures (429 / 5xx after req()'s retries)
+       * instead of returning null. Callers resolving an EXPLICIT customer
+       * selection must use this: a swallowed throttle reads as "not found",
+       * the route 404s subscription_not_found, and the FE treats that as
+       * permanent — showing "no subscription" and clearing the multi-sub
+       * selection (audit 2026-07-06). With the throw, api-helpers classifies
+       * it as a retryable 503 seal_busy instead.
+       */
+      throwTransient?: boolean;
+    },
+  ): Promise<SealSubscription | null> {
     const params = new URLSearchParams({
       id: String(id),
       "with-items": "true",
@@ -312,10 +327,24 @@ class SealClient {
       return sub;
     } catch (e) {
       if ((e as { name?: string }).name === "AbortError") throw e;
+      if (
+        opts?.throwTransient &&
+        e instanceof SealApiError &&
+        (e.status === 429 || e.status >= 500)
+      ) {
+        throw e;
+      }
       return null;
     }
   }
 
+  /**
+   * @deprecated Full-store paginated scan (no server-side filter): with the
+   * store at ~50 pages it fires them in one Promise.all and reliably trips
+   * Seal's rate limit — the same stampede removed from getSubscriptionsByEmail
+   * on 2026-07-06. Use getSubscriptionById (singular endpoint, 1 call). Kept
+   * only until the next cleanup confirms no external callers remain.
+   */
   async getSubscription(id: number, signal?: AbortSignal): Promise<SealSubscription | null> {
     // Seal silently ignores `?id=` (verified 2026-04-27, re-confirmed
     // 2026-05-14 — passing id=12635109 returned the first sub of page 1
