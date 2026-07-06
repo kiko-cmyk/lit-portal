@@ -4,6 +4,15 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import type { Subscription } from "@/lib/types";
 
+// TEMPORARY rollout allowlist for the multi-sub selector. While set, the plural
+// endpoint returns >1 sub ONLY for these customers, so ONLY they see the
+// selector — everyone else gets at most 1 back (selector stays hidden). Reads
+// otherwise work normally. Remove this gate to open multi-sub to every customer
+// with >1 subscription.
+const SELECTOR_ALLOWLIST = new Set<string>([
+  "27453541548381", // juan@litsalt.com — initial tester
+]);
+
 // GET /apps/portal/api/subscriptions  (PLURAL)
 //
 // Returns ALL of the customer's manageable subscriptions (ACTIVE or scheduled to
@@ -42,5 +51,8 @@ export const GET = withCustomer<{ subscriptions: Subscription[] }>(async (req, c
     return an.localeCompare(bn);
   });
 
-  return { subscriptions: manageable.map((s) => mapToSubscription(s, ctx.customerId)) };
+  const mapped = manageable.map((s) => mapToSubscription(s, ctx.customerId));
+  // Rollout gate: non-allowlisted customers get at most 1 sub → selector hidden.
+  if (!SELECTOR_ALLOWLIST.has(ctx.customerId)) return { subscriptions: mapped.slice(0, 1) };
+  return { subscriptions: mapped };
 });
