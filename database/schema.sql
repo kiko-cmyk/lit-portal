@@ -268,6 +268,9 @@ create table if not exists customer_preferences (
 create table if not exists cancellations (
   id                          uuid primary key default uuid_generate_v4(),
   customer_id                 text not null,
+  -- Multi-sub (2026-07-06): which sub this cancellation targets. Null on
+  -- legacy rows / payloads without an id (pre-multi-sub behaviour).
+  seal_subscription_id        text,
   status                      text not null default 'pending' check (status in ('pending','committing','confirmed')),
   primary_reason              text check (primary_reason in (
                                   'too_expensive','too_much_product','not_using_enough','taking_a_break','dont_like','other'

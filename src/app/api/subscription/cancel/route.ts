@@ -160,13 +160,23 @@ export const POST = withCustomer(async (req, ctx) => {
     if (!body.primaryReason) {
       throw new ApiHttpError(400, "missing_reason", "primaryReason required for step 3");
     }
-    // Upsert — if there's an existing pending row, update it; else insert
-    const { data: existing } = await sb
+    // Multi-sub (audit 2026-07-06): cancellations are per SUB now. Scope the
+    // pending-row reuse to the sub being cancelled so two flows (one per sub)
+    // don't collide — and `.limit(1)` so a legacy second row can't blow up
+    // maybeSingle. Legacy payloads without an id keep the per-customer row.
+    const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+    let existingQuery = sb
       .from("cancellations")
       .select("id, cancel_count_at_event")
       .eq("customer_id", ctx.customerId)
-      .eq("status", "pending")
-      .maybeSingle();
+      .eq("status", "pending");
+    if (requestedSubId) {
+      existingQuery = existingQuery.eq("seal_subscription_id", requestedSubId);
+    }
+    const { data: existingRows } = await existingQuery
+      .order("started_at", { ascending: false })
+      .limit(1);
+    const existing = existingRows?.[0] ?? null;
 
     const { data: prefs } = await sb
       .from("customer_preferences")
@@ -188,6 +198,7 @@ export const POST = withCustomer(async (req, ctx) => {
     } else {
       const { error } = await sb.from("cancellations").insert({
         customer_id: ctx.customerId,
+        seal_subscription_id: requestedSubId,
         status: "pending",
         primary_reason: body.primaryReason,
         free_text: body.freeText ?? null,
@@ -215,14 +226,24 @@ export const POST = withCustomer(async (req, ctx) => {
     // never finished (no email, no winback). We now RE-DRIVE `committing`
     // rows below until Seal truly reports CANCELLED, then complete every
     // dependent write.
-    const { data: recentConfirmed } = await sb
+    // Multi-sub (audit 2026-07-06): idempotency is per SUB, not per customer.
+    // Unscoped, cancelling sub B <10 min after sub A short-circuited with
+    // `cancelled:true` WITHOUT touching Seal — B kept billing while the
+    // customer believed it was cancelled. Scope by the requested sub id;
+    // legacy payloads without one keep the per-customer window.
+    const step4RequestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+    let recentConfirmedQuery = sb
       .from("cancellations")
       .select("id, effective_last_ship_date, drops_release_at, cancel_count_at_event, started_at")
       .eq("customer_id", ctx.customerId)
-      .eq("status", "confirmed")
+      .eq("status", "confirmed");
+    if (step4RequestedSubId) {
+      recentConfirmedQuery = recentConfirmedQuery.eq("seal_subscription_id", step4RequestedSubId);
+    }
+    const { data: recentConfirmedRows } = await recentConfirmedQuery
       .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    const recentConfirmed = recentConfirmedRows?.[0] ?? null;
     if (
       recentConfirmed &&
       new Date(recentConfirmed.started_at).getTime() > Date.now() - IDEMPOTENCY_WINDOW_MS
@@ -248,15 +269,20 @@ export const POST = withCustomer(async (req, ctx) => {
     // Locate an in-flight row. `pending` = normal progression from step 3.
     // `committing` = a previous step-4 attempt that never reached `confirmed`
     // → RE-DRIVE it (same cancellationId, reuse its stored ordinal/hold so the
-    // retry is idempotent).
-    const { data: inflight } = await sb
+    // retry is idempotent). Scoped per sub (multi-sub): sub B's step 4 must
+    // never adopt/re-drive sub A's in-flight row.
+    let inflightQuery = sb
       .from("cancellations")
       .select("id, status, cancel_count_at_event, drops_release_at, effective_last_ship_date")
       .eq("customer_id", ctx.customerId)
-      .in("status", ["pending", "committing"])
+      .in("status", ["pending", "committing"]);
+    if (step4RequestedSubId) {
+      inflightQuery = inflightQuery.eq("seal_subscription_id", step4RequestedSubId);
+    }
+    const { data: inflightRows } = await inflightQuery
       .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    const inflight = inflightRows?.[0] ?? null;
     const isRedrive = inflight?.status === "committing";
 
     const url = new URL(req.url);
@@ -271,7 +297,8 @@ export const POST = withCustomer(async (req, ctx) => {
     // Vercel's budget.
     let sub: SealSubscription | null = null;
     let email: string | null = null;
-    const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+    let subsList: SealSubscription[] | null = null;
+    const requestedSubId = step4RequestedSubId;
     if (requestedSubId) {
       const owns = await verifyOwnershipFast(
         Number(requestedSubId),
@@ -289,6 +316,7 @@ export const POST = withCustomer(async (req, ctx) => {
       email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
       if (!email) throw new ApiHttpError(404, "customer_not_found", "");
       const subs = await seal.getSubscriptionsByEmail(email);
+      subsList = subs;
       // Multi-sub: never cancel a DIFFERENT sub than the one requested —
       // resolve the requested id from the email-scoped list (any status, so a
       // re-drive whose Seal cancel already went through still resolves), or
@@ -302,6 +330,21 @@ export const POST = withCustomer(async (req, ctx) => {
     }
     if (!email) email = sub.email ?? null;
     if (!email) throw new ApiHttpError(404, "customer_not_found", "");
+
+    // Multi-sub (audit 2026-07-06): cancelling ONE sub must not punish the
+    // whole account. The Drops hold/reset and the all-sessions purge below only
+    // apply when this is the customer's LAST active sub. Live Seal check (the
+    // cache can lack second rows); on a Seal blip err toward "retains" — never
+    // confiscate or force-logout on uncertainty.
+    let retainsActiveSub = false;
+    try {
+      const all = subsList ?? (await seal.getSubscriptionsByEmail(email));
+      retainsActiveSub = all.some(
+        (s) => s.status === "ACTIVE" && String(s.id) !== String(sub.id),
+      );
+    } catch {
+      retainsActiveSub = true;
+    }
 
     // 1. Read current state. Reuse the in-flight row's stored ordinal so a
     //    re-drive can never double-count cancel_count.
@@ -323,10 +366,13 @@ export const POST = withCustomer(async (req, ctx) => {
 
     // First cancel: 90d Drops hold. 2nd+: immediate reset (no hold). Reuse the
     // stored release date on a re-drive so the hold window doesn't slide.
-    const releaseAt = isSecondPlus
-      ? null
-      : ((inflight?.drops_release_at as string | null) ??
-        new Date(Date.now() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString());
+    // Multi-sub: no hold at all while another sub stays ACTIVE — the customer
+    // is still a paying subscriber earning Drops.
+    const releaseAt =
+      isSecondPlus || retainsActiveSub
+        ? null
+        : ((inflight?.drops_release_at as string | null) ??
+          new Date(Date.now() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString());
     const lastShipDate =
       (inflight?.effective_last_ship_date as string | null) ??
       (sub.billing_attempts ?? []).find(
@@ -340,11 +386,12 @@ export const POST = withCustomer(async (req, ctx) => {
     // `committing` is now re-driven rather than trusted as done.)
     const committingPatch = {
       status: "committing" as const,
+      seal_subscription_id: String(sub.id),
       primary_reason: body.primaryReason ?? null,
       free_text: body.freeText ?? null,
       step_completed: 4,
       effective_last_ship_date: lastShipDate ? lastShipDate.slice(0, 10) : null,
-      drops_held_at_cancel: isSecondPlus ? 0 : currentBalance,
+      drops_held_at_cancel: isSecondPlus || retainsActiveSub ? 0 : currentBalance,
       drops_release_at: releaseAt,
       cancel_count_at_event: cancelOrdinal,
     };
@@ -397,7 +444,8 @@ export const POST = withCustomer(async (req, ctx) => {
 
     // Drops reset for 2nd+ cancel. awardDrops does NOT dedup internally
     // (lib/drops.ts just inserts), so guard on an existing tagged event.
-    if (isSecondPlus && currentBalance !== 0) {
+    // Multi-sub: never reset while another sub stays ACTIVE.
+    if (!retainsActiveSub && isSecondPlus && currentBalance !== 0) {
       const { data: existingReset } = await sb
         .from("drops_events")
         .select("id")
@@ -444,7 +492,9 @@ export const POST = withCustomer(async (req, ctx) => {
     // another device. Combined with the data routes already gating on an
     // ACTIVE Seal sub (subscription_not_found), Seal=CANCELLED + no session =
     // no access.
-    {
+    // Multi-sub: only when this was the LAST active sub — a customer who keeps
+    // another ACTIVE sub must stay logged in to manage it.
+    if (!retainsActiveSub) {
       const { error } = await sb.from("auth_sessions").delete().eq("customer_id", ctx.customerId);
       if (error) console.warn("[cancel] auth_sessions purge failed:", error.message);
     }
