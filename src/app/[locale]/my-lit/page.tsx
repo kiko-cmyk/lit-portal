@@ -268,23 +268,25 @@ export default function HubPage() {
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         <div className="flex items-center gap-2.5">
+          {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
+              tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
+              2026-07-06). */}
+          {canSwitch && (
+            <button
+              type="button"
+              onClick={openChooser}
+              className="shrink-0 inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
+              style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
+            >
+              {t({ en: "Switch", es: "Cambiar" })}
+            </button>
+          )}
           <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={drops.tierEarned}
             tierEarnedAt={drops.activeReward ? null : null}
           />
-          {/* Multi-sub switch: pill al extremo derecho del header móvil (Juan
-              2026-07-06 — antes flotaba y solapaba el nombre). */}
-          {canSwitch && (
-            <button
-              type="button"
-              onClick={openChooser}
-              className="shrink-0 cursor-pointer rounded-full border border-[color:var(--color-lit-grey)]/25 bg-[color:var(--color-sharp-white)]/60 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[color:var(--color-lit-grey)]/70 transition hover:text-[color:var(--color-lit-grey)]"
-            >
-              {t({ en: "Switch", es: "Cambiar" })}
-            </button>
-          )}
         </div>
       </header>
 
