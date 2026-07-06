@@ -131,20 +131,21 @@ export function TopNav() {
               </Link>
             );
           })}
-          {/* LangToggle siempre visible — el cliente lo quiere en el header
-              tanto en mobile como en desktop (Juan 2026-05-19). */}
-          <LangToggle />
-          {/* Multi-sub switch: pill al extremo derecho, etiqueta corta
-              "CAMBIAR" para que quepa (Juan 2026-07-06). */}
+          {/* Multi-sub switch: pill a la IZQUIERDA del toggle de idioma, con el
+              mismo tamaño que los idiomas (Juan 2026-07-06). */}
           {canSwitch && (
             <button
               type="button"
               onClick={openChooser}
-              className="cursor-pointer rounded-full border border-[color:var(--color-lit-grey)]/25 bg-[color:var(--color-sharp-white)]/60 px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]/70 transition hover:border-[color:var(--color-lit-grey)]/50 hover:text-[color:var(--color-lit-grey)]"
+              className="shrink-0 inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
+              style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
             >
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
+          {/* LangToggle siempre visible — el cliente lo quiere en el header
+              tanto en mobile como en desktop (Juan 2026-05-19). */}
+          <LangToggle />
         </div>
       </div>
     </nav>
