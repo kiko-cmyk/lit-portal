@@ -67,7 +67,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await sb
         .from("subscription_reanchor_intents")
         .update({ status: "failed", updated_at: new Date().toISOString() })
-        .eq("customer_id", intent.customer_id);
+        .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", intent.seal_subscription_id);
       expired++;
       console.error(
         "[reanchor-drain] intent expired unconverged — marked failed (customer may be billed early)",
@@ -86,7 +87,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await sb
         .from("subscription_reanchor_intents")
         .delete()
-        .eq("customer_id", intent.customer_id);
+        .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", intent.seal_subscription_id);
       done++;
       continue;
     }
@@ -94,7 +96,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const sub = await seal.getSubscriptionById(subId);
     if (!sub) {
       // Transient — leave pending, retry next run.
-      await bumpAttempt(sb, intent.customer_id, intent.attempts);
+      await bumpAttempt(sb, intent.customer_id, intent.seal_subscription_id, intent.attempts);
       deferred++;
       continue;
     }
@@ -104,7 +106,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     // No pending yet → Seal still regenerating; retry next run.
     if (!firstDay) {
-      await bumpAttempt(sb, intent.customer_id, intent.attempts);
+      await bumpAttempt(sb, intent.customer_id, intent.seal_subscription_id, intent.attempts);
       deferred++;
       continue;
     }
@@ -114,7 +116,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await sb
         .from("subscription_reanchor_intents")
         .delete()
-        .eq("customer_id", intent.customer_id);
+        .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", intent.seal_subscription_id);
       done++;
       continue;
     }
@@ -125,7 +128,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await sb
         .from("subscription_reanchor_intents")
         .delete()
-        .eq("customer_id", intent.customer_id);
+        .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", intent.seal_subscription_id);
       done++;
     } catch (e) {
       const attempts = (intent.attempts ?? 0) + 1;
@@ -133,7 +137,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         await sb
           .from("subscription_reanchor_intents")
           .update({ status: "failed", attempts, updated_at: new Date().toISOString() })
-          .eq("customer_id", intent.customer_id);
+          .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", intent.seal_subscription_id);
         failed++;
         console.error("[reanchor-drain] gave up after max attempts", {
           customerId: intent.customer_id,
@@ -142,7 +147,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           msg: e instanceof Error ? e.message : String(e),
         });
       } else {
-        await bumpAttempt(sb, intent.customer_id, intent.attempts);
+        await bumpAttempt(sb, intent.customer_id, intent.seal_subscription_id, intent.attempts);
         deferred++;
       }
     }
@@ -154,10 +159,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 async function bumpAttempt(
   sb: ReturnType<typeof supabaseAdmin>,
   customerId: string,
+  sealSubscriptionId: string,
   attempts: number | null,
 ): Promise<void> {
   await sb
     .from("subscription_reanchor_intents")
     .update({ attempts: (attempts ?? 0) + 1, updated_at: new Date().toISOString() })
-    .eq("customer_id", customerId);
+    .eq("customer_id", customerId)
+    .eq("seal_subscription_id", sealSubscriptionId);
 }

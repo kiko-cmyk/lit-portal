@@ -8,6 +8,7 @@ import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 interface ExtrasBody {
   shopifyVariantId: string;
   quantity?: number;
+  sealSubscriptionId?: number | string; // multi-sub: which sub to add to (optional)
 }
 
 /**
@@ -42,8 +43,13 @@ export const POST = withCustomer(async (req, ctx) => {
   }
 
   const subs = await seal.getSubscriptionsByEmail(email);
-  const sub = subs.find((s) => s.status === "ACTIVE");
-  if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active sub for ${email}`);
+  // Multi-sub: if a specific sub is requested, use it (subs are already
+  // email-owned, so matching by id within this list is ownership-safe); else
+  // auto-pick the active one.
+  const sub = body.sealSubscriptionId
+    ? subs.find((s) => String(s.id) === String(body.sealSubscriptionId))
+    : subs.find((s) => s.status === "ACTIVE");
+  if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No matching sub for ${email}`);
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/extras");
 
   const next = getNextBillingAttempt(sub);

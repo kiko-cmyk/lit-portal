@@ -18,6 +18,7 @@ import {
 } from "@/components/QuickActionButton";
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { SectionDivider } from "@/components/SectionDivider";
+import { SubscriptionSelector } from "@/components/SubscriptionSelector";
 import { TierPill } from "@/components/TierPill";
 
 // Overlays are modal-only (rendered behind a click), so we code-split them out
@@ -65,6 +66,16 @@ export default function HubPage() {
   );
   const [syncingUntil, setSyncingUntil] = useState<number | null>(null);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
+  // Multi-sub: the selected subscription (localStorage). null → auto-pick.
+  // Only ever set for customers with >1 sub (the selector self-gates on count).
+  const [selectedSealSubId, setSelectedSealSubId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.localStorage.getItem("lit_selected_subscription_id");
+    } catch {
+      return null;
+    }
+  });
   const t = useLang();
   const lang = useLangValue();
   usePageTitle({ en: "Subscription", es: "Suscripción" }); // browser tab title
@@ -83,7 +94,9 @@ export default function HubPage() {
     api<CustomerProfile>("/api/customer")
       .then(setCustomer)
       .catch(() => setCustomer(null));
-    api<HubDashboard>("/api/hub/dashboard")
+    api<HubDashboard>(
+      `/api/hub/dashboard${selectedSealSubId ? `?seal_subscription_id=${encodeURIComponent(selectedSealSubId)}` : ""}`,
+    )
       .then((fresh) => {
         setData(fresh);
         // Cold-load arrived with no scheduled date → kick off the silent
@@ -138,6 +151,23 @@ export default function HubPage() {
       clearTimeout(id);
     };
   }, [syncingUntil]);
+
+  // Multi-sub selector: switch the active subscription. Persists the choice and
+  // refetches the Hub for that sub. Only reachable when >1 sub exists (the
+  // selector self-gates on count), so single-sub customers never hit this.
+  const handleSelectSub = (id: string) => {
+    if (id === selectedSealSubId) return;
+    try {
+      window.localStorage.setItem("lit_selected_subscription_id", id);
+    } catch {
+      // ignore
+    }
+    setSelectedSealSubId(id);
+    setData(null); // brief loading state while the selected sub loads
+    api<HubDashboard>(`/api/hub/dashboard?seal_subscription_id=${encodeURIComponent(id)}`)
+      .then(setData)
+      .catch((e: ApiClientError) => setError(e.code));
+  };
 
   const handleReactivate = async () => {
     // Audit 2026-05-18 [CRIT]: the previous implementation redirected to
@@ -275,6 +305,7 @@ export default function HubPage() {
 
       <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
+        <SubscriptionSelector selectedId={selectedSealSubId} onSelect={handleSelectSub} />
         {isPostCancel ? (
           <ReactivateCard
             dropsHeld={drops.balance}

@@ -17,12 +17,33 @@ import { supabaseAdmin } from "@/lib/supabase";
 export async function resolveActiveSubFast(
   customerId: string,
   email: string,
+  sealSubId?: number | string | null,
 ): Promise<SealSubscription | null> {
   try {
+    // Explicit sub requested (multi-sub selector / ?seal_subscription_id): resolve
+    // that exact sub and only return it if it belongs to this customer (email
+    // match = ownership). Status is validated by the caller — routes reject a
+    // non-active sub where they must — so we don't force ACTIVE here: a selected
+    // scheduled-to-cancel sub is still viewable.
+    if (sealSubId !== undefined && sealSubId !== null && String(sealSubId).length > 0) {
+      const sub = await seal.getSubscriptionById(Number(sealSubId));
+      if (sub && sub.email?.trim().toLowerCase() === email.trim().toLowerCase()) {
+        return sub;
+      }
+      return null;
+    }
+
+    // Default (no explicit id): auto-pick from the cache. `.order().limit(1)`
+    // avoids the PostgREST ">1 row" throw once a customer has multiple cached
+    // subs (after the multi-sub PK flip) — deterministically picks the
+    // soonest-ship cached row. For single-sub this is the only row, identical
+    // to before.
     const { data } = await supabaseAdmin()
       .from("subscriptions")
       .select("seal_subscription_id")
       .eq("customer_id", customerId)
+      .order("next_ship_date", { ascending: true, nullsFirst: false })
+      .limit(1)
       .maybeSingle();
     const cachedId = data?.seal_subscription_id;
     if (!cachedId) return null;

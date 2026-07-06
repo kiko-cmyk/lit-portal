@@ -48,17 +48,26 @@ export const POST = withCustomer(async (req, ctx) => {
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
   if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
+  const body = (await req.json().catch(() => ({}))) as { sealSubscriptionId?: number | string };
+
   const subs = await seal.getSubscriptionsByEmail(email);
-  // Reactivation targets a CANCELLED subscription. For multi-sub customers,
+  // Multi-sub: if the selector named a specific sub, reactivate that one (subs
+  // are email-owned, so matching by id here is ownership-safe). Otherwise:
+  // reactivation targets a CANCELLED subscription — for multi-sub customers
   // "most recent" alone could pick a still-ACTIVE sub and reactivate the wrong
-  // one — prefer a cancelled (or scheduled-to-cancel) sub, and only fall back to
-  // most-recent if none is found. Single-sub customers are unaffected.
+  // one, so prefer a cancelled (or scheduled-to-cancel) sub, falling back to
+  // most-recent only if none is found. Single-sub customers are unaffected.
+  const requested = body.sealSubscriptionId
+    ? subs.find((s) => String(s.id) === String(body.sealSubscriptionId))
+    : null;
   const cancelled = subs.filter(
     (s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for,
   );
-  const sub = [...(cancelled.length ? cancelled : subs)].sort((a, b) =>
-    b.order_placed.localeCompare(a.order_placed),
-  )[0];
+  const sub =
+    requested ??
+    [...(cancelled.length ? cancelled : subs)].sort((a, b) =>
+      b.order_placed.localeCompare(a.order_placed),
+    )[0];
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/reactivate");
 

@@ -444,7 +444,10 @@ export const POST = withCustomer(async (req, ctx) => {
         status: verify?.cancellation_scheduled_for ? "post_cancel" : "expired",
         updated_at: new Date().toISOString(),
       })
-      .eq("customer_id", ctx.customerId);
+      .eq("customer_id", ctx.customerId)
+      // Scope to the cancelled sub so a multi-sub customer's OTHER active subs
+      // aren't marked expired. No-op for single-sub (the one cache row is this sub).
+      .eq("seal_subscription_id", String(sub.id));
 
     // NOTE on the Shopify SubscriptionContract (decided 2026-06-02 after
     // research): we intentionally do NOT call subscriptionContractCancel here.
