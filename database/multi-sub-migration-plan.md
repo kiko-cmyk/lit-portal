@@ -29,18 +29,27 @@ customers need no backfill (their one row already carries the right seal_subscri
 ## 2. Phases
 
 - **F0 — guards** (DONE: reactivate prefers cancelled, #36). Invisible, no DB.
-- **F1 — additive schema + composite-safe writers.** Make every writer
-  composite-key-correct WHILE the PK is still `customer_id` (no-op for single-sub;
-  guarantees full writer coverage before any flip). Migration A. Deployable alone,
-  invisible, low DB risk.
-  - Group 1 (onConflict → `["customer_id","seal_subscription_id"]`): webhooks/seal
-    syncSubscription, hub/dashboard upsert, plan cache upsert.
-  - Group 2 (add `.eq("seal_subscription_id", …)` — the 4 HIGH silent-breaks):
-    cancel cache-invalidate UPDATE; webhooks/seal applyReanchorIfPending deletes
-    (l.174, l.196); cron/reanchor-drain deletes+updates; plan writeReanchorIntent
-    onConflict (l.37).
-  - Group 3 (per-sub cron dedup keys): monthly-streak, winback, drops-cleanup.
-    renewal-reminder already per-sealSubscriptionId (verify only).
+- **F1 — composite-safe WHERE-scopers (code only, no migration).** Add
+  `.eq("seal_subscription_id", …)` to every DELETE/UPDATE on the subscription
+  cache/intent tables so one sub's action can't hit a sibling's row. No-op for
+  single-sub (the one row matches). Deployable alone, invisible, no DB change
+  (the `seal_subscription_id` columns already exist).
+  - **DONE:** reanchor-intent isolation — webhooks/seal applyReanchorIfPending
+    deletes (l.174/196), cron/reanchor-drain deletes+updates + bumpAttempt;
+    cancel cache-invalidate UPDATE (add `.eq(seal_subscription_id, sub.id)`).
+
+  **CORRECTION to the synthesized plan (verified against Postgres semantics):**
+  - The `onConflict` TARGET changes (webhooks/seal syncSubscription, hub/dashboard
+    upsert, plan cache upsert, plan writeReanchorIntent l.37) are **NOT safe
+    pre-flip**. While the PK is still `customer_id`, `onConflict:
+    (customer_id, seal_subscription_id)` on a 2nd sub row raises a PK unique
+    violation (the composite target doesn't cover the customer_id PK) → webhook
+    error-storm for the 27 multi-sub customers (today they silently overwrite).
+    → **Move all `onConflict` changes into F3, deployed together with Migration B**
+    (which makes the PK composite). No Migration A needed.
+  - **Group 3 (per-sub cron dedup for drops: monthly-streak, winback,
+    drops-cleanup) is Phase-2 work**, not F1 — drops are per-sub only in Phase 2.
+    Leave the drops crons as-is until the per-sub-drops phase.
 - **F2 — sub-id-aware resolution + reads (backwards-compatible, defaults to auto-pick).**
   `resolveActiveSubFast(customerId, email, sealSubId?)`; GET routes accept optional
   `?seal_subscription_id`; new `GET /api/subscriptions` (plural); mutation routes make
