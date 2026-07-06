@@ -171,7 +171,11 @@ async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promis
 
   // Cutoff guard — never re-anchor onto a date already inside 24h.
   if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
-    await sb.from("subscription_reanchor_intents").delete().eq("customer_id", intent.customer_id);
+    await sb
+      .from("subscription_reanchor_intents")
+      .delete()
+      .eq("customer_id", intent.customer_id)
+      .eq("seal_subscription_id", String(sealSubId));
     console.log("[seal-webhook] reanchor cleared (within cutoff)", { sealSubId, preserve });
     return;
   }
@@ -193,7 +197,11 @@ async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promis
     // Converged: the next charge is on/after the preserved date and the whole
     // cadence was shifted with it. Done — clear the intent. (This is also the
     // re-entry after our own reschedules fire another subscription/updated.)
-    await sb.from("subscription_reanchor_intents").delete().eq("customer_id", intent.customer_id);
+    await sb
+      .from("subscription_reanchor_intents")
+      .delete()
+      .eq("customer_id", intent.customer_id)
+      .eq("seal_subscription_id", String(sealSubId));
     console.log("[seal-webhook] reanchor converged", { sealSubId, preserve, nextCharge: firstDay });
     return;
   }
