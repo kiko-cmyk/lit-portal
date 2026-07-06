@@ -39,24 +39,37 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Optimistic: a stored pick means this is a returning multi-sub customer, so
+    // show the chooser at once (no Hub flash before the fetch resolves). The
+    // fetch below confirms/corrects.
+    try {
+      if (getSelectedSubscription()) setGate(true);
+    } catch {
+      // ignore
+    }
     api<{ subscriptions: Subscription[] }>("/api/subscriptions")
       .then((d) => {
         if (cancelled) return;
         const list = d.subscriptions ?? [];
         setSubs(list);
-        if (list.length <= 1) return; // single-sub / gated → no chooser
-        const sel = getSelectedSubscription();
-        if (!sel || !list.some((s) => s.sealSubscriptionId === sel)) setGate(true);
+        // Chooser is the landing screen on EVERY portal entry for multi-sub
+        // customers (Juan: "pantalla inicial al loguearme"). Single-sub (<=1)
+        // never sees it. The gate mounts once per session (in the layout), so
+        // this is once-per-session, not per navigation.
+        setGate(list.length > 1);
       })
       .catch(() => {
-        // Not logged in / transient error → let the page handle it (login etc.).
+        // Not logged in / transient error → drop the gate, let the page handle it.
+        if (!cancelled) setGate(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  if (gate) {
+  // Chooser is the landing screen for multi-sub. While optimistically gated but
+  // the list hasn't loaded yet, render nothing (brief) instead of a wrong-sub flash.
+  if (gate && subs.length > 1) {
     return (
       <SubscriptionChooser
         subs={subs}
@@ -67,6 +80,7 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
       />
     );
   }
+  if (gate) return null;
 
   return (
     <SwitchContext.Provider value={{ canSwitch: subs.length > 1, openChooser: () => setGate(true) }}>
