@@ -12,6 +12,7 @@ import {
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
+import { pickRequestedSub, requestedSubIdFrom } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { ChargeNowResponse, Frequency } from "@/lib/types";
 
@@ -45,10 +46,11 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
   let sub: SealSubscription | null = null;
   let email: string | null = null;
 
-  if (body.sealSubscriptionId !== undefined) {
-    const owns = await verifyOwnershipFast(Number(body.sealSubscriptionId), ctx.customerId);
+  const requestedSubId = requestedSubIdFrom(req, body.sealSubscriptionId);
+  if (requestedSubId) {
+    const owns = await verifyOwnershipFast(Number(requestedSubId), ctx.customerId);
     if (owns) {
-      sub = await seal.getSubscriptionById(Number(body.sealSubscriptionId));
+      sub = await seal.getSubscriptionById(Number(requestedSubId));
       if (sub) {
         email = sub.email ?? null;
         assertSubscriptionBelongsToCustomer(sub, email ?? "", "subscription/charge-now:fast");
@@ -62,7 +64,9 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
       throw new ApiHttpError(404, "customer_not_found", `No email for Shopify customer ${ctx.customerId}`);
     }
     const subs = await seal.getSubscriptionsByEmail(email);
-    sub = subs.find((s) => s.status === "ACTIVE") ?? null;
+    // Multi-sub: never charge a DIFFERENT sub than the one requested — resolve
+    // the requested id from the email-scoped list, or 404.
+    sub = pickRequestedSub(subs, requestedSubId);
     if (!sub) throw new ApiHttpError(404, "subscription_not_found", `No active subscription for ${email}`);
     assertSubscriptionBelongsToCustomer(sub, email, "subscription/charge-now");
   }

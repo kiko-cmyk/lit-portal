@@ -1,7 +1,13 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, ApiClientError, getSelectedSubscription, setSelectedSubscription } from "@/lib/api-client";
+import {
+  api,
+  ApiClientError,
+  clearSelectedSubscription,
+  getSelectedSubscription,
+  setSelectedSubscription,
+} from "@/lib/api-client";
 import { SubscriptionChooser } from "@/components/SubscriptionChooser";
 import type { Subscription } from "@/lib/types";
 
@@ -121,6 +127,16 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
     setSubs(list);
     writeHint(list.length > 1);
     setHintMulti(list.length > 1);
+    // Stale-selection cleanup (audit 2026-07-06): if the stored pick is no
+    // longer in the manageable list (customer cancelled that sub, or a previous
+    // user of this browser left theirs), drop it. Without this, api-client keeps
+    // scoping EVERY call to the dead sub: the portal pins to its post-cancel
+    // view, the switch hides (1 manageable sub) and the remaining ACTIVE sub
+    // becomes unreachable.
+    const sel = getSelectedSubscription();
+    if (sel && !list.some((s) => String(s.sealSubscriptionId) === sel)) {
+      clearSelectedSubscription();
+    }
     return list;
   }, []);
 
