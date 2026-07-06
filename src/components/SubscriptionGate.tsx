@@ -3,7 +3,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ApiClientError, getSelectedSubscription, setSelectedSubscription } from "@/lib/api-client";
 import { SubscriptionChooser } from "@/components/SubscriptionChooser";
-import { T } from "@/lib/i18n";
 import type { Subscription } from "@/lib/types";
 
 /**
@@ -185,19 +184,11 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   }
 
   const canSwitch = subs.length > 1 || hintMulti;
+  // The switch control lives in each header's right edge (TopNav pill on desktop,
+  // and the mobile header pill on Hub/Account) so it never floats over the user
+  // chip. The gate just provides the context; it renders no button of its own.
   return (
     <SwitchContext.Provider value={{ canSwitch, openChooser }}>
-      {/* Desktop switches from the TopNav pill ("Cambiar"). This floating pill
-          is MOBILE-ONLY, where the compact header has no menu bar. */}
-      {canSwitch && (
-        <button
-          type="button"
-          onClick={openChooser}
-          className="fixed right-3 top-3 z-[60] rounded-full border border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-brisky-cream)]/90 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.15em] opacity-70 backdrop-blur transition hover:opacity-100 md:hidden"
-        >
-          <T en="Switch" es="Cambiar" />
-        </button>
-      )}
       {children}
     </SwitchContext.Provider>
   );

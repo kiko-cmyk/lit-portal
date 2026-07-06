@@ -18,6 +18,7 @@ import {
 } from "@/components/QuickActionButton";
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { SectionDivider } from "@/components/SectionDivider";
+import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { TierPill } from "@/components/TierPill";
 
 // Overlays are modal-only (rendered behind a click), so we code-split them out
@@ -67,6 +68,7 @@ export default function HubPage() {
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const t = useLang();
   const lang = useLangValue();
+  const { canSwitch, openChooser } = useSubscriptionSwitch();
   usePageTitle({ en: "Subscription", es: "Suscripción" }); // browser tab title
 
   // Deep-link desde el email de recordatorio de renovación
@@ -272,6 +274,17 @@ export default function HubPage() {
             visible={drops.tierEarned}
             tierEarnedAt={drops.activeReward ? null : null}
           />
+          {/* Multi-sub switch: pill al extremo derecho del header móvil (Juan
+              2026-07-06 — antes flotaba y solapaba el nombre). */}
+          {canSwitch && (
+            <button
+              type="button"
+              onClick={openChooser}
+              className="shrink-0 cursor-pointer rounded-full border border-[color:var(--color-lit-grey)]/25 bg-[color:var(--color-sharp-white)]/60 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[color:var(--color-lit-grey)]/70 transition hover:text-[color:var(--color-lit-grey)]"
+            >
+              {t({ en: "Switch", es: "Cambiar" })}
+            </button>
+          )}
         </div>
       </header>
 
