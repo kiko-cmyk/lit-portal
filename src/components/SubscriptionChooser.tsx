@@ -59,6 +59,7 @@ export function SubscriptionChooser({
                     {s.boxCount}
                     {" "}
                     {s.boxCount === 1 ? t({ en: "box", es: "caja" }) : t({ en: "boxes", es: "cajas" })}
+                    {s.shippingAddress?.city ? ` · ${s.shippingAddress.city}` : ""}
                     {next ? ` · ${t({ en: "next", es: "próx." })} ${next}` : ""}
                   </span>
                 </span>
