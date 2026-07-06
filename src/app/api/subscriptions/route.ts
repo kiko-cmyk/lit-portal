@@ -24,6 +24,14 @@ const SELECTOR_ALLOWLIST = new Set<string>([
 // behaviour is untouched. The selector (F3b) will consume this and only render
 // when `subscriptions.length > 1`.
 export const GET = withCustomer<{ subscriptions: Subscription[] }>(async (req, ctx) => {
+  // Rollout gate FIRST — before any work. Non-allowlisted customers skip the
+  // expensive Seal email scan entirely and get an empty list → the selector
+  // stays hidden with ZERO added latency for the 99%. (Post-flip this endpoint
+  // will read the cache cheaply for everyone and this gate is removed.)
+  if (!SELECTOR_ALLOWLIST.has(ctx.customerId)) {
+    return { subscriptions: [] };
+  }
+
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
@@ -51,8 +59,5 @@ export const GET = withCustomer<{ subscriptions: Subscription[] }>(async (req, c
     return an.localeCompare(bn);
   });
 
-  const mapped = manageable.map((s) => mapToSubscription(s, ctx.customerId));
-  // Rollout gate: non-allowlisted customers get at most 1 sub → selector hidden.
-  if (!SELECTOR_ALLOWLIST.has(ctx.customerId)) return { subscriptions: mapped.slice(0, 1) };
-  return { subscriptions: mapped };
+  return { subscriptions: manageable.map((s) => mapToSubscription(s, ctx.customerId)) };
 });
