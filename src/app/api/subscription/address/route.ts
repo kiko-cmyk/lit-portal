@@ -78,9 +78,10 @@ export const PATCH = withCustomer(async (req, ctx) => {
   // lag Juan hit when saving an address. For resilience the fallback also
   // accepts the most recent sub (lets you edit a re-activated sub even if Seal
   // hasn't promoted its status yet).
-  let sealSub = await resolveActiveSubFast(ctx.customerId, email, body.sealSubscriptionId);
-  if (!sealSub && body.sealSubscriptionId) {
-    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${body.sealSubscriptionId}`);
+  const subSel = url.searchParams.get("seal_subscription_id") ?? body.sealSubscriptionId;
+  let sealSub = await resolveActiveSubFast(ctx.customerId, email, subSel);
+  if (!sealSub && subSel) {
+    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${subSel}`);
   }
   if (!sealSub) {
     const sealSubs = await seal.getSubscriptionsByEmail(email);

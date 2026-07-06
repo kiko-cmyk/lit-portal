@@ -57,8 +57,9 @@ export const POST = withCustomer(async (req, ctx) => {
   // "most recent" alone could pick a still-ACTIVE sub and reactivate the wrong
   // one, so prefer a cancelled (or scheduled-to-cancel) sub, falling back to
   // most-recent only if none is found. Single-sub customers are unaffected.
-  const requested = body.sealSubscriptionId
-    ? subs.find((s) => String(s.id) === String(body.sealSubscriptionId))
+  const subSel = url.searchParams.get("seal_subscription_id") ?? body.sealSubscriptionId;
+  const requested = subSel
+    ? subs.find((s) => String(s.id) === String(subSel))
     : null;
   const cancelled = subs.filter(
     (s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for,
