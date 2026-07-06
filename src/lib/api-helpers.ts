@@ -143,6 +143,22 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
       if (err instanceof ApiHttpError) {
         return NextResponse.json({ error: err.code, message: err.message }, { status: err.status });
       }
+      // A sustained Seal 429 (edge throttle) or 5xx (upstream outage) is
+      // transient, not a bug in our code — the retries in seal.ts just couldn't
+      // ride it out. Surface it as a retryable 503 so the customer sees a "try
+      // again" and it does NOT page a false internal_error P0. Duck-typed to
+      // avoid importing SealApiError here (no import cycle with lib/seal).
+      const upstream = err as { name?: string; status?: number };
+      if (upstream?.name === "SealApiError" && (upstream.status === 429 || (upstream.status ?? 0) >= 500)) {
+        console.warn(`[api] Seal upstream ${upstream.status} on ${req.nextUrl.pathname} → 503 seal_busy (transient)`);
+        return NextResponse.json(
+          {
+            error: "seal_busy",
+            message: "Our subscription provider is busy right now. Please try again in a moment.",
+          },
+          { status: 503 },
+        );
+      }
       // Internal error: full detail to the server log only, generic to the
       // client. Pre-2026-05-22 we returned `message` + stack frames in the
       // JSON, exposing Supabase column names and Seal internals. The audit
