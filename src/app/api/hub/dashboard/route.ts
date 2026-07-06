@@ -129,7 +129,9 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
         status: subscription.status,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: "customer_id" },
+      // Multi-sub: cache one row per (customer, sub). Composite matches the
+      // subscriptions PK after the flip. (customer,seal_subscription_id).
+      { onConflict: "customer_id,seal_subscription_id" },
     )
     .then((r) => {
       if (r.error) console.warn("[hub-dashboard] subscriptions cache upsert failed:", r.error);

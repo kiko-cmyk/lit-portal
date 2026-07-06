@@ -307,6 +307,8 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
       status: mapStatus(s),
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "customer_id" },
+    // Multi-sub: one cache row per (customer, sub) — composite matches the
+    // subscriptions PK after the flip, so each sub's webhook upserts its own row.
+    { onConflict: "customer_id,seal_subscription_id" },
   );
 }
