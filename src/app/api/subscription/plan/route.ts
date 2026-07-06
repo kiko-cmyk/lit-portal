@@ -34,7 +34,10 @@ async function writeReanchorIntent(
         created_at: nowIso,
         updated_at: nowIso,
       },
-      { onConflict: "customer_id" },
+      // Multi-sub: one intent per (customer, sub) — composite matches the
+      // reanchor_intents PK after the flip, so a plan change on one sub can't
+      // clobber a sibling sub's pending intent.
+      { onConflict: "customer_id,seal_subscription_id" },
     );
 }
 

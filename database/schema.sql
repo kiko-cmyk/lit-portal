@@ -16,8 +16,11 @@ create extension if not exists "pgcrypto";
 -- 1. Subscriptions + state
 -- ============================================================
 
+-- Cache is one row per (customer, subscription): a customer can hold several
+-- Seal subscriptions. seal_subscription_id keeps its own UNIQUE (each Seal sub
+-- is one row). Writers upsert with onConflict (customer_id, seal_subscription_id).
 create table if not exists subscriptions (
-  customer_id            text primary key,
+  customer_id            text not null,
   seal_subscription_id   text unique not null,
   box_count              int  not null check (box_count between 1 and 6),
   frequency              text not null check (frequency in ('15d','1mo','45d','2mo','3mo','4mo','5mo','6mo')),
@@ -27,7 +30,8 @@ create table if not exists subscriptions (
   status                 text not null default 'active'
                               check (status in ('active','paused','post_cancel','reactivating','expired')),
   created_at             timestamptz not null default now(),
-  updated_at             timestamptz not null default now()
+  updated_at             timestamptz not null default now(),
+  primary key (customer_id, seal_subscription_id)
 );
 
 create index if not exists idx_subscriptions_status on subscriptions(status);
@@ -35,7 +39,9 @@ create index if not exists idx_subscriptions_next_ship on subscriptions(next_shi
 
 create table if not exists subscription_changes (
   id            uuid primary key default uuid_generate_v4(),
-  customer_id   text not null references subscriptions(customer_id) on delete cascade,
+  -- No FK: subscriptions now has a composite PK, so a single-column FK to
+  -- customer_id isn't valid. App-managed integrity (audit table, no hard deletes).
+  customer_id   text not null,
   change_type   text not null check (change_type in ('plan','flavor','address','skip','skip_undo','extras')),
   payload       jsonb not null,
   applied_at    timestamptz not null default now(),
@@ -45,7 +51,9 @@ create table if not exists subscription_changes (
 create index if not exists idx_subscription_changes_customer on subscription_changes(customer_id, applied_at desc);
 
 create table if not exists subscription_states (
-  customer_id        text primary key references subscriptions(customer_id) on delete cascade,
+  -- Customer-level state (keeps PK customer_id). No FK: subscriptions is now a
+  -- composite PK, so a single-column FK isn't valid.
+  customer_id        text primary key,
   skip_state         jsonb,
   locked_until       timestamptz,
   post_cancel_state  jsonb,
