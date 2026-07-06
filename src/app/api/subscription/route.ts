@@ -12,6 +12,8 @@ export const GET = withCustomer<Subscription>(async (_req, ctx) => {
   // Dev bypass: allow ?__dev_email= to skip the Shopify Admin roundtrip
   const url = new URL(_req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
+  // Multi-sub: an explicit selection from the selector. Optional; absent → auto-pick.
+  const requestedSubId = url.searchParams.get("seal_subscription_id");
 
   let email = devEmail;
   if (!email) {
@@ -23,7 +25,12 @@ export const GET = withCustomer<Subscription>(async (_req, ctx) => {
 
   // Fast-path: resolve via the cached Seal id (1 quick call). Falls back to
   // the full email scan on a cache miss.
-  let pick: SealSubscription | null = await resolveActiveSubFast(ctx.customerId, email);
+  let pick: SealSubscription | null = await resolveActiveSubFast(ctx.customerId, email, requestedSubId);
+  // Explicit sub requested but not resolvable/owned → 404. Never silently fall
+  // back to a different subscription than the one selected.
+  if (!pick && requestedSubId) {
+    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${requestedSubId} for ${email}`);
+  }
   if (!pick) {
     const subs = await seal.getSubscriptionsByEmail(email);
     // Pick the most relevant subscription:

@@ -19,6 +19,7 @@ import type {
 export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
+  const requestedSubId = url.searchParams.get("seal_subscription_id"); // multi-sub selector
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
   if (!email) throw new ApiHttpError(404, "customer_not_found", "");
 
@@ -28,7 +29,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   // 1 by-id call) instead of the full multi-page email scan; balance + prefs
   // load alongside it.
   const [fastSub, balanceRes, prefsRes] = await Promise.all([
-    resolveActiveSubFast(ctx.customerId, email),
+    resolveActiveSubFast(ctx.customerId, email, requestedSubId),
     sb
       .from("drops_balances")
       .select("balance, tier_earned_at")
@@ -45,6 +46,10 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
 
   // Fallback to the full scan on a cache miss (cold first load, or stale id).
   let sub: SealSubscription | null = fastSub;
+  if (!sub && requestedSubId) {
+    // Explicit selection not resolvable/owned → 404, don't silently show another sub.
+    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${requestedSubId}`);
+  }
   if (!sub) {
     const subsRes = await seal.getSubscriptionsByEmail(email);
     sub = subsRes.find((s) => s.status === "ACTIVE") ?? null;
@@ -67,21 +72,34 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       .from("subscription_reanchor_intents")
       .select("preserve_date, seal_subscription_id")
       .eq("customer_id", ctx.customerId)
+      .eq("seal_subscription_id", String(sub.id))
       .eq("status", "pending")
       .maybeSingle();
     if (intent && String(intent.seal_subscription_id) === String(sub.id)) {
       const preserve = String(intent.preserve_date).slice(0, 10);
       const firstDay = getNextBillingAttempt(sub)?.date?.slice(0, 10) ?? null;
       if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
-        await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
+        await sb
+          .from("subscription_reanchor_intents")
+          .delete()
+          .eq("customer_id", ctx.customerId)
+          .eq("seal_subscription_id", String(sub.id));
       } else if (firstDay && firstDay < preserve) {
         await seal.reanchorCadence(Number(sub.id), preserve);
         const refreshed = await seal.getSubscriptionById(Number(sub.id));
         if (refreshed) sub = refreshed;
-        await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
+        await sb
+          .from("subscription_reanchor_intents")
+          .delete()
+          .eq("customer_id", ctx.customerId)
+          .eq("seal_subscription_id", String(sub.id));
       } else if (firstDay && firstDay >= preserve) {
         // Already on/after preserve — converged, clear the intent.
-        await sb.from("subscription_reanchor_intents").delete().eq("customer_id", ctx.customerId);
+        await sb
+          .from("subscription_reanchor_intents")
+          .delete()
+          .eq("customer_id", ctx.customerId)
+          .eq("seal_subscription_id", String(sub.id));
       } else {
         // firstDay null → Seal still regenerating; leave intent for next poll.
         // The Hub keeps the "updating your calendar" banner up while this holds.
