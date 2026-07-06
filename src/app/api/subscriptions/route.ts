@@ -4,34 +4,16 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import type { Subscription } from "@/lib/types";
 
-// TEMPORARY rollout allowlist for the multi-sub selector. While set, the plural
-// endpoint returns >1 sub ONLY for these customers, so ONLY they see the
-// selector — everyone else gets at most 1 back (selector stays hidden). Reads
-// otherwise work normally. Remove this gate to open multi-sub to every customer
-// with >1 subscription.
-const SELECTOR_ALLOWLIST = new Set<string>([
-  "27453541548381", // juan@litsalt.com — initial tester
-]);
-
 // GET /apps/portal/api/subscriptions  (PLURAL)
 //
 // Returns ALL of the customer's manageable subscriptions (ACTIVE or scheduled to
-// cancel), mapped to the portal contract, soonest-ship first. Foundation for the
-// multi-subscription selector.
-//
-// Multi-sub F2 — ADDITIVE + INVISIBLE: nothing renders this yet. The singular
-// GET /api/subscription and every mutation route are unchanged, so single-sub
-// behaviour is untouched. The selector (F3b) will consume this and only render
-// when `subscriptions.length > 1`.
+// cancel), mapped to the portal contract, soonest-ship first. Consumed by
+// SubscriptionGate/SubscriptionChooser, which show the first-screen chooser only
+// when this returns >1 — so single-sub customers (1 result) see nothing.
 export const GET = withCustomer<{ subscriptions: Subscription[] }>(async (req, ctx) => {
-  // Rollout gate FIRST — before any work. Non-allowlisted customers skip the
-  // expensive Seal email scan entirely and get an empty list → the selector
-  // stays hidden with ZERO added latency for the 99%. (Post-flip this endpoint
-  // will read the cache cheaply for everyone and this gate is removed.)
-  if (!SELECTOR_ALLOWLIST.has(ctx.customerId)) {
-    return { subscriptions: [] };
-  }
-
+  // Open to all: getSubscriptionsByEmail is a single email-scoped Seal call
+  // (total_pages=1), so this is cheap per portal session. Single-sub customers
+  // get 1 back → the chooser stays hidden; multi-sub customers get >1 → chooser.
   const url = new URL(req.url);
   const devEmail = process.env.NODE_ENV === "development" ? url.searchParams.get("__dev_email") : null;
   const email = devEmail ?? (await shopifyAdmin.getCustomerEmail(ctx.customerId));
