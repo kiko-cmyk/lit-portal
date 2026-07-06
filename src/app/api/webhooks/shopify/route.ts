@@ -283,9 +283,15 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
       customerId,
       "box_shipped",
       DROPS_AMOUNTS.box_shipped ?? 100,
-      { fulfillmentId: f.id, boxIndex: i },
-      // Idempotency key so a webhook retry re-awards exactly once.
-      `box_shipped:${f.id}:${i}`,
+      { fulfillmentId: f.id, orderId: f.order_id, boxIndex: i },
+      // Idempotency key per ORDER, not per fulfillment (audit 2026-07-06). The
+      // box count comes from the ORDER's subscription lines, so keying by
+      // fulfillment id re-awarded the full order on every additional
+      // fulfillments/create — 3PL partial shipments and cancelled+re-created
+      // fulfillments (new id) doubled Drops. Keyed by order, every fulfillment
+      // of the same order collides on the same keys: an order can never award
+      // more than its subscription-box total. Webhook retries stay deduped too.
+      `box_shipped:order:${f.order_id}:${i}`,
     );
   }
 

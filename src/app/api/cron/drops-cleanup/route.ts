@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
+import { awardDrops } from "@/lib/drops";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -54,32 +55,34 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
-    // Check if this customer reactivated AFTER this cancellation. If so, skip
-    // (their balance was restored, no cleanup applies).
-    const { data: prefs } = await sb
-      .from("customer_preferences")
-      .select("cancel_count, last_cancelled_at")
-      .eq("customer_id", row.customer_id)
-      .maybeSingle();
-    const subStatus = await sb
+    // Reactivation/multi-sub guard: NEVER confiscate while the customer has
+    // ANY active subscription. Post PK-flip a multi-sub customer has 2+ rows in
+    // `subscriptions`, so the old `.eq(customer_id).maybeSingle()` errored
+    // (PGRST116) with data=null and confiscated an ACTIVE subscriber's balance
+    // (audit 2026-07-06). Multi-row-safe query + FAIL-SAFE: on any query error,
+    // skip — a missed cleanup self-heals tomorrow; a wrong confiscation
+    // doesn't.
+    const { data: activeRows, error: subErr } = await sb
       .from("subscriptions")
-      .select("status")
+      .select("seal_subscription_id")
       .eq("customer_id", row.customer_id)
-      .maybeSingle();
-    if (subStatus.data?.status === "active") {
-      // Reactivated — leave balance alone
+      .eq("status", "active")
+      .limit(1);
+    if (subErr || (activeRows?.length ?? 0) > 0) {
       alreadyClean++;
       continue;
     }
-    void prefs;
 
-    // Insert negative event to zero the balance
-    await sb.from("drops_events").insert({
-      customer_id: row.customer_id,
-      action: "cancel_reset",
-      amount: -currentBalance,
-      metadata: { reason: "90d_hold_expired", cancellationId: row.id },
-    });
+    // Insert negative event to zero the balance. Idempotent per cancellation
+    // row: a crash between this insert and the drops_release_at update below
+    // must not double-debit on the next run.
+    await awardDrops(
+      row.customer_id,
+      "cancel_reset",
+      -currentBalance,
+      { reason: "90d_hold_expired", cancellationId: row.id },
+      `cancel_reset:cleanup:${row.id}`,
+    );
 
     // Clear drops_release_at so this row won't be picked up again
     await sb.from("cancellations").update({ drops_release_at: null }).eq("id", row.id);
