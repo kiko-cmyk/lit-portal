@@ -20,7 +20,15 @@ export const POST = withCustomer(async (req, ctx) => {
     throw new ApiHttpError(404, "customer_not_found", `No email for Shopify customer ${ctx.customerId}`);
   }
 
-  let sub: SealSubscription | null = await resolveActiveSubFast(ctx.customerId, email);
+  const body = (await req.json().catch(() => ({}))) as { sealSubscriptionId?: number | string };
+  let sub: SealSubscription | null = await resolveActiveSubFast(
+    ctx.customerId,
+    email,
+    body.sealSubscriptionId,
+  );
+  if (!sub && body.sealSubscriptionId) {
+    throw new ApiHttpError(404, "subscription_not_found", `No subscription ${body.sealSubscriptionId}`);
+  }
   if (!sub) {
     const subs = await seal.getSubscriptionsByEmail(email);
     sub = subs.find((s) => s.status === "ACTIVE") ?? null;
