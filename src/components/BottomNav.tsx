@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
+import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { LangToggle, useLang, useLangValue } from "@/lib/i18n";
 import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
 
@@ -91,6 +92,7 @@ export function TopNav() {
   const lang = useLangValue();
   const t = useLang();
   const current = activeRoute(pathname);
+  const { canSwitch, openChooser } = useSubscriptionSwitch();
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
@@ -129,6 +131,15 @@ export function TopNav() {
               </Link>
             );
           })}
+          {canSwitch && (
+            <button
+              type="button"
+              onClick={openChooser}
+              className="cursor-pointer text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/55 transition-colors hover:text-[color:var(--color-lit-grey)]"
+            >
+              {t({ en: "Switch account", es: "Cambiar de cuenta" })}
+            </button>
+          )}
           {/* LangToggle siempre visible — el cliente lo quiere en el header
               tanto en mobile como en desktop (Juan 2026-05-19). */}
           <LangToggle />
