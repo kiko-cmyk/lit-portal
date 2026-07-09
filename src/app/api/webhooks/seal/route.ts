@@ -63,8 +63,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
+  const topic = eventType.replace("/", ".");
   try {
-    const topic = eventType.replace("/", ".");
     switch (topic) {
       case "subscription.created":
       case "subscription.updated":
@@ -98,27 +98,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error(`[seal-webhook] handler failed for ${eventType}`, err);
-    // NOTE: deliberately NO delete-on-failure here (unlike the shopify webhook).
-    // applyReanchorIfPending calls seal.reanchorCadence — a real, NON-idempotent
-    // Seal mutation that shifts billing attempts. A forced webhook replay after
-    // a partial failure would re-apply the offset to already-moved attempts and
-    // OVER-SHIFT the customer's billing schedule (the convergence guard only
-    // inspects the first attempt, so it wouldn't catch it). And Seal events
-    // mostly self-heal without a replay: syncSubscription is a cache mirror the
-    // NEXT Seal event re-upserts, and the re-anchor intent is driven to
-    // completion by the BOUNDED cron drain (reanchor-drain, MAX_ATTEMPTS). So we
-    // let the reservation stand and return 500 (baseline behavior); the customer
-    // impact that motivated delete-on-failure (lost confirmation emails / box
-    // drops) lives on the shopify webhook, not here.
+    // Reservation policy on failure (audit 2026-07-06): Seal's redelivery
+    // carries the SAME body → same hash → it would die on dedup:true, so a kept
+    // reservation makes "return 500 so Seal redelivers" a guaranteed no-op and
+    // a lost cancel/pause left the cache 'active' FOREVER (terminal events may
+    // never be followed by another event for that sub).
     //
-    // KNOWN GAP (Juan's review): syncSubscription is the ONLY writer of the
-    // cached subscriptions.status. If a cancel/pause webhook is lost and no
-    // further Seal event arrives, status stays 'active' indefinitely (the
-    // dashboard is unaffected — it reads Seal live — but the monthly-streak
-    // cron reads this cache and could award a streak Drop to a no-longer-active
-    // sub). Low severity (monthly cron, small leak). Follow-up: have
-    // monthly-streak verify status against Seal live before awarding, or add a
-    // nightly status re-sync.
+    // Split by topic:
+    // - REPLAY-SAFE topics (cancelled/expired/paused/billing_attempt.succeeded):
+    //   handlers are idempotent (cache upsert; retention-discount removal
+    //   no-ops on replay) → RELEASE the un-processed reservation so the
+    //   redelivery actually reprocesses.
+    // - subscription.created/updated KEEP the reservation:
+    //   applyReanchorIfPending → seal.reanchorCadence is a real NON-idempotent
+    //   Seal mutation; a replay after partial failure would OVER-SHIFT the
+    //   billing schedule. Their cache side self-heals on the next event and
+    //   the re-anchor intent is driven by the bounded cron drain.
+    const REPLAY_SAFE = new Set([
+      "subscription.cancelled",
+      "subscription.expired",
+      "subscription.paused",
+      "billing_attempt.succeeded",
+    ]);
+    if (REPLAY_SAFE.has(topic)) {
+      const { error: releaseErr } = await sb
+        .from("webhook_log")
+        .delete()
+        .eq("provider", "seal")
+        .eq("event_id", eventId)
+        .is("processed_at", null);
+      if (releaseErr) {
+        console.error("[seal-webhook] failed to release reservation", releaseErr.message);
+      }
+    }
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 }
@@ -310,20 +322,48 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
 
   const sb = supabaseAdmin();
   const mapped = mapToSubscription(s, customerId);
-  await sb.from("subscriptions").upsert(
-    {
-      customer_id: customerId,
-      seal_subscription_id: String(s.id),
-      box_count: mapped.boxCount,
-      frequency: normalizeFrequency(s.delivery_interval),
-      flavor: mapped.flavor,
-      next_ship_date: mapped.nextShipDate,
-      next_box_number: mapped.nextBoxNumber,
-      status: mapStatus(s),
-      updated_at: new Date().toISOString(),
-    },
+  const cacheRow = {
+    customer_id: customerId,
+    seal_subscription_id: String(s.id),
+    box_count: mapped.boxCount,
+    frequency: normalizeFrequency(s.delivery_interval),
+    flavor: mapped.flavor,
+    next_ship_date: mapped.nextShipDate,
+    next_box_number: mapped.nextBoxNumber,
+    status: mapStatus(s),
+    updated_at: new Date().toISOString(),
+  };
+  const { error: upsertErr } = await sb.from("subscriptions").upsert(
+    cacheRow,
     // Multi-sub: one cache row per (customer, sub) — composite matches the
     // subscriptions PK after the flip, so each sub's webhook upserts its own row.
     { onConflict: "customer_id,seal_subscription_id" },
   );
+  if (upsertErr) {
+    // 23505 against the standalone UNIQUE(seal_subscription_id): the sub now
+    // resolves to a DIFFERENT customer (support fixed a checkout email typo →
+    // duplicate-account reassignment). The composite onConflict doesn't match
+    // that row, so the insert collides with the old owner's row. Silently
+    // dropping this (the pre-audit behaviour) left the cache pointing at the
+    // OLD customer forever: verifyOwnershipFast kept passing for the old
+    // account and the new one never got a fast-path. Re-home the row.
+    if (upsertErr.code === "23505") {
+      const { error: rehomeErr } = await sb
+        .from("subscriptions")
+        .update(cacheRow)
+        .eq("seal_subscription_id", String(s.id));
+      if (rehomeErr) {
+        throw new Error(
+          `subscriptions cache re-home failed for sub ${s.id}: ${rehomeErr.message}`,
+        );
+      }
+      console.log(
+        `[seal-webhook] cache row re-homed to customer ${customerId} for sub ${s.id} (email reassignment)`,
+      );
+    } else {
+      // Propagate: the webhook 500s and the failure is visible instead of a
+      // silently stale cache (the {error} used to be discarded entirely).
+      throw new Error(`subscriptions cache upsert failed for sub ${s.id}: ${upsertErr.message}`);
+    }
+  }
 }
