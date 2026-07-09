@@ -55,17 +55,27 @@ export function swapLocale(
         ? search
         : `?${search}`
       : "";
-  const parts = currentPathname.split("/");
-  const slug = parts[2];
-  // Preserve any trailing segments (e.g. an order id in /es/pedidos/12345) so
-  // toggling language on a detail page keeps you on that page instead of
-  // bouncing to the section root.
-  const rest = parts.slice(3).filter(Boolean);
+  // Scan EVERY segment for the route slug instead of a fixed index — same fix
+  // activeRoute already has: in production usePathname can include the App
+  // Proxy prefix (/apps/portal/es/cuenta), where parts[2] is the LOCALE, not
+  // the slug, so the fixed-index lookup missed and the toggle bounced every
+  // non-home page to home (audit 2026-07-06). Trailing segments after the slug
+  // (e.g. an order id in /es/pedidos/12345) are still preserved.
+  const parts = currentPathname.split("/").filter(Boolean);
   const routes = Object.keys(SLUGS.en) as PortalRoute[];
-  const route = routes.find(
-    (r) => SLUGS.en[r] === slug || SLUGS.es[r] === slug,
-  );
+  let route: PortalRoute | undefined;
+  let slugIdx = -1;
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i];
+    const match = routes.find((r) => SLUGS.en[r] === seg || SLUGS.es[r] === seg);
+    if (match) {
+      route = match;
+      slugIdx = i;
+      break;
+    }
+  }
   if (!route) return `${BASE}/${nextLocale}/${SLUGS[nextLocale].home}${q}`;
+  const rest = parts.slice(slugIdx + 1).filter(Boolean);
   const base = portalHref(nextLocale, route);
   return (rest.length ? `${base}/${rest.join("/")}` : base) + q;
 }

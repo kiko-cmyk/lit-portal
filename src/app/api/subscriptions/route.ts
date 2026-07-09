@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -11,6 +12,11 @@ import type { Subscription } from "@/lib/types";
 // SubscriptionGate/SubscriptionChooser, which show the first-screen chooser only
 // when this returns >1 — so single-sub customers (1 result) see nothing.
 export const GET = withCustomer<{ subscriptions: Subscription[] }>(async (req, ctx) => {
+  // Only authed route without a rate limit until the audit (2026-07-06): every
+  // hit costs a Shopify Admin + a Seal call. Generous cap — the gate calls it
+  // once per entry and the chooser once per switch; only a hammering loop
+  // (stuck retry, script) gets clipped. The FE treats 429 as retryable.
+  await enforceRateLimit(ctx.customerId, "subscriptions-list", { limit: 20, windowMs: 60_000 });
   // Open to all: getSubscriptionsByEmail is a single email-scoped Seal call
   // (total_pages=1), so this is cheap per portal session. Single-sub customers
   // get 1 back → the chooser stays hidden; multi-sub customers get >1 → chooser.

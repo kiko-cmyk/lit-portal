@@ -196,8 +196,17 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   // 2. Confirmation email trigger — fires Klaviyo event with plan details
   const email = payload.customer?.email ?? payload.email;
   if (email && payload.line_items && payload.line_items.length > 0) {
-    const main = payload.line_items.find((li) => li.selling_plan_allocation) ?? payload.line_items[0];
-    const boxCount = main?.quantity ?? 1;
+    // Sum EVERY subscription line (same pattern as handleFulfillmentsCreate):
+    // an order with 2+ selling-plan lines (e.g. two flavors in one checkout)
+    // used to report box_count/sachets of only the first line in the
+    // confirmation email (audit 2026-07-06). `main` still drives the
+    // single-value fields (plan label, flavor).
+    const subLines = payload.line_items.filter((li) => li.selling_plan_allocation);
+    const main = subLines[0] ?? payload.line_items[0];
+    const boxCount =
+      subLines.length > 0
+        ? subLines.reduce((s, li) => s + (li.quantity ?? 0), 0)
+        : main?.quantity ?? 1;
     const planName = main?.selling_plan_allocation?.selling_plan?.name ?? null;
     // A subscription order has at least one line item with a selling plan.
     // Exposed as a clean boolean so Klaviyo flows can branch on subscription

@@ -37,6 +37,31 @@ create table if not exists subscriptions (
 create index if not exists idx_subscriptions_status on subscriptions(status);
 create index if not exists idx_subscriptions_next_ship on subscriptions(next_ship_date);
 
+-- Re-anchor intents: preserve the next-ship date across a plan change (Seal
+-- regenerates the whole schedule anchored on "today"; the cron drain finishes
+-- the skip when the in-request poll budget runs out — see
+-- migrations/2026-06-12_subscription_reanchor_intents.sql for the full story).
+-- Composite PK since the 2026-07-06 multi-sub flip: one live intent per
+-- (customer, sub). This block was MISSING from schema.sql until the 2026-07-06
+-- audit — a rebuilt environment came up without the table entirely.
+create table if not exists subscription_reanchor_intents (
+  customer_id           text not null,
+  seal_subscription_id  text not null,
+  preserve_date         date not null,               -- YYYY-MM-DD the next charge must hold
+  status                text not null default 'pending'
+                          check (status in ('pending', 'done', 'failed')),
+  attempts              int  not null default 0,      -- drain attempts (hard backstop)
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  primary key (customer_id, seal_subscription_id)
+);
+
+create index if not exists idx_reanchor_pending
+  on subscription_reanchor_intents (status)
+  where status = 'pending';
+
+alter table subscription_reanchor_intents enable row level security;
+
 create table if not exists subscription_changes (
   id            uuid primary key default uuid_generate_v4(),
   -- No FK: subscriptions now has a composite PK, so a single-column FK to
