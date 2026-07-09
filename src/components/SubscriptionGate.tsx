@@ -66,20 +66,41 @@ function isTransient(err: unknown): boolean {
   return true; // network / abort / unknown → treat as transient
 }
 
+// Time caps for the gate's initial load (audit 2026-07-08). Uncapped, a HUNG
+// App Proxy/function (the documented Supabase-paused failure mode) meant each
+// attempt burned api()'s full 65s client timeout: 5 × 65s + backoff ≈ 5.5 min
+// of splash before the existing degraded fallback kicked in. Cap each attempt
+// short (abort maps to gateway_timeout → still transient, retry semantics
+// unchanged) and stop retrying past a total budget — the catch below then
+// applies the exact same fallback (children + count hint), just ~25s in.
+const GATE_ATTEMPT_TIMEOUT_MS = 8_000;
+const GATE_TOTAL_BUDGET_MS = 25_000;
+
 async function loadSubs(): Promise<Subscription[]> {
   const delays = [600, 1200, 2000, 3000];
+  const startedAt = Date.now();
   let lastErr: unknown;
   for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), GATE_ATTEMPT_TIMEOUT_MS);
     try {
-      const d = await api<{ subscriptions: Subscription[] }>("/api/subscriptions");
+      const d = await api<{ subscriptions: Subscription[] }>("/api/subscriptions", {
+        signal: ctrl.signal,
+      });
       return d.subscriptions ?? [];
     } catch (err) {
       lastErr = err;
-      if (attempt < delays.length && isTransient(err)) {
+      if (
+        attempt < delays.length &&
+        isTransient(err) &&
+        Date.now() - startedAt < GATE_TOTAL_BUDGET_MS
+      ) {
         await new Promise((r) => setTimeout(r, delays[attempt]));
         continue;
       }
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastErr;

@@ -25,13 +25,16 @@ export function CustomerChip({ name }: CustomerChipProps) {
   const firstName = name.split(/\s+/)[0] ?? name;
 
   return (
+    // min-w-0 + the truncating name span let the chip shrink gracefully in
+    // tight mobile headers (multi-sub: pill + toggle + chip + TierPill on
+    // ≤390px) instead of pushing the row past the viewport (audit 2026-07-08).
     <Link
       href={portalHref(lang, "account")}
-      className="inline-flex items-center gap-2 rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] py-[5px] pl-[5px] pr-3 text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
+      className="inline-flex min-w-0 items-center gap-2 rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] py-[5px] pl-[5px] pr-3 text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
       aria-label={`${name} — account`}
     >
       <span
-        className="flex h-[26px] w-[26px] items-center justify-center rounded-full font-bold text-[color:var(--color-lit-grey)]"
+        className="flex h-[26px] w-[26px] flex-shrink-0 items-center justify-center rounded-full font-bold text-[color:var(--color-lit-grey)]"
         style={{
           background:
             "linear-gradient(135deg, var(--color-bold-yellow) 0%, var(--color-retro-ochre) 100%)",
@@ -44,7 +47,7 @@ export function CustomerChip({ name }: CustomerChipProps) {
         {initials}
       </span>
       <span
-        className="font-bold uppercase tracking-[0.16em]"
+        className="min-w-0 truncate font-bold uppercase tracking-[0.16em]"
         style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
       >
         {firstName}

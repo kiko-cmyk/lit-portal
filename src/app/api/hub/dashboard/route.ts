@@ -38,7 +38,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       .then((r) => r.data),
     sb
       .from("customer_preferences")
-      .select("language")
+      .select("language, cancel_count, last_cancelled_at")
       .eq("customer_id", ctx.customerId)
       .maybeSingle()
       .then((r) => r.data),
@@ -53,6 +53,29 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   if (!sub) {
     const subsRes = await seal.getSubscriptionsByEmail(email);
     sub = subsRes.find((s) => s.status === "ACTIVE") ?? null;
+    // Reactivation surface (audit 2026-07-08): portal cancels are IMMEDIATE
+    // in Seal (no cancellation_scheduled_for), so a cancelled customer who
+    // comes back has no ACTIVE sub and used to 404 here — the Hub then showed
+    // the "buy a new subscription" EmptyState, never the ReactivateCard, even
+    // inside the 90-day drops-hold window (the "sub orfana 13635794" pattern:
+    // they buy a SECOND sub instead of reactivating). If they're still
+    // eligible to reactivate (first cancel, within the window — mirrors
+    // /api/subscription/reactivate), surface the most recent cancelled sub;
+    // mapStatus turns it into "expired" and the Hub renders the ReactivateCard.
+    if (!sub) {
+      const HOLD_DAYS = 90;
+      const eligibleToReactivate =
+        (prefsRes?.cancel_count ?? 0) === 1 &&
+        !!prefsRes?.last_cancelled_at &&
+        Date.now() - new Date(prefsRes.last_cancelled_at as string).getTime() <=
+          HOLD_DAYS * 24 * 60 * 60 * 1000;
+      if (eligibleToReactivate) {
+        sub =
+          subsRes
+            .filter((s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for)
+            .sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ?? null;
+      }
+    }
   }
   if (!sub) {
     throw new ApiHttpError(404, "subscription_not_found", "No active subscription");
@@ -139,6 +162,29 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
 
   const balance = balanceRes?.balance ?? 0;
   const tierEarned = !!balanceRes?.tier_earned_at;
+  const tierEarnedAt = (balanceRes?.tier_earned_at as string | null) ?? null;
+
+  // Post-cancel: expose the drops-hold deadline so the ReactivateCard can say
+  // "X drops held N more days". The FE line existed since the hi-fi but the
+  // field was never sent, so the 90-day urgency never rendered (audit
+  // 2026-07-08). Null for 2nd+ cancels / retained-active-sub cancels (no hold).
+  let dropsReleaseAt: string | null = null;
+  if (subscription.status === "post_cancel" || subscription.status === "expired") {
+    try {
+      const { data: lastCancel } = await sb
+        .from("cancellations")
+        .select("drops_release_at")
+        .eq("customer_id", ctx.customerId)
+        .eq("seal_subscription_id", String(sub.id))
+        .eq("status", "confirmed")
+        .order("confirmed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      dropsReleaseAt = (lastCancel?.drops_release_at as string | null) ?? null;
+    } catch (err) {
+      console.warn("[hub-dashboard] drops hold lookup failed:", err);
+    }
+  }
 
   // Active reward + puzzle (if any reward still unclaimed)
   let activeReward: PuzzleState | null = null;
@@ -201,7 +247,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
 
   return {
     subscription,
-    drops: { balance, tierEarned, activeReward },
+    drops: { balance, tierEarned, activeReward, tierEarnedAt, dropsReleaseAt },
     nextEvent,
     upcomingShipments,
     reanchorPending,
