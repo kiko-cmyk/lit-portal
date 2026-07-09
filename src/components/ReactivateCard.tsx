@@ -9,6 +9,12 @@ interface ReactivateCardProps {
   onReactivate: () => void;
   /** Disables the CTA and swaps the label while reactivation is in flight. */
   busy?: boolean;
+  /**
+   * Inline error from a failed reactivation attempt. Rendered inside the
+   * card so a transient failure never replaces the whole Hub with the
+   * full-page error state — the customer keeps the button to retry.
+   */
+  error?: string | null;
 }
 
 /**
@@ -23,6 +29,7 @@ export function ReactivateCard({
   cardsKept,
   onReactivate,
   busy,
+  error,
 }: ReactivateCardProps) {
   return (
     <section
@@ -57,6 +64,11 @@ export function ReactivateCard({
             />
           )}
         </p>
+      )}
+      {error && (
+        <div className="mx-auto mt-4 max-w-xs rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+          {error}
+        </div>
       )}
       <button
         type="button"

@@ -12,14 +12,34 @@
  * new next-ship date, i.e. WEEKS, which was visual clutter long after
  * any human "oh I clicked wrong" moment. Standard undo-toast pattern
  * is seconds-to-minutes (Gmail send is ~30s); 5 min is generous.
+ *
+ * Scoped PER SUBSCRIPTION (audit 2026-07-08): the flag used to be global,
+ * so a multi-sub customer who skipped sub A and switched to sub B within
+ * the window saw B painted as "Saltada" — and the Undo button (scoped to
+ * the selected sub by api-client) would un-skip B's own legitimate skip
+ * instead of A's. Records now carry the sub they were written under and
+ * only read back under the same selection. Single-sub customers (no
+ * selection) use the "single" scope — identical behaviour to before.
  */
+
+import { getSelectedSubscription } from "@/lib/api-client";
 
 const KEY = "lit:just-skipped";
 const UNDO_WINDOW_MS = 5 * 60 * 1000;
 
+/**
+ * The subscription context the portal is currently scoped to: the multi-sub
+ * selection api-client injects into every call, or "single" when none is set.
+ */
+function currentScope(): string {
+  return getSelectedSubscription() ?? "single";
+}
+
 export interface JustSkippedRecord {
   /** ISO timestamp at which the banner auto-clears. */
   until: string;
+  /** Sub the skip belongs to ("single" when no multi-sub selection). */
+  subId?: string;
 }
 
 export function readJustSkipped(): JustSkippedRecord | null {
@@ -45,6 +65,11 @@ export function readJustSkipped(): JustSkippedRecord | null {
       window.localStorage.removeItem(KEY);
       return null;
     }
+    // Per-sub scoping: a record written under another selection (or a legacy
+    // record with no subId) is not "this sub just skipped". Don't purge — the
+    // customer may switch back to the skipped sub within the window, and
+    // legacy/mismatched records expire on their own via the checks above.
+    if (rec.subId !== currentScope()) return null;
     return rec;
   } catch {
     return null;
@@ -52,14 +77,18 @@ export function readJustSkipped(): JustSkippedRecord | null {
 }
 
 /**
- * Open the undo window. The `_newShipDate` arg is ignored now (used to
- * be the expiry) — kept in the signature so existing callers don't break.
- * Banner expires `UNDO_WINDOW_MS` from now.
+ * Open the undo window for the currently-selected subscription. Banner
+ * expires `UNDO_WINDOW_MS` from now. (The new-ship-date arg the old
+ * signature took was already ignored; dropped 2026-07-08 with the
+ * per-sub scoping.)
  */
-export function writeJustSkipped(_newShipDate?: string): void {
+export function writeJustSkipped(): void {
   if (typeof window === "undefined") return;
   const until = new Date(Date.now() + UNDO_WINDOW_MS).toISOString();
-  window.localStorage.setItem(KEY, JSON.stringify({ until } satisfies JustSkippedRecord));
+  window.localStorage.setItem(
+    KEY,
+    JSON.stringify({ until, subId: currentScope() } satisfies JustSkippedRecord),
+  );
 }
 
 export function clearJustSkipped(): void {

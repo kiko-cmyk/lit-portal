@@ -6,6 +6,7 @@ import { BottomNav, TopNav } from "@/components/BottomNav";
 import { CustomerChip } from "@/components/CustomerChip";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
+import { SubSwitchPill } from "@/components/SubSwitchPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
@@ -312,7 +313,13 @@ function Frame({
 
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
-        <div className="flex items-center gap-2.5">
+        {/* Multi-sub switch + min-w-0 overflow guard, mirroring the Hub and
+            Account mobile headers (audit 2026-07-08: the pill was missing
+            here, so a multi-sub customer on mobile couldn't switch subs from
+            the order detail). The Frame wraps loading/error/loaded alike, so
+            every state gets the same header. */}
+        <div className="flex min-w-0 items-center gap-2.5">
+          <SubSwitchPill />
           <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
         </div>

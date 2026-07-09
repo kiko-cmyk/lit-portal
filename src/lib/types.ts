@@ -139,6 +139,13 @@ export interface CancelStep4Response {
   dropsHeldUntil: string | null; // null if 2nd cancel (immediate reset)
   cardsKept: number;
   cancelCount: number;
+  /**
+   * True when the customer keeps ANOTHER active subscription after this
+   * cancel — the server preserves their sessions in that case, so the FE
+   * must NOT log them out of the portal (audit 2026-07-08). Optional for
+   * back-compat; absent → treat as false (single-sub exit behaviour).
+   */
+  retainsActiveSub?: boolean;
 }
 
 // ============ Drops ============
@@ -310,7 +317,19 @@ export interface UpcomingShipment {
 
 export interface HubDashboard {
   subscription: Subscription;
-  drops: { balance: number; tierEarned: boolean; activeReward: PuzzleState | null };
+  drops: {
+    balance: number;
+    tierEarned: boolean;
+    activeReward: PuzzleState | null;
+    /** When the tier was earned — drives the TierPill "first seen" animation. */
+    tierEarnedAt?: string | null;
+    /**
+     * Post-cancel only: when the 90-day drops hold releases
+     * (cancellations.drops_release_at). Null/absent when there is no hold
+     * (active sub, 2nd+ cancel, or another sub retained).
+     */
+    dropsReleaseAt?: string | null;
+  };
   nextEvent: EventListItem | null;
   /**
    * All upcoming shipments Seal has scheduled (pending billing attempts).

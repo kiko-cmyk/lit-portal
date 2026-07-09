@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { clearSelectedSubscription } from "@/lib/api-client";
 import { T } from "@/lib/i18n";
 import { isSafeRelativePath } from "@/lib/safe-path";
 
@@ -43,6 +44,18 @@ export default function AuthHandoffPage() {
         window.localStorage.setItem(SESSION_STORAGE_KEY, effectiveSessionId);
       } catch (e) {
         console.error("[handoff] localStorage write failed", e);
+      }
+      // A fresh login may be a DIFFERENT customer on this browser (shared
+      // device): drop the previous user's sub selection and count hint so
+      // they can't leak into the new session — a stale selection scopes
+      // every call to the other user's sub (404 → false "no subscription"
+      // if the gate's cleanup fetch fails), and a stale hint flashes the
+      // wrong gate mode. Costs one extra splash after login. (audit 2026-07-08)
+      clearSelectedSubscription();
+      try {
+        window.localStorage.removeItem("lit_sub_count_hint");
+      } catch {
+        // ignore
       }
     } else {
       console.error("[handoff] no session_id in URL");
