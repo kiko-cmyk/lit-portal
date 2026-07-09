@@ -2,7 +2,8 @@ import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
 import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { getLastCompletedChargeDate, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { alertSlackError } from "@/lib/alert";
+import { findAppliedDiscountCodeId, getLastCompletedChargeDate, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -415,6 +416,98 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   }
 
+  // ── Retention-discount carry-over guard (audit 2026-07-06) ──
+  // Seal gotcha (incident 2026-06-02): add_items+remove_items with an active
+  // discount_code carries the code over to the new item INVISIBLY — absent
+  // from item.discount_codes but still discounting the sub. The removal
+  // webhook then can't find its UUID and the "one charge only" 15% recurs on
+  // every future charge silently. Safe order: detach BEFORE the swap,
+  // re-apply AFTER. Never re-apply without a successful detach — applying on
+  // top of a carried-over code is the invisible-duplicate scenario.
+  let retentionCarry: { code: string; detached: boolean } | null = null;
+  if (variantChanged) {
+    const { data: rd } = await supabaseAdmin()
+      .from("retention_discounts")
+      .select("code, discount_code_id")
+      .eq("customer_id", ctx.customerId)
+      .eq("seal_subscription_id", String(sealSubscriptionId))
+      .eq("status", "pending_charge")
+      .maybeSingle();
+    if (rd) {
+      const appliedId =
+        (rd.discount_code_id as string | null) ??
+        (preMutationSub ? findAppliedDiscountCodeId(preMutationSub, rd.code as string) : null);
+      retentionCarry = { code: rd.code as string, detached: false };
+      if (appliedId) {
+        try {
+          await seal.removeDiscountCode(sealSubscriptionId, appliedId);
+          retentionCarry.detached = true;
+          log("retention-discount-detached-pre-swap");
+        } catch (e) {
+          log("retention-discount-detach-failed", {
+            msg: e instanceof Error ? e.message : String(e),
+          });
+        }
+      } else {
+        log("retention-discount-no-uuid-pre-swap");
+      }
+    }
+  }
+
+  // Re-attach after the swap — and after a FAILED swap too (every throw path
+  // below calls this first), so the customer never silently loses their 15%.
+  // Never applies unless the detach succeeded (see gotcha above).
+  const reattachRetentionDiscount = async () => {
+    if (!retentionCarry) return;
+    if (!retentionCarry.detached) {
+      // Detach failed or the UUID was unknown: scan fresh state once — if the
+      // code is visible now, finish the detach so we can re-apply cleanly; if
+      // it is invisible, do NOT apply on top (invisible duplicate). Alert.
+      try {
+        const fresh = await seal.getSubscriptionById(sealSubscriptionId);
+        const lateId = fresh ? findAppliedDiscountCodeId(fresh, retentionCarry.code) : null;
+        if (lateId) {
+          await seal.removeDiscountCode(sealSubscriptionId, lateId);
+          retentionCarry.detached = true;
+        }
+      } catch {
+        // fall through to the alert below
+      }
+    }
+    if (!retentionCarry.detached) {
+      alertSlackError({
+        path: "/api/subscription/plan",
+        code: "retention_discount_carryover",
+        msg: `sub ${sealSubscriptionId}: plan swap ran with the 15% attached and detach failed — the code may now be invisible and recurring; verify in Seal (code ${retentionCarry.code})`,
+        customerId: ctx.customerId,
+      });
+      return;
+    }
+    try {
+      await seal.applyDiscountCode(sealSubscriptionId, retentionCarry.code);
+      // Refresh the UUID so the removal webhook finds the new application.
+      const after = await seal.getSubscriptionById(sealSubscriptionId);
+      const newId = after ? findAppliedDiscountCodeId(after, retentionCarry.code) : null;
+      await supabaseAdmin()
+        .from("retention_discounts")
+        .update({ discount_code_id: newId, updated_at: new Date().toISOString() })
+        .eq("customer_id", ctx.customerId);
+      log("retention-discount-reattached", { hasUuid: !!newId });
+    } catch (e) {
+      // Detached but not re-applied: the customer LOST the 15% (money-safe
+      // direction, but support must re-apply). Loud alert.
+      log("retention-discount-reapply-failed", {
+        msg: e instanceof Error ? e.message : String(e),
+      });
+      alertSlackError({
+        path: "/api/subscription/plan",
+        code: "retention_discount_lost",
+        msg: `sub ${sealSubscriptionId}: 15% detached for the plan swap but re-apply failed — re-apply code ${retentionCarry.code} manually`,
+        customerId: ctx.customerId,
+      });
+    }
+  };
+
   // ───── Step 2: swap the variant (add new, remove old) ─────
   //
   // We do this AFTER the edit so the new item Seal creates is already
@@ -440,6 +533,8 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log("seal-add-items-failed", { msg });
+      // Items are unchanged — put the 15% back before surfacing the error.
+      await reattachRetentionDiscount();
       // If the edit landed but add failed, the sub has the new cadence
       // but old variant. The customer can retry box change separately.
       throw new ApiHttpError(
@@ -483,6 +578,9 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
           msg: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
         });
       }
+      // Whether or not the add was rolled back, restore the 15% before
+      // surfacing the error (support will sort the items either way).
+      await reattachRetentionDiscount();
       throw new ApiHttpError(
         502,
         compensated ? "seal_remove_items_failed" : "seal_inconsistent_state",
@@ -492,6 +590,9 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       );
     }
   }
+
+  // Happy path: swap done (or no swap needed) — put the 15% back on the sub.
+  await reattachRetentionDiscount();
 
   // VERIFICATION POST-MUTATION (Juan 2026-05-19 round 2):
   //

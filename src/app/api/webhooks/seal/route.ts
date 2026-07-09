@@ -227,7 +227,7 @@ async function removeRetentionDiscountIfPending(subFromPayload?: SealSubscriptio
   const sb = supabaseAdmin();
   const { data: row } = await sb
     .from("retention_discounts")
-    .select("customer_id, discount_code_id, code")
+    .select("customer_id, discount_code_id, code, applied_at")
     .eq("seal_subscription_id", String(sealSubId))
     .eq("status", "pending_charge")
     .maybeSingle();
@@ -247,10 +247,25 @@ async function removeRetentionDiscountIfPending(subFromPayload?: SealSubscriptio
       .eq("customer_id", row.customer_id);
 
   if (!discountCodeId) {
-    // Code is already gone (Shopify 1-cycle limit dropped it, or a prior run
-    // removed it) → nothing to delete, just close the row.
-    await markRemoved();
-    console.log("[seal-webhook] retention discount already absent, marked removed", { sealSubId });
+    // No UUID found at item level. Either the code is genuinely gone (Shopify
+    // 1-cycle limit dropped it / a prior run removed it) OR it carried over
+    // INVISIBLY after an item swap (Seal gotcha: absent from
+    // item.discount_codes but still discounting the sub — audit 2026-07-06).
+    // Closing the row blindly in the second case makes the 15% recur forever
+    // with nothing left to retry. Only close once the row is old enough that
+    // the 1-cycle limit has certainly consumed the code (~1 billing cycle);
+    // until then keep it pending so the next charge retries the lookup.
+    const appliedAt = row.applied_at ? new Date(row.applied_at as string).getTime() : 0;
+    const CLOSE_AFTER_MS = 35 * 24 * 60 * 60 * 1000;
+    if (Date.now() - appliedAt > CLOSE_AFTER_MS) {
+      await markRemoved();
+      console.log("[seal-webhook] retention discount absent + row aged out, marked removed", { sealSubId });
+    } else {
+      console.warn(
+        "[seal-webhook] retention discount UUID not found but row is recent — keeping pending_charge (possible invisible carry-over, will retry next charge)",
+        { sealSubId, code: row.code },
+      );
+    }
     return;
   }
 
