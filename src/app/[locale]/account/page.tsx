@@ -119,7 +119,20 @@ export default function AccountPage() {
   const refreshSubscription = useCallback(() => {
     api<Subscription>("/api/subscription")
       .then(setSubscription)
-      .catch(() => setSubscription(null));
+      .catch((e: ApiClientError) => {
+        // A single-sub cancel purges every session server-side, so this very
+        // refetch can 401. Route to login instead of silently pretending the
+        // page state is fine on a dead bearer. (audit 2026-07-08)
+        if (
+          e.code === "unauthorized" ||
+          e.code === "session_expired" ||
+          e.code === "session_invalid"
+        ) {
+          setError(e.code);
+          return;
+        }
+        setSubscription(null);
+      });
   }, []);
 
   if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
@@ -187,7 +200,10 @@ export default function AccountPage() {
           2026-05-19). */}
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
-        <div className="flex items-center gap-2.5">
+        {/* min-w-0 lets the group shrink on narrow phones (≤390px with pill +
+            toggle + chip + TierPill); chip name and TierPill truncate under
+            pressure instead of overflowing (audit 2026-07-08). */}
+        <div className="flex min-w-0 items-center gap-2.5">
           {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
               tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
               2026-07-06). */}
@@ -520,9 +536,10 @@ export default function AccountPage() {
             setSubscription(updated);
           }}
           onSkipped={(newDate) => {
-            // Persist the "just-skipped" flag so the Hub picks it up next
-            // time the customer navigates back (banner + skipped hero).
-            writeJustSkipped(newDate);
+            // Persist the "just-skipped" flag (scoped to the selected sub) so
+            // the Hub picks it up next time the customer navigates back
+            // (banner + skipped hero).
+            writeJustSkipped();
             setJustSkipped(true);
             setSubscription({ ...subscription, nextShipDate: newDate });
           }}

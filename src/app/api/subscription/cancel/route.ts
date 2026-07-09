@@ -252,6 +252,23 @@ export const POST = withCustomer(async (req, ctx) => {
         customerId: ctx.customerId,
         cancellationId: recentConfirmed.id,
       });
+      // retainsActiveSub for the replay: the live Seal check ran on the
+      // original commit; here read the subscriptions cache (the cancelled
+      // sub's row was already flipped to post_cancel/expired then, so any
+      // remaining "active" row is a genuinely different sub). Cache misses
+      // err toward false — same exit behaviour as before the field existed.
+      let cachedRetains = false;
+      try {
+        const { data: otherActive } = await sb
+          .from("subscriptions")
+          .select("seal_subscription_id")
+          .eq("customer_id", ctx.customerId)
+          .eq("status", "active")
+          .limit(1);
+        cachedRetains = (otherActive?.length ?? 0) > 0;
+      } catch {
+        cachedRetains = false;
+      }
       const cached: CancelStep4Response = {
         cancelled: true,
         // effective_last_ship_date is a `date` column → no time component.
@@ -262,6 +279,7 @@ export const POST = withCustomer(async (req, ctx) => {
         dropsHeldUntil: (recentConfirmed.drops_release_at as string | null) ?? null,
         cardsKept: 0,
         cancelCount: recentConfirmed.cancel_count_at_event ?? 0,
+        retainsActiveSub: cachedRetains,
       };
       return cached;
     }
@@ -551,6 +569,9 @@ export const POST = withCustomer(async (req, ctx) => {
       dropsHeldUntil: releaseAt,
       cardsKept: 0, // Phase 2
       cancelCount: cancelOrdinal,
+      // Lets the FE keep a multi-sub customer logged in (their sessions were
+      // preserved above) instead of the single-sub logout+storefront exit.
+      retainsActiveSub,
     };
     return resp;
   }

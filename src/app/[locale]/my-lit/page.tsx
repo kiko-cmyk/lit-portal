@@ -61,6 +61,11 @@ export default function HubPage() {
   const [showChargeNow, setShowChargeNow] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [reactivating, setReactivating] = useState(false);
+  // Inline error for the Reactivate button. Kept out of `error` on purpose:
+  // that one replaces the WHOLE Hub with the full-page error state, which for
+  // a transient reactivation failure destroyed the ReactivateCard the customer
+  // needs to retry. (audit 2026-07-08)
+  const [reactivateError, setReactivateError] = useState<string | null>(null);
   const [justSkipped, setJustSkipped] = useState<boolean>(
     () => readJustSkipped() !== null,
   );
@@ -152,6 +157,7 @@ export default function HubPage() {
     // `second_cancel_no_reactivation` do we send them to the storefront.
     if (reactivating) return; // guard against a double-tap firing two POSTs
     setReactivating(true);
+    setReactivateError(null);
     try {
       await api("/api/subscription/reactivate", { method: "POST" });
       // Refetch dashboard so the Hub flips out of post-cancel mode.
@@ -164,7 +170,24 @@ export default function HubPage() {
         return;
       }
       console.error("[hub] reactivate failed", e);
-      setError(code ?? "reactivate_failed");
+      // Show the failure inline in the ReactivateCard (friendly copy, not the
+      // raw code) and keep the Hub + button rendered so the customer can retry.
+      setReactivateError(
+        code === "rate_limited"
+          ? t({
+              en: "Too many tries. Wait a minute and try again.",
+              es: "Demasiados intentos. Espera un minuto e inténtalo de nuevo.",
+            })
+          : code === "gateway_timeout"
+            ? t({
+                en: "The service is taking longer than usual. Try again in a moment.",
+                es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento.",
+              })
+            : t({
+                en: "Couldn't reactivate. Try again or contact us.",
+                es: "No se pudo reactivar. Inténtalo de nuevo o escríbenos.",
+              }),
+      );
     } finally {
       setReactivating(false);
     }
@@ -207,10 +230,10 @@ export default function HubPage() {
     setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
   };
 
-  const markSkipped = (next: boolean, until?: string | null) => {
+  const markSkipped = (next: boolean) => {
     setJustSkipped(next);
-    if (next && until) {
-      writeJustSkipped(until);
+    if (next) {
+      writeJustSkipped();
     } else {
       clearJustSkipped();
     }
@@ -258,6 +281,18 @@ export default function HubPage() {
 
   const collectionEarned = Math.min(4, Math.floor(timeline.length));
 
+  // Days left of the 90-day drops hold (post-cancel only; null when there is
+  // no hold). Display-only, re-derived on every render/refetch — sub-render
+  // precision is irrelevant here, hence the tolerated impurity.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const dropsHeldDays = drops.dropsReleaseAt
+    ? Math.max(
+        0,
+        Math.ceil((new Date(drops.dropsReleaseAt).getTime() - nowMs) / 86_400_000),
+      )
+    : null;
+
   return (
     <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
@@ -267,7 +302,11 @@ export default function HubPage() {
           mobile because they don't overlap (top vs bottom). */}
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
-        <div className="flex items-center gap-2.5">
+        {/* min-w-0 lets the group shrink below its content on narrow phones
+            (≤390px with pill + toggle + chip + TierPill); the chip name and
+            the TierPill truncate under pressure instead of overflowing the
+            viewport (audit 2026-07-08). */}
+        <div className="flex min-w-0 items-center gap-2.5">
           {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
               tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
               2026-07-06). */}
@@ -285,7 +324,7 @@ export default function HubPage() {
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={drops.tierEarned}
-            tierEarnedAt={drops.activeReward ? null : null}
+            tierEarnedAt={drops.tierEarnedAt ?? null}
           />
         </div>
       </header>
@@ -295,9 +334,11 @@ export default function HubPage() {
         {isPostCancel ? (
           <ReactivateCard
             dropsHeld={drops.balance}
+            dropsHeldDays={dropsHeldDays ?? undefined}
             cardsKept={collectionEarned}
             onReactivate={handleReactivate}
             busy={reactivating}
+            error={reactivateError}
           />
         ) : (
           <>
@@ -407,10 +448,9 @@ export default function HubPage() {
           // silent re-poll until Seal finishes regenerating the cadence.
           onAdjusted={handlePlanUpdated}
           onSkipped={(newDate) => {
-            // Persistir la marca de "saltado" con la nueva fecha como
-            // expiry. El banner se mantendrá hasta que esa fecha pase
-            // o hasta que el cliente pulse Deshacer.
-            markSkipped(true, newDate);
+            // Persistir la marca de "saltado" (scoped a la sub seleccionada;
+            // expira sola a los 5 min o cuando el cliente pulsa Deshacer).
+            markSkipped(true);
             // Al saltar:
             //   - nextShipDate avanza un ciclo
             //   - el primer elemento de upcoming queda "consumido" — se
@@ -458,7 +498,23 @@ export default function HubPage() {
             // Reflect the cancellation (or any change the wizard made) in the
             // Hub without a manual reload — mirrors account/page.tsx. Without
             // this the Hub kept showing the active state after cancelling.
-            api<HubDashboard>("/api/hub/dashboard").then(setData).catch(() => {});
+            api<HubDashboard>("/api/hub/dashboard")
+              .then(setData)
+              .catch((e: ApiClientError) => {
+                // Don't swallow a dead session (the cancel purge can kill
+                // this very one) or a gone subscription: keeping the stale
+                // ACTIVE dashboard made the customer doubt the cancel went
+                // through (audit 2026-07-08). Transient errors still keep
+                // the current view.
+                if (
+                  e.code === "unauthorized" ||
+                  e.code === "session_expired" ||
+                  e.code === "session_invalid" ||
+                  e.code === "subscription_not_found"
+                ) {
+                  setError(e.code);
+                }
+              });
           }}
           onPivotToSkip={() => {
             setShowCancel(false);

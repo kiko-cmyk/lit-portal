@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { LoginScreen } from "@/components/LoginScreen";
+import { SubSwitchPill } from "@/components/SubSwitchPill";
 import { TierPill } from "@/components/TierPill";
 import { api } from "@/lib/api-client";
 import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
@@ -213,10 +214,17 @@ export default function CollectionPage() {
         >
           ← <T en="Subscription" es="Suscripción" />
         </Link>
-        <div className="flex items-center gap-2">
-          <span className="rounded-sm bg-[color:var(--color-lit-grey)] px-3 py-[5px] text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
+        {/* min-w-0: same overflow guard as the Hub/Account headers — with the
+            multi-sub pill + toggle + TierPill the row must shrink, not spill
+            past the viewport on ≤390px (audit 2026-07-08). */}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 rounded-sm bg-[color:var(--color-lit-grey)] px-3 py-[5px] text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
             <T en="Collection" es="Colección" />
           </span>
+          {/* Multi-sub switch, a la IZQUIERDA del toggle como en Hub/Cuenta
+              (audit 2026-07-08: el pill faltaba en Colección y en el detalle
+              de pedido, dejando al multi-sub móvil sin forma de cambiar). */}
+          <SubSwitchPill />
           <LangToggle />
           <TierPill
             visible={tier?.earned ?? false}

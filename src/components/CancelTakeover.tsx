@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, clearSessionToken } from "@/lib/api-client";
+import { api, clearSelectedSubscription, clearSessionToken } from "@/lib/api-client";
 import { addCycle, subCycle } from "@/lib/cadence";
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
+import { portalHref } from "@/lib/portal-link";
 import type {
   CancelStep1Response,
   CancelStep4Response,
@@ -76,6 +77,8 @@ export function CancelTakeover({
   const [pricing, setPricing] = useState<PricingResponse | null>(null);
   const [stayedMsg, setStayedMsg] = useState<StayMsg | null>(null);
   const [done, setDone] = useState<CancelStep4Response | null>(null);
+  const [exitBusy, setExitBusy] = useState(false);
+  const lang = useLangValue();
 
   useEffect(() => {
     api<CancelStep1Response>("/api/subscription/cancel", {
@@ -95,14 +98,54 @@ export function CancelTakeover({
       method: "POST",
       body: JSON.stringify({ step: 3, primaryReason: reason, freeText }),
     }).catch(() => null);
-    setStep(solutionFor(reason) ? "solucion" : "descuento");
+    // Skip solution screens that have nothing to offer (audit 2026-07-08):
+    // "Me parece caro" with a single box has no smaller plan (every option
+    // would RAISE the charge), and "No lo uso" at the longest cadence (6mo)
+    // has nothing longer — both used to render a dead-end offer with a
+    // permanently disabled CTA. Go straight to the 15% instead.
+    const sol = solutionFor(reason);
+    const noSmallerPlan =
+      reason === "too_expensive" && (subscription?.boxCount ?? 1) <= 1;
+    const noLongerCadence =
+      reason === "not_using_enough" &&
+      longerFrequencies(subscription?.frequency ?? "1mo").length === 0;
+    setStep(sol && !noSmallerPlan && !noLongerCadence ? "solucion" : "descuento");
+  };
+
+  // Exit after a REAL cancel (DoneState button and the × on the done step).
+  // Single-sub: the server purged every session, so log out client-side too
+  // and hand back to the storefront — staying would only show stale state.
+  // Multi-sub with another ACTIVE sub retained: the server kept the sessions
+  // on purpose so the customer can manage the remaining sub — do NOT log
+  // them out; drop the (now cancelled) selection and reload the Hub, where
+  // the gate re-resolves the remaining subscription. (audit 2026-07-08)
+  const exitAfterCancel = async () => {
+    if (exitBusy) return;
+    setExitBusy(true);
+    if (done?.retainsActiveSub) {
+      clearSelectedSubscription();
+      window.location.replace(portalHref(lang, "home"));
+      return;
+    }
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+    } catch (e) {
+      console.warn("[cancel-done] logout failed, exiting anyway", e);
+    } finally {
+      clearSessionToken();
+      window.location.replace("https://litsalt.com/");
+    }
   };
 
   return (
     <div className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#0F0E1A] text-[color:var(--color-brisky-cream)]">
       <button
         type="button"
-        onClick={onClose}
+        // After a REAL cancel the plain onClose would drop the customer back
+        // on a stale ACTIVE Hub (single-sub: the refetch 401s because the
+        // server purged the sessions, and the empty catch swallowed it) — the
+        // × must exit exactly like "Volver a LIT". (audit 2026-07-08)
+        onClick={step === "done" && done ? exitAfterCancel : onClose}
         className="absolute right-5 top-5 z-10 text-2xl opacity-60"
         aria-label="Close"
       >
@@ -148,6 +191,7 @@ export function CancelTakeover({
               });
               setStep("done-stayed");
             }}
+            onStay={onClose}
             onDecline={() => setStep("confirmar")}
           />
         )}
@@ -172,7 +216,13 @@ export function CancelTakeover({
             onBack={() => setStep("descuento")}
           />
         )}
-        {step === "done" && done && <DoneState onClose={onClose} />}
+        {step === "done" && done && (
+          <DoneState
+            retainsActiveSub={!!done.retainsActiveSub}
+            busy={exitBusy}
+            onExit={exitAfterCancel}
+          />
+        )}
       </div>
     </div>
   );
@@ -332,7 +382,12 @@ function Solucion({
   const anchor = currentShip ? subCycle(currentShip, freq) : null;
   const spacedShip = anchor ? addCycle(anchor, offerFreq) : null;
 
-  // Menos cajas (Me parece caro): default to 1 box (biggest saving).
+  // Menos cajas (Me parece caro): default to 1 box (biggest saving). Only
+  // offer options BELOW the current count — the screen promises "with fewer
+  // boxes you pay less per shipment", so letting the customer pick MORE boxes
+  // (a price increase) from here was misleading (audit 2026-07-08). Customers
+  // already at 1 box never reach this screen (handleReasonContinue skips it).
+  const fewerBoxOptions = BOX_OPTIONS.filter((n) => n < boxCount);
   const [offerBoxes, setOfferBoxes] = useState<number>(1);
   const curPrice = pricing ? pricing.perBox[boxCount - 1] ?? null : null;
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
@@ -438,7 +493,7 @@ function Solucion({
           <T en="Boxes per shipment" es="Cajas por envío" />
         </div>
         <div className="mt-2 grid grid-cols-6 gap-2">
-          {BOX_OPTIONS.map((n) => (
+          {fewerBoxOptions.map((n) => (
             <button
               key={n}
               type="button"
@@ -563,7 +618,11 @@ function Solucion({
           </select>
         </div>
       )}
-      {spacedShip && currentShip && (
+      {/* Guard on longer.length too: at the max cadence spacedShip equals
+          currentShip, so the preview showed the SAME date "moved to" and
+          struck through. Normally unreachable (handleReasonContinue skips
+          this screen at 6mo), kept as defence. (audit 2026-07-08) */}
+      {longer.length > 0 && spacedShip && currentShip && (
         <div className="mt-4 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
           <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
             <T en="Your next order would move to" es="Tu próximo pedido pasaría al" />
@@ -603,17 +662,26 @@ function Descuento({
   pricing,
   reason,
   onKept,
+  onStay,
   onDecline,
 }: {
   subscription: Subscription | null;
   pricing: PricingResponse | null;
   reason: CancellationReason | null;
   onKept: () => void;
+  /** Leave the takeover WITHOUT cancelling (discount unavailable path). */
+  onStay: () => void;
   onDecline: () => void;
 }) {
   const t = useLang();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The offer is shown to everyone (the FE can't know eligibility up front),
+  // so the server may answer 409 already_used / not_first_cancel. That used
+  // to silently jump to "Confirmar cancelación" — the exact opposite of what
+  // the customer asked for by pressing "Quedarme con el 15%". Now we tell
+  // them honestly and let them stay or keep cancelling. (audit 2026-07-08)
+  const [unavailable, setUnavailable] = useState(false);
 
   const boxCount = subscription?.boxCount ?? null;
   const current = pricing && boxCount ? pricing.perBox[boxCount - 1] ?? null : null;
@@ -631,7 +699,13 @@ function Descuento({
     } catch (e) {
       const code = (e as { code?: string }).code;
       if (code === "already_used" || code === "not_first_cancel") {
-        onDecline();
+        setUnavailable(true);
+        setError(
+          t({
+            en: "This discount is only available once, on a first cancellation, and it's no longer available on your account. You can keep your subscription as it is, or continue cancelling.",
+            es: "Este descuento solo está disponible una vez, en la primera cancelación, y ya no está disponible en tu cuenta. Puedes seguir con tu suscripción tal como está, o continuar con la cancelación.",
+          }),
+        );
         return;
       }
       setError(
@@ -684,14 +758,24 @@ function Descuento({
       )}
 
       <div className="mt-9 space-y-3">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={handleKeep}
-          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
-        >
-          {busy ? <T en="Applying…" es="Aplicando…" /> : <T en="Keep my 15%" es="Quedarme con el 15%" />}
-        </button>
+        {unavailable ? (
+          <button
+            type="button"
+            onClick={onStay}
+            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+          >
+            <T en="Keep my subscription" es="Seguir con mi suscripción" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={handleKeep}
+            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
+          >
+            {busy ? <T en="Applying…" es="Aplicando…" /> : <T en="Keep my 15%" es="Quedarme con el 15%" />}
+          </button>
+        )}
         <button
           type="button"
           onClick={onDecline}
@@ -833,39 +917,47 @@ function DoneStayed({ msg, onClose }: { msg: StayMsg | null; onClose: () => void
   );
 }
 
-function DoneState({ onClose: _onClose }: { onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-
-  // After a real cancel, "Back to LIT" DROPS the user out of the portal (clear
-  // session + hard redirect) so they don't land on stale ACTIVE-sub state.
-  const handleExit = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await api("/api/auth/logout", { method: "POST" });
-    } catch (e) {
-      console.warn("[cancel-done] logout failed, exiting anyway", e);
-    } finally {
-      clearSessionToken();
-      window.location.replace("https://litsalt.com/");
-    }
-  };
-
+// After a real cancel the exit lives in the parent (`exitAfterCancel`): the
+// single-sub path logs out + redirects to the storefront, while a multi-sub
+// customer who retains another ACTIVE sub goes back to the Hub with their
+// session intact (the server kept it alive on purpose). (audit 2026-07-08)
+function DoneState({
+  retainsActiveSub,
+  busy,
+  onExit,
+}: {
+  retainsActiveSub: boolean;
+  busy: boolean;
+  onExit: () => void;
+}) {
   return (
     <>
       <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-7xl">
         <T en="Thank you for trusting LIT" es="Gracias por confiar en LIT" />
       </h1>
       <p className="mt-8 text-sm opacity-80">
-        <T en="Hope to have you back soon." es="Aquí te esperamos cuando quieras volver." />
+        {retainsActiveSub ? (
+          <T
+            en="This subscription is cancelled. Your other subscription stays active and you can keep managing it here."
+            es="Esta suscripción está cancelada. Tu otra suscripción sigue activa y puedes seguir gestionándola aquí."
+          />
+        ) : (
+          <T en="Hope to have you back soon." es="Aquí te esperamos cuando quieras volver." />
+        )}
       </p>
       <button
         type="button"
-        onClick={handleExit}
+        onClick={onExit}
         disabled={busy}
         className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
       >
-        {busy ? <T en="Closing…" es="Cerrando…" /> : <T en="Back to LIT" es="Volver a LIT" />}
+        {busy ? (
+          <T en="Closing…" es="Cerrando…" />
+        ) : retainsActiveSub ? (
+          <T en="Back to my subscription" es="Volver a mi suscripción" />
+        ) : (
+          <T en="Back to LIT" es="Volver a LIT" />
+        )}
       </button>
     </>
   );
