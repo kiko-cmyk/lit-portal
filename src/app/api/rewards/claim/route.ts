@@ -162,24 +162,66 @@ export const POST = withCustomer<ClaimResponse>(async (req, ctx) => {
     throw new Error(`claim insert failed: ${claimErr.message}`);
   }
 
-  // Step 2: deduct drops (negative event). dedupKey makes the deduction
-  // idempotent at the DB layer (unique index on dedup_key) so a retry/redrive
-  // of this claim can't double-debit.
-  await awardDrops(
-    ctx.customerId,
-    "reward_claim",
-    -threshold,
-    { rewardId: body.rewardId, claimId: claim?.id },
-    `reward_claim:${claim?.id}`,
-  );
+  // Restore the pre-claim state (idempotent deletes: 0 rows if a step never
+  // landed). Without this, a transient DB failure between the step-1 insert and
+  // the deduction left the row 'pending' FOREVER — customer not debited, reward
+  // never ordered, and every retry 409s on already_claimed (audit 2026-07-06).
+  const rollbackClaim = async () => {
+    await sb.from("drops_events").delete().eq("dedup_key", `reward_claim:${claim?.id}`);
+    await sb.from("claimed_rewards").delete().eq("id", claim?.id ?? "");
+  };
 
-  // Step 3: event reservation (also persisted before Seal side-effect).
-  if (body.rewardId === "event_2500" && claim) {
-    await sb.from("event_reservations").insert({
-      customer_id: ctx.customerId,
-      event_id: fulfillmentMetadata.eventId,
-      reward_claim_id: claim.id,
-    });
+  try {
+    // Step 2: deduct drops (negative event). dedupKey makes the deduction
+    // idempotent at the DB layer (unique index on dedup_key) so a retry/redrive
+    // of this claim can't double-debit.
+    await awardDrops(
+      ctx.customerId,
+      "reward_claim",
+      -threshold,
+      { rewardId: body.rewardId, claimId: claim?.id },
+      `reward_claim:${claim?.id}`,
+    );
+
+    // Step 2b: concurrency re-check (audit 2026-07-06). The pre-claim balance
+    // check is read-then-write: two concurrent claims of DIFFERENT rewards both
+    // pass it and drive the balance negative (no DB lock, no CHECK constraint).
+    // Re-read AFTER our own deduction landed: the racer that observes the
+    // combined overdraft undoes its own claim — no over-spend can survive, at
+    // worst both roll back and the customer retries one.
+    const { data: post, error: postErr } = await sb
+      .from("drops_balances")
+      .select("balance")
+      .eq("customer_id", ctx.customerId)
+      .maybeSingle();
+    if (postErr) throw new Error(`post-deduction balance read failed: ${postErr.message}`);
+    if ((post?.balance ?? 0) < 0) {
+      await rollbackClaim();
+      throw new ApiHttpError(409, "insufficient_drops", "Balance changed while claiming, try again");
+    }
+
+    // Step 3: event reservation (also persisted before Seal side-effect).
+    // 23505 = a replay already reserved it — fine; any other error must abort
+    // (it used to be discarded entirely).
+    if (body.rewardId === "event_2500" && claim) {
+      const { error: resErr } = await sb.from("event_reservations").insert({
+        customer_id: ctx.customerId,
+        event_id: fulfillmentMetadata.eventId,
+        reward_claim_id: claim.id,
+      });
+      if (resErr && (resErr as { code?: string }).code !== "23505") {
+        throw new Error(`event reservation failed: ${resErr.message}`);
+      }
+    }
+  } catch (e) {
+    if (!(e instanceof ApiHttpError)) {
+      // Transient failure mid-claim: restore pre-claim state, then rethrow →
+      // 500 (withCustomer alerts Slack) and the customer can retry cleanly.
+      await rollbackClaim().catch((rbErr) =>
+        console.error(`[claim] rollback after step-2/3 failure ALSO failed for ${claim?.id}:`, rbErr),
+      );
+    }
+    throw e;
   }
 
   // Step 4: Seal side-effect (the only step that mutates external state).

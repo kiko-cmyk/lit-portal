@@ -60,6 +60,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     for (const row of data ?? []) {
       // Already sent this event to this customer → skip (dedup).
       if (alreadySent.has(`${row.customer_id}:${event}`)) continue;
+      // Multi-sub / reactivation guard (audit 2026-07-06): never "win back" a
+      // customer who still pays — cancelled 1 of 2 subs, or cancelled and
+      // reactivated. Cache check (multi-row safe); on query error err toward
+      // NOT emailing a paying customer.
+      const { data: activeRows, error: activeErr } = await sb
+        .from("subscriptions")
+        .select("seal_subscription_id")
+        .eq("customer_id", row.customer_id)
+        .eq("status", "active")
+        .limit(1);
+      if (activeErr || (activeRows?.length ?? 0) > 0) continue;
       const email = await shopifyAdmin.getCustomerEmail(row.customer_id).catch(() => null);
       if (!email) continue;
       try {
