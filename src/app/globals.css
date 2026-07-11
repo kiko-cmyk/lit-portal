@@ -92,7 +92,9 @@ body::after {
 /* Display headlines use Clash Display, uppercase, tight tracking. */
 h1, h2, h3, .display {
   font-family: var(--font-display);
-  font-weight: 900;
+  /* Clash Display sólo llega a 700 (Bold); el 900 anterior se sintetizaba
+     deforme. El tema web PRE usa 600 en todos los títulos → igualamos. */
+  font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 0.9;
   text-transform: uppercase;

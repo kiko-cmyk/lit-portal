@@ -16,13 +16,11 @@ interface QuickActionButtonProps {
 }
 
 /**
- * Quick action tile, second pass post-Juan-feedback-2026-05-18:
- * "less Clash Display, more minimalist". Now:
- *   - Label is Barlow (body) — NOT Clash Display. Less shouty.
- *   - Weight 600 (semibold) instead of 900 (heavy black).
- *   - Title-case, not screaming uppercase.
- *   - Soft border + soft hover lift, no big drop shadow.
- *   - Arrow on hover persists (it was the part that worked).
+ * Quick action tile — tema PRE (Juan 2026-07):
+ *   - Label en Clash Display 600 uppercase (peso PRE), sobre tarjeta clara.
+ *   - Label SIEMPRE en dos filas: primera palabra en la fila 1, el resto
+ *     en la fila 2 (p.ej. "Adelantar" / "pedido").
+ *   - Borde suave + lift en hover, sombra suave, flecha al hover.
  */
 export function QuickActionButton({
   icon,
@@ -33,6 +31,11 @@ export function QuickActionButton({
   disabled,
 }: QuickActionButtonProps) {
   const inert = comingSoon || disabled;
+  // Dos filas fijas: 1ª palabra arriba, resto abajo.
+  const trimmedLabel = label.trim();
+  const spaceIdx = trimmedLabel.indexOf(" ");
+  const labelLine1 = spaceIdx === -1 ? trimmedLabel : trimmedLabel.slice(0, spaceIdx);
+  const labelLine2 = spaceIdx === -1 ? "" : trimmedLabel.slice(spaceIdx + 1);
   const base =
     "group relative flex h-full min-h-[112px] w-full flex-col justify-between gap-2 overflow-hidden rounded-[20px] md:rounded-[22px] px-5 pt-5 pb-5 text-left transition-all duration-200 ease-out";
   const active =
@@ -69,7 +72,7 @@ export function QuickActionButton({
 
       <div className="flex flex-col gap-1">
         <span
-          className="text-[14px] font-semibold uppercase leading-tight tracking-[0.02em]"
+          className="text-[14px] font-semibold uppercase leading-[1.05] tracking-[0.02em]"
           style={{
             fontFamily: "var(--font-display)",
             color: comingSoon
@@ -77,7 +80,8 @@ export function QuickActionButton({
               : "var(--color-lit-grey)",
           }}
         >
-          {label}
+          <span className="block">{labelLine1}</span>
+          {labelLine2 && <span className="block">{labelLine2}</span>}
         </span>
         {sub && (
           <span
