@@ -113,7 +113,7 @@ export function AddressOverlay({
       onClick={busy ? undefined : onClose}
     >
       <div
-        className="zone-cream relative mx-auto w-full max-w-md rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
+        className="zone-cream relative mx-auto w-full max-w-md rounded-t-[24px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-[24px]"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -126,13 +126,13 @@ export function AddressOverlay({
           ×
         </button>
 
-        <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+        <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
           <T en="Shipping" es="Envío" />
         </div>
-        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
+        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
           <T en="Address" es="Dirección" />
         </h1>
-        <p className="mt-3 text-sm opacity-70">
+        <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
           <T
             en="Takes effect on your next shipment."
             es="Aplica desde tu próximo envío."
@@ -153,14 +153,14 @@ export function AddressOverlay({
         </div>
 
         {error && (
-          <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>
+          <div className="mt-4 rounded-[12px] bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>
         )}
 
         <button
           type="button"
           onClick={handleSave}
           disabled={busy || !form.address1 || !form.city || !form.postalCode}
-          className="mt-6 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="mt-6 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy ? (
             <T en="Saving…" es="Guardando…" />
@@ -171,7 +171,7 @@ export function AddressOverlay({
         <button
           type="button"
           onClick={onClose}
-          className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+          className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] underline"
         >
           <T en="Cancel" es="Cancelar" />
         </button>
@@ -191,12 +191,12 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-60">{label}</span>
+      <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]">{label}</span>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-sm border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-3 py-2 text-sm focus:border-[color:var(--color-lit-grey)] focus:outline-none"
+        className="mt-1 w-full rounded-[12px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3 py-2 text-sm text-[color:var(--color-lit-grey)] focus:border-[color:var(--color-bold-yellow)] focus:outline-none"
       />
     </label>
   );

@@ -34,9 +34,9 @@ export function QuickActionButton({
 }: QuickActionButtonProps) {
   const inert = comingSoon || disabled;
   const base =
-    "group relative flex h-full min-h-[112px] w-full flex-col justify-between gap-2 overflow-hidden rounded-2xl px-5 pt-5 pb-5 text-left transition-all duration-200 ease-out";
+    "group relative flex h-full min-h-[112px] w-full flex-col justify-between gap-2 overflow-hidden rounded-[20px] md:rounded-[22px] px-5 pt-5 pb-5 text-left transition-all duration-200 ease-out";
   const active =
-    "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)]/60 hover:shadow-[0_10px_24px_-18px_rgba(50,55,67,0.35)] active:translate-y-0";
+    "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] shadow-[0_10px_30px_-16px_rgba(40,34,20,0.18)] hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)]/60 hover:shadow-[0_14px_30px_-14px_rgba(40,34,20,0.26)] active:translate-y-0";
   const muted =
     "border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.03] cursor-not-allowed";
 
@@ -46,13 +46,13 @@ export function QuickActionButton({
       onClick={comingSoon ? undefined : onClick}
       disabled={inert}
       aria-disabled={inert}
-      className={`${base} ${comingSoon ? muted : active} disabled:cursor-not-allowed disabled:opacity-55`}
+      className={`${base} ${comingSoon ? muted : active} disabled:cursor-not-allowed disabled:opacity-60`}
     >
       <span
         className={`inline-flex h-5 w-5 transition-transform duration-200 ${
           comingSoon
             ? "text-[color:var(--color-warm-gray)]/50"
-            : "text-[color:var(--color-lit-grey)] group-hover:scale-110"
+            : "text-[color:var(--color-bold-yellow)] group-hover:scale-110"
         }`}
       >
         {icon}
@@ -60,7 +60,7 @@ export function QuickActionButton({
 
       {comingSoon && (
         <span
-          className="absolute right-3 top-3 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+          className="absolute right-3 top-3 rounded-full bg-[color:var(--color-lit-grey)]/10 px-2 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
         >
           <T en="Soon" es="Pronto" />
@@ -69,9 +69,9 @@ export function QuickActionButton({
 
       <div className="flex flex-col gap-1">
         <span
-          className="text-[14px] font-semibold leading-tight tracking-[-0.005em]"
+          className="text-[14px] font-semibold uppercase leading-tight tracking-[0.02em]"
           style={{
-            fontFamily: "var(--font-body)",
+            fontFamily: "var(--font-display)",
             color: comingSoon
               ? "var(--color-warm-gray)"
               : "var(--color-lit-grey)",

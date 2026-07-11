@@ -22,10 +22,9 @@ interface CollectionMiniGridProps {
 export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
   return (
     <section
-      className="relative mx-6 overflow-hidden rounded-[22px] px-6 py-7 md:mx-0 md:px-8 md:py-8"
+      className="relative mx-6 overflow-hidden rounded-[20px] border border-[color:var(--color-lit-grey)]/10 px-6 py-7 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:mx-0 md:rounded-[22px] md:px-8 md:py-8"
       style={{
-        background:
-          "linear-gradient(135deg, var(--color-zesty-beige) 0%, var(--color-cream) 70%)",
+        background: "var(--color-sharp-white)",
       }}
     >
       {/* Subtle ochre corner glow so the banner feels rich, not flat. */}
@@ -34,13 +33,13 @@ export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(at 85% 110%, rgba(200, 155, 95, 0.32) 0%, transparent 55%), radial-gradient(at 5% -20%, rgba(245, 240, 221, 0.6) 0%, transparent 50%)",
+            "radial-gradient(at 85% 110%, rgba(200, 155, 95, 0.14) 0%, transparent 55%), radial-gradient(at 5% -20%, rgba(245, 240, 221, 0.5) 0%, transparent 50%)",
         }}
       />
 
       <div className="relative mb-5 flex items-center justify-between">
         <span
-          className="font-semibold uppercase tracking-[0.32em] text-[color:var(--color-retro-rust)]"
+          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           <T en="Edition 01" es="Edición 01" />
@@ -49,30 +48,30 @@ export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
             shipping, so the destination page is a teaser. SOON pill replaces
             the previous "Ver las 12" link. */}
         <span
-          className="inline-flex items-center rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-retro-rust)]"
+          className="inline-flex items-center rounded-full border border-[color:var(--color-bold-yellow)]/60 bg-[#16130C] px-2.5 py-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           <T en="Soon" es="Pronto" />
         </span>
       </div>
 
-      <div className="relative grid grid-cols-6 gap-2 sm:grid-cols-12 sm:gap-2.5">
+      <div className="relative grid grid-cols-6 gap-2 opacity-70 blur-[1.5px] sm:grid-cols-12 sm:gap-2.5">
         {Array.from({ length: 12 }).map((_, i) => {
           const num = i + 1;
           const isEarned = i < earned;
           return (
             <div
               key={i}
-              className={`relative aspect-[5/7] overflow-hidden rounded-xl transition-transform duration-200 ease-out hover:-translate-y-0.5 ${
+              className={`relative aspect-[5/7] overflow-hidden rounded-[14px] transition-transform duration-200 ease-out hover:-translate-y-0.5 ${
                 isEarned
                   ? "shadow-[0_10px_20px_-12px_rgba(50,40,30,0.4)]"
-                  : "border border-dashed border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)]/40"
+                  : "border border-dashed border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-brisky-cream)]/50"
               }`}
               style={
                 isEarned
                   ? {
                       background:
-                        "linear-gradient(135deg, var(--color-retro-ochre) 0%, var(--color-retro-rust) 100%)",
+                        "linear-gradient(135deg, var(--color-retro-ochre) 0%, var(--color-dark-indigo) 100%)",
                     }
                   : undefined
               }
@@ -98,7 +97,7 @@ export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
 
       <div className="relative mt-5 flex items-baseline justify-between">
         <span
-          className="font-semibold uppercase tracking-[0.32em] text-[color:var(--color-retro-rust)]"
+          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           <T en="Progress" es="Progreso" />

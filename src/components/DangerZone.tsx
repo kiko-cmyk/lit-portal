@@ -25,20 +25,21 @@ export function DangerZone({ onCancel }: DangerZoneProps) {
 
   return (
     <section
-      className="relative mx-6 mt-14 overflow-hidden rounded-[22px] bg-[color:var(--color-lit-grey)] px-7 pt-8 pb-7 text-[color:var(--color-brisky-cream)] md:mx-0 md:px-10 md:pt-10 md:pb-9"
+      className="relative mx-6 mt-14 overflow-hidden rounded-[20px] border border-[rgba(155,61,61,0.3)] bg-[color:var(--color-sharp-white)] px-7 pt-8 pb-7 text-[color:var(--color-lit-grey)] md:mx-0 md:px-10 md:pt-10 md:pb-9"
+      style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
     >
-      {/* Soft yellow corner glow */}
+      {/* Soft danger corner glow */}
       <span
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(at 90% 100%, rgba(235, 238, 98, 0.22) 0%, transparent 50%)",
+            "radial-gradient(at 90% 100%, rgba(155, 61, 61, 0.10) 0%, transparent 55%)",
         }}
       />
 
       <h2
-        className="relative mb-7 font-semibold uppercase leading-[0.95] tracking-[-0.025em] text-[color:var(--color-brisky-cream)]"
+        className="relative mb-7 font-semibold uppercase leading-[0.95] tracking-[-0.025em] text-[color:var(--color-lit-grey)]"
         style={{
           fontFamily: "var(--font-display)",
           fontSize: "clamp(28px, 7.2vw, 44px)",
@@ -47,7 +48,7 @@ export function DangerZone({ onCancel }: DangerZoneProps) {
         {lang === "es" ? (
           <>
             ¿Quieres{" "}
-            <em className="not-italic text-[color:var(--color-bold-yellow)]">
+            <em className="not-italic text-[color:var(--color-danger)]">
               salir del círculo
             </em>
             ?
@@ -55,7 +56,7 @@ export function DangerZone({ onCancel }: DangerZoneProps) {
         ) : (
           <>
             Want to{" "}
-            <em className="not-italic text-[color:var(--color-bold-yellow)]">
+            <em className="not-italic text-[color:var(--color-danger)]">
               leave the circle
             </em>
             ?
@@ -67,7 +68,7 @@ export function DangerZone({ onCancel }: DangerZoneProps) {
         <button
           type="button"
           onClick={onCancel}
-          className="inline-flex items-center rounded-full border border-[color:var(--color-bold-yellow)]/40 px-6 py-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] transition-colors duration-150 hover:border-[color:var(--color-danger)] hover:text-[#ff9b9b]"
+          className="inline-flex items-center font-semibold uppercase tracking-[0.22em] text-[color:var(--color-danger)] underline decoration-[color:var(--color-danger)]/40 underline-offset-4 transition-colors duration-150 hover:decoration-[color:var(--color-danger)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
           {lang === "es" ? "Cancelar suscripción" : "Cancel subscription"}

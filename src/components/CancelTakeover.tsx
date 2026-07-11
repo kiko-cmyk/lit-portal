@@ -138,7 +138,7 @@ export function CancelTakeover({
   };
 
   return (
-    <div className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#0F0E1A] text-[color:var(--color-brisky-cream)]">
+    <div className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#16130C] text-[#F2EEE1]">
       <button
         type="button"
         // After a REAL cancel the plain onClose would drop the customer back
@@ -258,7 +258,7 @@ function Logro({
         <button
           type="button"
           onClick={onStay}
-          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+          className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
         >
           <T en="Stay with LIT" es="Seguir con LIT" />
         </button>
@@ -307,10 +307,10 @@ function Motivo({
             <button
               type="button"
               onClick={() => setReason(r.value)}
-              className={`flex w-full items-center justify-between rounded-sm border px-4 py-3 text-left text-sm uppercase tracking-[0.12em] ${
+              className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm uppercase tracking-[0.12em] ${
                 reason === r.value
                   ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/10"
-                  : "border-[color:var(--color-brisky-cream)]/15"
+                  : "border-[#F2EEE1]/10"
               }`}
             >
               <span>{t({ en: r.en, es: r.es })}</span>
@@ -324,7 +324,7 @@ function Motivo({
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
           placeholder={t({ en: "Tell us what happened", es: "Cuéntanos qué ha pasado" })}
-          className="mt-3 w-full rounded-sm border border-[color:var(--color-brisky-cream)]/20 bg-transparent p-3 text-sm placeholder:opacity-40"
+          className="mt-3 w-full rounded-[14px] border border-[#F2EEE1]/10 bg-transparent p-3 text-sm placeholder:opacity-40"
           rows={3}
         />
       )}
@@ -336,7 +336,7 @@ function Motivo({
           type="button"
           onClick={onContinue}
           disabled={!reason || (reason === "other" && !freeText.trim())}
-          className="rounded-sm bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
+          className="rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
         >
           <T en="Continue" es="Continuar" />
         </button>
@@ -449,7 +449,7 @@ function Solucion({
   };
 
   const errorBox = error && (
-    <div className="mt-4 rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+    <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
       {error}
     </div>
   );
@@ -498,10 +498,10 @@ function Solucion({
               key={n}
               type="button"
               onClick={() => setOfferBoxes(n)}
-              className={`rounded-sm py-3 text-sm font-black ${
+              className={`rounded-[14px] py-3 text-sm font-black ${
                 offerBoxes === n
                   ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
-                  : "bg-[color:var(--color-darker-indigo)] opacity-60"
+                  : "border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.06] opacity-60"
               }`}
             >
               {n}
@@ -509,7 +509,7 @@ function Solucion({
           ))}
         </div>
         {newPrice !== null && (
-          <div className="mt-4 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+          <div className="mt-4 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
             <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
               <T en="New charge per shipment" es="Nuevo importe por envío" />
             </div>
@@ -529,7 +529,7 @@ function Solucion({
             type="button"
             disabled={busy || offerBoxes === boxCount}
             onClick={() => applyPlan({ boxCount: offerBoxes, frequency: freq })}
-            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
           >
             {busy ? (
               <T en="Saving…" es="Guardando…" />
@@ -558,7 +558,7 @@ function Solucion({
           />
         </p>
         {skipShip && currentShip && (
-          <div className="mt-6 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+          <div className="mt-6 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
             <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
               <T en="Your next box would ship on" es="Tu próxima caja saldría el" />
             </div>
@@ -574,7 +574,7 @@ function Solucion({
             type="button"
             disabled={busy}
             onClick={doSkip}
-            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
           >
             {busy ? <T en="Skipping…" es="Saltando…" /> : <T en="Skip the next one" es="Saltar la próxima" />}
           </button>
@@ -605,7 +605,7 @@ function Solucion({
           <select
             value={offerFreq}
             onChange={(e) => setOfferFreq(e.target.value as Frequency)}
-            className="mt-2 w-full rounded-sm bg-[color:var(--color-darker-indigo)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em] text-[color:var(--color-brisky-cream)]"
+            className="mt-2 w-full rounded-[14px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.06] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em] text-[#F2EEE1]"
           >
             {longer.map((f) => (
               <option key={f} value={f}>
@@ -623,7 +623,7 @@ function Solucion({
           struck through. Normally unreachable (handleReasonContinue skips
           this screen at 6mo), kept as defence. (audit 2026-07-08) */}
       {longer.length > 0 && spacedShip && currentShip && (
-        <div className="mt-4 rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+        <div className="mt-4 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
           <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
             <T en="Your next order would move to" es="Tu próximo pedido pasaría al" />
           </div>
@@ -647,7 +647,7 @@ function Solucion({
           type="button"
           disabled={busy || longer.length === 0}
           onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "natural" })}
-          className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+          className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
         >
           {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Space out my deliveries" es="Espaciar mis entregas" />}
         </button>
@@ -735,7 +735,7 @@ function Descuento({
       </p>
 
       {discounted !== null && current !== null && (
-        <div className="mt-7 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5">
+        <div className="mt-7 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
           <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
             <T en="Your next order" es="Tu próximo pedido" />
           </div>
@@ -752,7 +752,7 @@ function Descuento({
       )}
 
       {error && (
-        <div className="mt-4 rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
           {error}
         </div>
       )}
@@ -762,7 +762,7 @@ function Descuento({
           <button
             type="button"
             onClick={onStay}
-            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
           >
             <T en="Keep my subscription" es="Seguir con mi suscripción" />
           </button>
@@ -771,7 +771,7 @@ function Descuento({
             type="button"
             disabled={busy}
             onClick={handleKeep}
-            className="w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
+            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
           >
             {busy ? <T en="Applying…" es="Aplicando…" /> : <T en="Keep my 15%" es="Quedarme con el 15%" />}
           </button>
@@ -833,7 +833,7 @@ function Confirmar({
           />
         )}
       </p>
-      <div className="mt-8 space-y-3 rounded-2xl border border-[color:var(--color-brisky-cream)]/15 p-5 text-sm">
+      <div className="mt-8 space-y-3 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 text-sm md:rounded-[22px]">
         {willShipNext && nextDateLabel && (
           <Detail label={t({ en: "Last shipment", es: "Último envío" })} value={nextDateLabel} />
         )}
@@ -848,7 +848,7 @@ function Confirmar({
         <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
       </div>
       {error && (
-        <div className="mt-4 rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
           {error}
         </div>
       )}
@@ -886,7 +886,7 @@ function Confirmar({
               setBusy(false);
             }
           }}
-          className="rounded-sm border border-[color:var(--color-brisky-cream)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] disabled:opacity-30"
+          className="rounded-full border border-[#F2EEE1]/25 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] disabled:opacity-30"
         >
           {busy ? <T en="Cancelling…" es="Cancelando…" /> : <T en="Cancel subscription" es="Cancelar suscripción" />}
         </button>
@@ -909,7 +909,7 @@ function DoneStayed({ msg, onClose }: { msg: StayMsg | null; onClose: () => void
       <button
         type="button"
         onClick={onClose}
-        className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+        className="mt-10 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
       >
         <T en="Back to LIT" es="Volver a LIT" />
       </button>
@@ -949,7 +949,7 @@ function DoneState({
         type="button"
         onClick={onExit}
         disabled={busy}
-        className="mt-10 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
+        className="mt-10 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
       >
         {busy ? (
           <T en="Closing…" es="Cerrando…" />
@@ -965,7 +965,7 @@ function DoneState({
 
 function Stat({ label, value, loading }: { label: string; value: number; loading?: boolean }) {
   return (
-    <div className="rounded-2xl bg-[color:var(--color-darker-indigo)] p-5">
+    <div className="rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
       <div
         className={`font-display text-4xl font-black transition-opacity duration-300 ${
           loading ? "animate-pulse opacity-40" : "opacity-100"
