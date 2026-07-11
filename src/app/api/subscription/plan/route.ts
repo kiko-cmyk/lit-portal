@@ -4,7 +4,16 @@ import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { alertSlackError } from "@/lib/alert";
 import { findAppliedDiscountCodeId, getLastCompletedChargeDate, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
-import { BOX_COUNT_BY_VARIANT, SELLING_PLAN_BY_FREQUENCY, VARIANT_BY_BOX_COUNT } from "@/lib/seal-plans";
+import {
+  BOX_COUNT_BY_VARIANT,
+  DEFAULT_FLAVOR,
+  type FlavorKey,
+  flavorKeyForVariant,
+  flavorLabel,
+  isFlavorKey,
+  SELLING_PLAN_BY_FREQUENCY,
+  variantForFlavorBox,
+} from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
@@ -84,6 +93,14 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const body = (await req.json().catch(() => ({}))) as {
     boxCount?: number;
     frequency?: Frequency;
+    /**
+     * Target flavor (product) to swap to. Omitted → keep the current flavor.
+     * A flavor change is the SAME variant swap (add_items + remove_items) as a
+     * box-count change, just to a different product's variant for the same box
+     * count — so it reuses every safety guard below (ownership, retention
+     * discount carry-over, verification, rollback). See lib/seal-plans FLAVORS.
+     */
+    flavor?: FlavorKey;
     /** Optional fast-path: when present, skips the slow Seal pagination. */
     sealSubscriptionId?: number | string;
     mainItemId?: number;
@@ -127,8 +144,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   if (body.frequency !== undefined && !VALID_FREQUENCIES.includes(body.frequency)) {
     throw new ApiHttpError(400, "invalid_frequency", `Unknown frequency: ${body.frequency}`);
   }
-  if (body.boxCount === undefined && body.frequency === undefined) {
-    throw new ApiHttpError(400, "no_changes", "Provide boxCount and/or frequency");
+  if (body.flavor !== undefined && !isFlavorKey(body.flavor)) {
+    throw new ApiHttpError(400, "invalid_flavor", `Unknown flavor: ${body.flavor}`);
+  }
+  if (body.boxCount === undefined && body.frequency === undefined && body.flavor === undefined) {
+    throw new ApiHttpError(400, "no_changes", "Provide boxCount, frequency and/or flavor");
   }
 
   // Fast-path: the FE passed sealSubscriptionId + mainItemId + currentVariantId
@@ -249,15 +269,40 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const preserveYYYYMMDD =
     (nextAttemptDate ?? body.preserveNextShipDate)?.slice(0, 10) ?? null;
 
-  // Resolve target variant + frequency + detect what actually changed.
-  const targetBoxCount = body.boxCount ?? null;
+  // Resolve target flavor/box/variant + frequency, then detect what changed.
+  //
+  // Flavor is derived from the current variant so that a box-count OR frequency
+  // change ALWAYS stays on the customer's current flavor (before flavors, this
+  // route hardcoded the Salty-Lemon variant map — a Watermelon subscriber who
+  // changed boxes would have been silently swapped back to Salty Lemon). A
+  // flavor change is just a variant swap to another product's variant for the
+  // same box count, so it flows through the identical add/remove machinery.
+  const currentFlavor: FlavorKey = flavorKeyForVariant(mainItemVariantId) ?? DEFAULT_FLAVOR;
+  const currentBoxCount = BOX_COUNT_BY_VARIANT[String(mainItemVariantId)] ?? null;
+  const targetFlavor: FlavorKey = body.flavor ?? currentFlavor;
+  // A pure flavor change keeps the current box count; a box change overrides it.
+  const targetBoxCount = body.boxCount ?? currentBoxCount;
   const targetFrequency = body.frequency ?? currentFrequency;
 
-  const newVariantNumeric = targetBoxCount
-    ? VARIANT_BY_BOX_COUNT[targetBoxCount as 1 | 2 | 3 | 4 | 5 | 6]
-    : null;
-  if (targetBoxCount && !newVariantNumeric) {
-    throw new ApiHttpError(500, "variant_not_mapped", `No variant for ${targetBoxCount} box(es)`);
+  // A flavor swap must know which box count to land on. The only way this is
+  // unknown is a legacy sub on a variant not in any flavor's map — refuse
+  // rather than silently no-op a requested flavor change.
+  if (body.flavor !== undefined && targetBoxCount == null) {
+    throw new ApiHttpError(
+      409,
+      "box_count_unknown",
+      "Cannot change flavor: this subscription's box count could not be determined.",
+    );
+  }
+
+  const newVariantNumeric =
+    targetBoxCount != null ? variantForFlavorBox(targetFlavor, targetBoxCount) : null;
+  if (targetBoxCount != null && !newVariantNumeric) {
+    throw new ApiHttpError(
+      500,
+      "variant_not_mapped",
+      `No ${targetFlavor} variant for ${targetBoxCount} box(es)`,
+    );
   }
   const targetSellingPlanNumeric = SELLING_PLAN_BY_FREQUENCY[targetFrequency];
   if (!targetSellingPlanNumeric) {
@@ -290,7 +335,8 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // retention) when available, else the preserved current date (normal change).
   const effectivePreserveYYYYMMDD = naturalYYYYMMDD ?? preserveYYYYMMDD;
 
-  log("change-detected", { variantChanged, planChanged, targetFrequency, targetBoxCount, reanchorMode, naturalYYYYMMDD });
+  const flavorChanged = targetFlavor !== currentFlavor;
+  log("change-detected", { variantChanged, planChanged, flavorChanged, currentFlavor, targetFlavor, targetFrequency, targetBoxCount, reanchorMode, naturalYYYYMMDD });
   if (!variantChanged && !planChanged) {
     log("no-op");
     // No-op: return a synthetic sub matching the input state. We don't
@@ -787,7 +833,7 @@ function synthesizePostMutationSub(
     boxCount,
     frequency,
     frequencyLabel: expectedInterval,
-    flavor: "Salty Lemon",
+    flavor: flavorLabel(flavorKeyForVariant(finalVariantId)),
     // Optimistic: show the preserved date while the cron finishes the skip.
     // Otherwise null and the FE re-polls for the regenerated date.
     nextShipDate: preserveYYYYMMDD ? `${preserveYYYYMMDD}T13:00:00Z` : null,
@@ -825,7 +871,7 @@ function synthesizeNoOpSub(
     boxCount,
     frequency,
     frequencyLabel: frequency,
-    flavor: "Salty Lemon",
+    flavor: flavorLabel(flavorKeyForVariant(variantId)),
     nextShipDate: null,
     nextBoxNumber: null,
     status: "active",

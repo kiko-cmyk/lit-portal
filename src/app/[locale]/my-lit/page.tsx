@@ -25,6 +25,7 @@ import { TierPill } from "@/components/TierPill";
 // of the Hub's initial bundle — they download on first open instead of slowing
 // every Hub load. (2026-06-10 frontend perf pass)
 const PlanOverlay = dynamic(() => import("@/components/PlanOverlay").then((m) => m.PlanOverlay));
+const FlavorOverlay = dynamic(() => import("@/components/FlavorOverlay").then((m) => m.FlavorOverlay));
 const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
@@ -57,6 +58,7 @@ export default function HubPage() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showPlan, setShowPlan] = useState(false);
+  const [showFlavor, setShowFlavor] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [showChargeNow, setShowChargeNow] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
@@ -230,6 +232,38 @@ export default function HubPage() {
     setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
   };
 
+  // A flavor swap changes the product/variant (and, since it removes+re-adds the
+  // Seal line, the mainItemId) but NOT the ship date — so no syncing banner. We
+  // apply the returned sub optimistically, then refetch the dashboard once to
+  // reconcile the fresh mainItemId/variant (the unverified fallback response can
+  // carry the pre-swap item id, which a later action would reject).
+  const handleFlavorUpdated = (updated: Subscription) => {
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            subscription: {
+              ...prev.subscription,
+              flavor: updated.flavor,
+              currentVariantId: updated.currentVariantId,
+              mainItemId: updated.mainItemId || prev.subscription.mainItemId,
+            },
+          }
+        : prev,
+    );
+    // Retry once: the reconcile fixes a stale mainItemId from the unverified
+    // fallback response, so we don't want a single transient failure to leave it
+    // stale (the next action would 403 until reload).
+    const reconcile = (attempt = 0) => {
+      api<HubDashboard>("/api/hub/dashboard")
+        .then(setData)
+        .catch(() => {
+          if (attempt < 1) setTimeout(() => reconcile(attempt + 1), 1500);
+        });
+    };
+    reconcile();
+  };
+
   const markSkipped = (next: boolean) => {
     setJustSkipped(next);
     if (next) {
@@ -399,10 +433,11 @@ export default function HubPage() {
                 icon={QAIcons.Flavor}
                 label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
                 sub={t({
-                  en: "New flavors coming soon",
-                  es: "Nuevos sabores pronto",
+                  en: "Salty Lemon or Salty Watermelon",
+                  es: "Salty Lemon o Salty Watermelon",
                 })}
-                comingSoon
+                onClick={() => setShowFlavor(true)}
+                disabled={sub.withinCutoff}
               />
             </section>
 
@@ -437,6 +472,13 @@ export default function HubPage() {
           subscription={sub}
           onClose={() => setShowPlan(false)}
           onUpdated={handlePlanUpdated}
+        />
+      )}
+      {showFlavor && (
+        <FlavorOverlay
+          subscription={sub}
+          onClose={() => setShowFlavor(false)}
+          onUpdated={handleFlavorUpdated}
         />
       )}
       {showSkip && (

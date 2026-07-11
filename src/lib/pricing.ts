@@ -9,7 +9,7 @@
  * cadence is independent. Discount is per variant (1-2: -25%, 3-4: -40%, 5-6: -45%).
  */
 
-import { LIT_PRODUCT_ID, VARIANT_BY_BOX_COUNT } from "./seal-plans";
+import { DEFAULT_FLAVOR, FLAVORS, type FlavorKey } from "./seal-plans";
 import { shopifyAdmin } from "./shopify-admin";
 
 export const CURRENCY = "EUR" as const;
@@ -23,13 +23,19 @@ interface PricingCache {
   fetchedAt: number;
 }
 
-let _cache: PricingCache | null = null;
+// Cache is per flavor: each flavor is its own Shopify product with its own 6
+// variant prices (identical across flavors today, but priced independently so
+// a future price change on one flavor doesn't mislead the other).
+const _cache = new Map<FlavorKey, PricingCache>();
 
 /**
- * Fetch the 6 variant prices from Shopify Admin GraphQL. Returns an array
- * indexed by box count (index 0 = 1 box, index 5 = 6 boxes).
+ * Fetch the 6 variant prices for a flavor from Shopify Admin GraphQL. Returns an
+ * array indexed by box count (index 0 = 1 box, index 5 = 6 boxes).
  */
-async function fetchPrices(): Promise<{ perBox: number[]; compareAtPerBox: (number | null)[] }> {
+async function fetchPrices(
+  flavor: FlavorKey,
+): Promise<{ perBox: number[]; compareAtPerBox: (number | null)[] }> {
+  const def = FLAVORS[flavor];
   const data = await shopifyAdmin.graphql<{
     product: {
       variants: {
@@ -46,10 +52,10 @@ async function fetchPrices(): Promise<{ perBox: number[]; compareAtPerBox: (numb
          }
        }
      }`,
-    { id: `gid://shopify/Product/${LIT_PRODUCT_ID}` },
+    { id: `gid://shopify/Product/${def.productId}` },
   );
 
-  if (!data.product) throw new Error(`Product ${LIT_PRODUCT_ID} not found`);
+  if (!data.product) throw new Error(`Product ${def.productId} (${flavor}) not found`);
 
   // Map by variant ID, ordered by box count (1..6)
   const variantPrice = new Map<string, { price: number; compareAtPrice: number | null }>();
@@ -64,10 +70,10 @@ async function fetchPrices(): Promise<{ perBox: number[]; compareAtPerBox: (numb
   const perBox: number[] = [];
   const compareAtPerBox: (number | null)[] = [];
   for (let boxes = 1; boxes <= 6; boxes++) {
-    const variantId = VARIANT_BY_BOX_COUNT[boxes as 1 | 2 | 3 | 4 | 5 | 6];
+    const variantId = def.variantByBoxCount[boxes as 1 | 2 | 3 | 4 | 5 | 6];
     const v = variantPrice.get(variantId);
     if (!v) {
-      throw new Error(`Variant for ${boxes} box(es) not found: ${variantId}`);
+      throw new Error(`Variant for ${boxes} box(es) not found: ${variantId} (${flavor})`);
     }
     perBox.push(v.price);
     compareAtPerBox.push(v.compareAtPrice);
@@ -76,36 +82,40 @@ async function fetchPrices(): Promise<{ perBox: number[]; compareAtPerBox: (numb
 }
 
 /**
- * Get pricing for all box counts. Uses in-memory cache (5 min TTL).
+ * Get pricing for all box counts of a flavor. Uses in-memory cache (5 min TTL).
  */
-export async function getPricing(): Promise<{
+export async function getPricing(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<{
   perBox: number[];
   compareAtPerBox: (number | null)[];
   isPlaceholder: boolean;
   lastUpdated: string;
 }> {
-  if (_cache && Date.now() - _cache.fetchedAt < CACHE_TTL_MS) {
+  const cached = _cache.get(flavor);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return {
-      perBox: _cache.perBox,
-      compareAtPerBox: _cache.compareAtPerBox,
+      perBox: cached.perBox,
+      compareAtPerBox: cached.compareAtPerBox,
       isPlaceholder: false,
       lastUpdated: PRICING_LAST_UPDATED,
     };
   }
-  const { perBox, compareAtPerBox } = await fetchPrices();
-  _cache = { perBox, compareAtPerBox, fetchedAt: Date.now() };
+  const { perBox, compareAtPerBox } = await fetchPrices(flavor);
+  _cache.set(flavor, { perBox, compareAtPerBox, fetchedAt: Date.now() });
   return { perBox, compareAtPerBox, isPlaceholder: false, lastUpdated: PRICING_LAST_UPDATED };
 }
 
 /**
- * Get total per shipment for a given box count. (Variant price already includes
- * the bulk discount — no extra math needed.)
+ * Get total per shipment for a given box count + flavor. (Variant price already
+ * includes the bulk discount — no extra math needed.)
  */
-export async function priceForBoxCount(boxCount: number): Promise<number> {
+export async function priceForBoxCount(
+  boxCount: number,
+  flavor: FlavorKey = DEFAULT_FLAVOR,
+): Promise<number> {
   if (boxCount < 1 || boxCount > 6) {
     throw new Error(`Invalid box count ${boxCount} — must be 1..6`);
   }
-  const { perBox } = await getPricing();
+  const { perBox } = await getPricing(flavor);
   return perBox[boxCount - 1];
 }
 
@@ -113,5 +123,5 @@ export async function priceForBoxCount(boxCount: number): Promise<number> {
  * Manually invalidate the cache (e.g., after admin updates Shopify variants).
  */
 export function invalidatePricingCache(): void {
-  _cache = null;
+  _cache.clear();
 }

@@ -885,7 +885,13 @@ export function isChargeAlreadyScheduledError(err: unknown): boolean {
 
 import type { Frequency, Subscription, SubscriptionStatus } from "./types";
 import { CUTOFF_HOURS, cutoffEndsAt, isWithinCutoff } from "./cutoff";
-import { BOX_COUNT_BY_VARIANT } from "./seal-plans";
+import {
+  BOX_COUNT_BY_VARIANT,
+  DEFAULT_FLAVOR,
+  flavorKeyForProductId,
+  flavorKeyForVariant,
+  flavorLabel,
+} from "./seal-plans";
 
 /**
  * Normalize Seal's free-text interval ("1 month", "15 days", "3 months") to
@@ -1031,16 +1037,22 @@ export function getNextBoxNumber(s: SealSubscription): number {
 }
 
 /**
- * Phase 1 reality: LIT ships a single flavor (Lemon Drop). Variant SKUs
- * (SL30/SL60/SL90/...) encode box count, not flavor, so returning the SKU
- * here surfaces the wrong string in the Hub hero. Hardcode for now; when
- * new flavors launch, read from a Shopify metafield on the variant.
+ * Resolve the flavor label for a subscription from its MAIN (non-one-time) item.
  *
- * The `_s` arg is kept so callers don't need to change when we wire real
- * flavor lookup.
+ * Each flavor is its own Shopify product with 6 box-count variants (see the
+ * FLAVORS registry in seal-plans). We map product_id → flavor first (stable even
+ * if Shopify ever re-creates a variant), then fall back to variant_id, then to
+ * the default flavor for legacy / manual / bundle subs whose product isn't in
+ * the registry. Returns the UI label ("Salty Lemon" / "Salty Watermelon").
  */
-export function extractFlavor(_s: SealSubscription): string {
-  return "Salty Lemon";
+export function extractFlavor(s: SealSubscription): string {
+  const main = s.items?.find((it) => !it.is_one_time_item) ?? s.items?.[0];
+  if (!main) return flavorLabel(DEFAULT_FLAVOR);
+  const key =
+    flavorKeyForProductId(String(main.product_id)) ??
+    flavorKeyForVariant(String(main.variant_id)) ??
+    DEFAULT_FLAVOR;
+  return flavorLabel(key);
 }
 
 /**
