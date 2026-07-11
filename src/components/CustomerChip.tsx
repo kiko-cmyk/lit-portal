@@ -30,16 +30,14 @@ export function CustomerChip({ name }: CustomerChipProps) {
     // ≤390px) instead of pushing the row past the viewport (audit 2026-07-08).
     <Link
       href={portalHref(lang, "account")}
-      className="inline-flex min-w-0 items-center gap-2 rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] py-[5px] pl-[5px] pr-3 text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
+      className="inline-flex min-w-0 items-center gap-2 rounded-full border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] py-[5px] pl-[5px] pr-3 text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/35"
       aria-label={`${name} — account`}
     >
       <span
-        className="flex h-[26px] w-[26px] flex-shrink-0 items-center justify-center rounded-full font-bold text-[color:var(--color-lit-grey)]"
+        className="flex h-[26px] w-[26px] flex-shrink-0 items-center justify-center rounded-full border border-[color:var(--color-lit-grey)]/10 font-bold text-[color:var(--color-lit-grey)]"
         style={{
-          background:
-            "linear-gradient(135deg, var(--color-bold-yellow) 0%, var(--color-retro-ochre) 100%)",
-          boxShadow:
-            "0 0 0 2px var(--color-sharp-white), 0 0 0 3px rgba(50, 55, 67, 0.18)",
+          background: "var(--color-sharp-white)",
+          boxShadow: "0 2px 6px -3px rgba(40, 34, 20, 0.28)",
           fontFamily: "var(--font-display)",
           fontSize: 11,
         }}

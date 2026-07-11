@@ -31,7 +31,7 @@ export function Marquee() {
   }
 
   return (
-    <div className="relative my-12 overflow-hidden border-y border-[color:var(--color-lit-grey)]/15 py-5">
+    <div className="relative my-12 overflow-hidden border-y border-[color:var(--color-lit-grey)]/12 py-5">
       <div
         className="flex w-max shrink-0 items-center whitespace-nowrap"
         style={{
@@ -59,7 +59,7 @@ export function Marquee() {
             <span
               key={i}
               aria-hidden
-              className="text-[color:var(--color-lit-grey)]/60"
+              className="text-[color:var(--color-bold-yellow)]"
               style={{
                 fontFamily: "var(--font-display)",
                 fontSize: "clamp(1.4rem, 5vw, 2rem)",

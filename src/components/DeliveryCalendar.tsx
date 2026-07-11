@@ -98,10 +98,10 @@ function DateTile({
 
   return (
     <div
-      className={`relative flex h-[124px] min-w-[96px] flex-col items-stretch justify-between rounded-2xl px-4 py-4 transition-all duration-200 ease-out hover:-translate-y-1 [scroll-snap-align:start] ${
+      className={`relative flex h-[124px] min-w-[96px] flex-col items-stretch justify-between rounded-[14px] px-4 py-4 transition-all duration-200 ease-out hover:-translate-y-1 [scroll-snap-align:start] ${
         isNext
           ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)] hover:shadow-[0_18px_30px_-14px_rgba(235,238,98,0.7)]"
-          : "border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] text-[color:var(--color-lit-grey)] hover:border-[color:var(--color-bold-yellow)]/45 hover:shadow-[0_12px_24px_-14px_rgba(50,55,67,0.3)]"
+          : "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] text-[color:var(--color-lit-grey)] shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] hover:border-[color:var(--color-bold-yellow)]/45 hover:shadow-[0_12px_24px_-14px_rgba(50,55,67,0.3)]"
       }`}
     >
       {/* Top: weekday for every tile. The yellow fill alone signals which

@@ -40,7 +40,7 @@ export function BottomNav() {
     <nav
       // fixed (not sticky) so it stays anchored to the bottom of the viewport
       // even on short pages like the no-subscription state.
-      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3.5 pt-2.5 pb-6 md:hidden"
+      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:rgba(242,238,225,0.10)] bg-[#16130C] px-3.5 pt-2.5 pb-6 md:hidden"
       aria-label="Primary"
     >
       {ITEMS.map((it) => {
@@ -50,11 +50,11 @@ export function BottomNav() {
             <span
               key={it.route}
               aria-disabled
-              className="flex cursor-not-allowed flex-col items-center justify-center gap-1.5 py-2 text-[9px] font-bold uppercase tracking-[0.1em] text-[color:var(--color-warm-gray)]/55"
+              className="flex cursor-not-allowed flex-col items-center justify-center gap-1.5 py-2 text-[9px] font-bold uppercase tracking-[0.1em] text-[#6d6656]"
               title={t({ en: "Coming soon", es: "Próximamente" })}
             >
               <span>{t({ en: it.en, es: it.es })}</span>
-              <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/70">
+              <span className="text-[7px] font-extrabold tracking-[0.18em] text-[#6d6656]">
                 {t({ en: "Soon", es: "Pronto" })}
               </span>
             </span>
@@ -67,8 +67,8 @@ export function BottomNav() {
             aria-current={active ? "page" : undefined}
             className={`flex flex-col items-center justify-center gap-1.5 py-2 text-[9px] uppercase tracking-[0.1em] cursor-pointer transition-colors ${
               active
-                ? "font-black text-[color:var(--color-lit-grey)]"
-                : "font-semibold text-[color:var(--color-warm-gray)]/50 hover:text-[color:var(--color-lit-grey)]"
+                ? "font-black text-[#F2EEE1]"
+                : "font-semibold text-[#b3ab98] hover:text-[#F2EEE1]"
             }`}
           >
             <span>{t({ en: it.en, es: it.es })}</span>
@@ -95,7 +95,7 @@ export function TopNav() {
   const { canSwitch, openChooser } = useSubscriptionSwitch();
   return (
     <nav
-      className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
+      className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:rgba(242,238,225,0.10)] bg-[#16130C]/92 backdrop-blur-md md:block"
       aria-label="Primary"
     >
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-8 py-5">
@@ -108,11 +108,11 @@ export function TopNav() {
                 <span
                   key={it.route}
                   aria-disabled
-                  className="cursor-not-allowed text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/35"
+                  className="cursor-not-allowed text-[11px] font-bold uppercase tracking-[0.18em] text-[#6d6656]"
                   title={t({ en: "Coming soon", es: "Próximamente" })}
                 >
                   {t({ en: it.en, es: it.es })}{" "}
-                  <span className="ml-1 text-[8px] font-extrabold tracking-[0.2em] text-[color:var(--color-warm-gray)]/80">
+                  <span className="ml-1 text-[8px] font-extrabold tracking-[0.2em] text-[#6d6656]">
                     {t({ en: "SOON", es: "PRONTO" })}
                   </span>
                 </span>
@@ -123,8 +123,8 @@ export function TopNav() {
                 key={it.route}
                 href={portalHref(lang, it.route)}
                 aria-current={active ? "page" : undefined}
-                className={`text-[11px] font-bold uppercase tracking-[0.18em] cursor-pointer transition-colors hover:text-[color:var(--color-lit-grey)] ${
-                  active ? "text-[color:var(--color-lit-grey)] underline underline-offset-4" : "text-[color:var(--color-lit-grey)]/55"
+                className={`text-[11px] font-bold uppercase tracking-[0.18em] cursor-pointer transition-colors hover:text-[#F2EEE1] ${
+                  active ? "text-[#F2EEE1] underline underline-offset-4 decoration-[color:var(--color-bold-yellow)]" : "text-[#b3ab98]"
                 }`}
               >
                 {t({ en: it.en, es: it.es })}

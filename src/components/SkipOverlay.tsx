@@ -277,7 +277,7 @@ export function SkipOverlay({
       onClick={busy ? undefined : onClose}
     >
       <div
-        className="zone-cream relative mx-auto max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-7 pt-10 pb-8 sm:rounded-3xl"
+        className="zone-cream relative mx-auto max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-[28px] bg-[color:var(--color-brisky-cream)] px-7 pt-10 pb-8 sm:rounded-[28px]"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -290,7 +290,7 @@ export function SkipOverlay({
           ×
         </button>
         {dryRun && (
-          <div className="absolute left-4 top-4 rounded-sm bg-[color:var(--color-lit-grey)] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
+          <div className="absolute left-4 top-4 rounded-full bg-[color:var(--color-lit-grey)] px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
             <T en="Simulation" es="Simulación" />
           </div>
         )}
@@ -298,13 +298,13 @@ export function SkipOverlay({
         {/* ───────── Step: reason ───────── */}
         {step === "reason" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
               <T en="Skip next order" es="Saltar próximo pedido" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
               <T en="Sure you want to skip?" es="¿Seguro que quieres saltar?" />
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               <T
                 en="Tell us why, and we'll suggest something better than losing a shipment."
                 es="Cuéntanos por qué y te proponemos algo mejor que perder un envío."
@@ -317,10 +317,10 @@ export function SkipOverlay({
                   <button
                     type="button"
                     onClick={() => setReason(r.value)}
-                    className={`flex w-full items-center justify-between rounded-sm border px-4 py-3 text-left text-sm ${
+                    className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm ${
                       reason === r.value
                         ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15"
-                        : "border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)]"
+                        : "border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
                     }`}
                   >
                     <span>{t({ en: r.en, es: r.es })}</span>
@@ -337,7 +337,7 @@ export function SkipOverlay({
                 onChange={(e) => setFreeText(e.target.value)}
                 placeholder={t({ en: "Tell us what happened", es: "Cuéntanos qué ha pasado" })}
                 rows={2}
-                className="mt-3 w-full rounded-sm border border-[color:var(--color-lit-grey)]/20 bg-[color:var(--color-sharp-white)] p-3 text-sm placeholder:opacity-40"
+                className="mt-3 w-full rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-3 text-sm placeholder:opacity-40"
               />
             )}
 
@@ -345,7 +345,7 @@ export function SkipOverlay({
               type="button"
               disabled={!reason || (reason === "other" && !freeText.trim())}
               onClick={handleContinueFromReason}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-40"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-40"
             >
               <T en="Continue" es="Continuar" />
             </button>
@@ -365,7 +365,7 @@ export function SkipOverlay({
             <h1 className="font-display text-3xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
               {t(offerCopy)}
             </h1>
-            <p className="mt-3 text-xs uppercase tracking-[0.15em] opacity-60">
+            <p className="mt-3 text-xs uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
               <T en="Now" es="Ahora" />:{" "}
               {t({
                 en: `${subscription.boxCount} ${subscription.boxCount === 1 ? "box" : "boxes"}, every ${freqLabel(subscription.frequency)}`,
@@ -375,13 +375,13 @@ export function SkipOverlay({
 
             {freqOptions.length > 1 && (
               <div className="mt-5">
-                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                   <T en="New frequency" es="Nueva frecuencia" />
                 </div>
                 <select
                   value={offerFreq}
                   onChange={(e) => setOfferFreq(e.target.value as Frequency)}
-                  className="w-full rounded-sm bg-[color:var(--color-sharp-white)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em]"
+                  className="w-full rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em]"
                 >
                   {freqOptions.map((f) => (
                     <option key={f} value={f}>
@@ -397,10 +397,10 @@ export function SkipOverlay({
 
             {/* Preview of the next order date */}
             {currentShip && (
-              <div className="mt-4 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
+              <div className="mt-4 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)]">
                 {freqChanged && offerNewShip ? (
                   <>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                       <T en="Your next order moves to" es="Tu próximo pedido pasa al" />
                     </div>
                     <div className="mt-1 font-display text-xl font-black uppercase">
@@ -412,7 +412,7 @@ export function SkipOverlay({
                   </>
                 ) : (
                   <>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                       <T en="Next order date" es="Fecha de próximo pedido" />
                     </div>
                     <div className="mt-1 font-display text-xl font-black uppercase">
@@ -425,7 +425,7 @@ export function SkipOverlay({
 
             {/* Box count */}
             <div className="mt-5">
-              <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                 <T en="Boxes per shipment" es="Cajas por envío" />
               </div>
               <div className="grid grid-cols-6 gap-2">
@@ -434,10 +434,10 @@ export function SkipOverlay({
                     key={n}
                     type="button"
                     onClick={() => setOfferBoxes(n)}
-                    className={`rounded-sm py-3 text-sm font-black ${
+                    className={`rounded-[14px] py-3 text-sm font-black ${
                       offerBoxes === n
                         ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                        : "bg-[color:var(--color-sharp-white)] opacity-70"
+                        : "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] text-[color:var(--color-warm-gray)]"
                     }`}
                   >
                     {n}
@@ -459,14 +459,14 @@ export function SkipOverlay({
             </div>
 
             {error && (
-              <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>
+              <div className="mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]">{error}</div>
             )}
 
             <button
               type="button"
               disabled={!hasOfferChange || busy}
               onClick={handleAdjust}
-              className="mt-6 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+              className="mt-6 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
@@ -496,13 +496,13 @@ export function SkipOverlay({
         {/* ───────── Step: confirm skip ───────── */}
         {step === "confirm" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
               <T en="Skip next order" es="Saltar próximo pedido" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
               <T en="Need a break?" es="¿Necesitas una pausa?" />
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               <T
                 en="Your subscription will skip one cycle and we'll resume from there."
                 es="Tu suscripción se saltará un ciclo y retomaremos desde ahí."
@@ -510,8 +510,8 @@ export function SkipOverlay({
             </p>
 
             {currentShip && (
-              <div className="mt-6 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+              <div className="mt-6 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)]">
+                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                   <T en="Next order date" es="Fecha de próximo pedido" />
                 </div>
                 <div className="mt-1 font-display text-xl font-black uppercase opacity-60">
@@ -532,14 +532,14 @@ export function SkipOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>
+              <div className="mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]">{error}</div>
             )}
 
             <button
               type="button"
               disabled={busy}
               onClick={handleSkip}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-50"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-50"
             >
               {busy ? <T en="Skipping…" es="Saltando…" /> : <T en="Confirm skip" es="Confirmar saltar" />}
             </button>
@@ -560,13 +560,13 @@ export function SkipOverlay({
         {/* ───────── Done: skipped ───────── */}
         {step === "done-skip" && doneSkip && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
               <T en="Done" es="Listo" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1]">
               <T en="Skipped" es="Saltado" />
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               <T en="Your next box now ships on" es="Tu próxima caja sale el" />{" "}
               <strong>{fmt(new Date(doneSkip.newNextShipDate))}</strong>.
             </p>
@@ -579,7 +579,7 @@ export function SkipOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>
@@ -589,13 +589,13 @@ export function SkipOverlay({
         {/* ───────── Done: adjusted ───────── */}
         {step === "done-adjust" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
               <T en="Plan updated" es="Plan actualizado" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1]">
               <T en="All set" es="Listo" />
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               {freqChanged && adjustedDate ? (
                 <>
                   <T
@@ -614,7 +614,7 @@ export function SkipOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>

@@ -33,10 +33,12 @@ export function ReactivateCard({
 }: ReactivateCardProps) {
   return (
     <section
-      className="relative mx-6 mt-2 overflow-hidden rounded-2xl px-6 py-7 text-center text-[color:var(--color-cream)] md:mx-0"
+      className="relative mx-6 mt-2 overflow-hidden rounded-[24px] px-6 py-7 text-center text-[#F2EEE1] md:mx-0"
       style={{
         background:
           "linear-gradient(135deg, var(--color-lit-grey), var(--color-dark-indigo))",
+        boxShadow:
+          "0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
       }}
     >
       <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]">
@@ -48,7 +50,7 @@ export function ReactivateCard({
         <T en="are waiting." es="te esperan." />
       </h2>
       {(dropsHeld !== undefined || cardsKept !== undefined) && (
-        <p className="mt-2.5 text-[13px] leading-[1.5] text-[color:var(--color-warm-gray-lt)]">
+        <p className="mt-2.5 text-[13px] leading-[1.5] text-[#b3ab98]">
           {dropsHeld !== undefined && dropsHeldDays !== undefined && (
             <>
               <T
@@ -66,7 +68,7 @@ export function ReactivateCard({
         </p>
       )}
       {error && (
-        <div className="mx-auto mt-4 max-w-xs rounded-sm border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+        <div className="mx-auto mt-4 max-w-xs rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
           {error}
         </div>
       )}
@@ -74,7 +76,7 @@ export function ReactivateCard({
         type="button"
         onClick={onReactivate}
         disabled={busy}
-        className="mt-5 rounded-[2px] bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] disabled:opacity-60"
+        className="mt-5 rounded-full bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] disabled:opacity-60"
       >
         {busy ? (
           <T en="Reactivating…" es="Reactivando…" />
