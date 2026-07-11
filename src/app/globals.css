@@ -15,7 +15,7 @@
 
 @theme {
   /* ─── Core palette (Master Spec § 10) ─── */
-  --color-brisky-cream: #E9EBDE;
+  --color-brisky-cream: #E0E0D0; /* PRE footer beige (Juan 2026-07) — antes #E9EBDE */
   --color-brisky-warm: #E3DFC9;
   --color-sharp-white: #F8F9F2;
   --color-zesty-beige: #CFBFAD;
