@@ -138,7 +138,13 @@ export function CancelTakeover({
   };
 
   return (
-    <div className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#16130C] text-[#F2EEE1]">
+    <div
+      className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#16130C] text-[#F2EEE1]"
+      style={{
+        backgroundImage:
+          "radial-gradient(120% 55% at 50% 0%, rgba(235,238,98,0.06), transparent 55%)",
+      }}
+    >
       <button
         type="button"
         // After a REAL cancel the plain onClose would drop the customer back
@@ -449,7 +455,7 @@ function Solucion({
   };
 
   const errorBox = error && (
-    <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+    <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/15 px-4 py-3 text-xs text-[#e8a591]">
       {error}
     </div>
   );
@@ -752,7 +758,7 @@ function Descuento({
       )}
 
       {error && (
-        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/15 px-4 py-3 text-xs text-[#e8a591]">
           {error}
         </div>
       )}
@@ -848,7 +854,7 @@ function Confirmar({
         <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
       </div>
       {error && (
-        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-red-50/10 px-4 py-3 text-xs text-[#ff9b9b]">
+        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/15 px-4 py-3 text-xs text-[#e8a591]">
           {error}
         </div>
       )}

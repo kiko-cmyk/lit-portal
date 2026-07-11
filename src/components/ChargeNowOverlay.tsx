@@ -143,8 +143,8 @@ export function ChargeNowOverlay({
               <div
                 className={
                   locked
-                    ? "mt-4 rounded-[14px] bg-amber-50 px-4 py-3 text-xs text-amber-800"
-                    : "mt-4 rounded-[14px] bg-red-50 px-4 py-3 text-xs text-red-700"
+                    ? "mt-4 rounded-[14px] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs text-[color:var(--color-lit-grey)]"
+                    : "mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]"
                 }
               >
                 {error}
@@ -155,7 +155,7 @@ export function ChargeNowOverlay({
               type="button"
               disabled={busy || locked}
               onClick={handleCharge}
-              className="mt-7 w-full rounded-full bg-[#16130C] py-4 text-xs font-black uppercase tracking-[0.2em] text-[#F2EEE1] disabled:opacity-50"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
             >
               {busy ? (
                 <T en="Processing…" es="Procesando…" />
