@@ -3,6 +3,7 @@
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import { frequencyLabel } from "@/lib/frequency-label";
 import { WaxSeal } from "@/components/WaxSeal";
+import { HERO_PHOTO_DATA_URI } from "@/lib/hero-photo";
 import type { Frequency } from "@/lib/types";
 
 export type NextBoxHeroVariant = "default" | "skipped" | "locked" | "new";
@@ -79,21 +80,38 @@ export function NextBoxHero({
 
   return (
     <section
-      className="cover-rise relative mx-6 mt-2 overflow-hidden rounded-[24px] bg-[color:var(--color-cream)] px-6 pt-6 pb-7 md:mx-0 md:rounded-[28px] md:px-10 md:pt-8 md:pb-10"
+      className="cover-rise relative mx-6 mt-2 overflow-hidden rounded-[24px] bg-[#16130C] px-6 pt-6 pb-7 md:mx-0 md:rounded-[28px] md:px-10 md:pt-8 md:pb-10"
       style={{
         boxShadow:
-          "0 1px 0 rgba(255,255,255,0.6) inset, 0 24px 50px -20px rgba(50,40,30,0.22), 0 8px 16px -10px rgba(50,40,30,0.16)",
+          "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
         isolation: "isolate",
       }}
     >
-      {/* Interior mesh */}
+      {/* Cinematic photo backdrop (PRE) — brand photo veiled to dark warm */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10 bg-cover"
+        style={{
+          backgroundImage: `url(${HERO_PHOTO_DATA_URI})`,
+          backgroundPosition: "center 28%",
+        }}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(18,15,9,0.42) 0%, rgba(18,15,9,0.74) 52%, #16130C 98%)",
+        }}
+      />
+      {/* Faint yellow glow keeps the brand heartbeat on the dark hero */}
       <span
         aria-hidden
         className="pointer-events-none absolute -inset-[10%] -z-10"
         style={{
           background:
-            "radial-gradient(at 80% 10%, rgba(235, 238, 98, 0.55) 0%, transparent 45%), radial-gradient(at 10% 90%, rgba(200, 155, 95, 0.32) 0%, transparent 50%), radial-gradient(at 50% 50%, rgba(55, 53, 84, 0.10) 0%, transparent 60%)",
-          filter: "blur(20px)",
+            "radial-gradient(at 82% 6%, rgba(235, 238, 98, 0.18) 0%, transparent 45%)",
+          filter: "blur(24px)",
         }}
       />
 
@@ -113,7 +131,7 @@ export function NextBoxHero({
           {tapeLabel}
         </span>
         <span
-          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]"
+          className="font-semibold uppercase tracking-[0.22em] text-[#F2EEE1]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
         >
           {arrivalCopy ?? <T en="Loading" es="Cargando" />}
@@ -129,7 +147,7 @@ export function NextBoxHero({
         <div className="min-w-0">
           <div className="flex items-baseline gap-4 md:gap-6">
             <span
-              className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[color:var(--color-lit-grey)]"
+              className="char-rise font-display font-semibold leading-[0.85] tracking-[-0.04em] text-[#F2EEE1]"
               style={{
                 fontSize: "clamp(3.6rem, 13vw, 5.8rem)",
               }}
@@ -141,7 +159,7 @@ export function NextBoxHero({
               style={{
                 fontSize: "clamp(3.6rem, 13vw, 5.8rem)",
                 color: "transparent",
-                WebkitTextStroke: "2.5px var(--color-lit-grey)",
+                WebkitTextStroke: "2.5px #F2EEE1",
                 animationDelay: "0.15s",
               }}
             >
@@ -150,7 +168,7 @@ export function NextBoxHero({
           </div>
 
           <div
-            className="mt-3 font-semibold uppercase tracking-[0.28em] text-[color:var(--color-warm-gray)]"
+            className="mt-3 font-semibold uppercase tracking-[0.28em] text-[#b3ab98]"
             style={{
               fontFamily: "var(--font-cond)",
               fontSize: 12,
@@ -169,7 +187,7 @@ export function NextBoxHero({
       </div>
 
       {/* Meta row: Sabor | Tu plan, full-width grid below the divider */}
-      <div className="mt-7 grid grid-cols-2 gap-4 border-t border-[color:var(--color-lit-grey)]/15 pt-5 md:mt-10 md:pt-6">
+      <div className="mt-7 grid grid-cols-2 gap-4 border-t border-white/15 pt-5 md:mt-10 md:pt-6">
         <MetaCell
           label={t({ en: "Flavor", es: "Sabor" })}
           value={flavor.toUpperCase()}
@@ -183,8 +201,8 @@ export function NextBoxHero({
       </div>
 
       {skipped && (
-        <div className="mt-4 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5">
-          <span className="text-[12px] text-[color:var(--color-lit-grey)]">
+        <div className="mt-4 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15 px-4 py-2.5">
+          <span className="text-[12px] text-[#F2EEE1]">
             <T
               en="You skipped the previous order. This is your next one."
               es="Saltaste el pedido anterior. Este es el próximo."
@@ -194,7 +212,7 @@ export function NextBoxHero({
             <button
               type="button"
               onClick={onUndoSkip}
-              className="text-[10px] font-extrabold uppercase tracking-[0.15em] underline"
+              className="text-[10px] font-extrabold uppercase tracking-[0.15em] underline text-[color:var(--color-bold-yellow)]"
             >
               <T en="Undo" es="Deshacer" />
             </button>
@@ -203,8 +221,8 @@ export function NextBoxHero({
       )}
 
       {locked && cutoffEndsAt && (
-        <div className="mt-4 bg-[color:var(--color-lit-grey)]/[0.06] px-3 py-2 text-center text-[11px] text-[color:var(--color-warm-gray)]">
-          <strong className="font-extrabold text-[color:var(--color-lit-grey)]">
+        <div className="mt-4 rounded-md bg-white/[0.08] px-3 py-2 text-center text-[11px] text-[#b3ab98]">
+          <strong className="font-extrabold text-[#F2EEE1]">
             <T
               en={`Locked in ${formatHM(cutoffEndsAt)}`}
               es={`Bloqueado en ${formatHM(cutoffEndsAt)}`}
@@ -234,13 +252,13 @@ function MetaCell({
   return (
     <div className={align === "right" ? "text-right" : "text-left"}>
       <div
-        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        className="font-semibold uppercase tracking-[0.22em] text-[#b3ab98]"
         style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
       >
         {label}
       </div>
       <div
-        className="mt-2 font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
+        className="mt-2 font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[#F2EEE1]"
         style={{
           fontFamily: "var(--font-display)",
           fontSize: "clamp(20px, 5vw, 26px)",
