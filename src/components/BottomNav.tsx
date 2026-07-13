@@ -133,11 +133,26 @@ export function TopNav() {
       className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
       aria-label="Primary"
     >
-      {/* Estilo header tema web PRE: dos grupos-cápsula (nav + utilidades) con
-          viñeta ○/● por item, activo en pastilla amarilla, y el logo centrado. */}
-      <div className="mx-auto grid w-full max-w-5xl grid-cols-[1fr_auto_1fr] items-center px-8 py-4">
-        {/* Izquierda — nav principal como cápsula de pastillas PRE */}
-        <div className="justify-self-start inline-flex items-center gap-1 rounded-full border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)]/55 p-1 backdrop-blur-sm">
+      {/* Header tema web PRE: logo a la IZQUIERDA del todo; a la DERECHA
+          CAMBIAR (a la izquierda del resto) + la cápsula de nav (viñeta ○/●
+          por item, activo en pastilla amarilla). */}
+      <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-8 py-4">
+        {/* Izquierda del todo — logo */}
+        <Logo />
+        {/* Derecha — CAMBIAR + cápsula de nav */}
+        <div className="flex items-center gap-3">
+          {canSwitch && (
+            <button
+              type="button"
+              onClick={openChooser}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[color:var(--color-lit-grey)]/40 bg-[color:var(--color-sharp-white)]/70 px-3 py-[7px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]/80 shadow-[0_1px_2px_rgba(50,40,30,0.08)] transition-colors hover:text-[color:var(--color-lit-grey)]"
+              style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
+            >
+              <span aria-hidden className="inline-block h-[6px] w-[6px] rounded-full border border-current opacity-70" />
+              {t({ en: "Switch", es: "Cambiar" })}
+            </button>
+          )}
+          <div className="inline-flex items-center gap-1 rounded-full border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)]/55 p-1 backdrop-blur-sm">
           {ITEMS.map((it) => {
             const active = current === it.route;
             const label = t({ en: it.en, es: it.es });
@@ -176,26 +191,7 @@ export function TopNav() {
               </Link>
             );
           })}
-        </div>
-
-        {/* Centro — logo */}
-        <div className="justify-self-center">
-          <Logo />
-        </div>
-
-        {/* Derecha — utilidades (cambiar de suscripción + idioma) */}
-        <div className="justify-self-end flex items-center gap-2">
-          {canSwitch && (
-            <button
-              type="button"
-              onClick={openChooser}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[color:var(--color-lit-grey)]/40 bg-[color:var(--color-sharp-white)]/70 px-3 py-[7px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]/80 shadow-[0_1px_2px_rgba(50,40,30,0.08)] transition-colors hover:text-[color:var(--color-lit-grey)]"
-              style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
-            >
-              <span aria-hidden className="inline-block h-[6px] w-[6px] rounded-full border border-current opacity-70" />
-              {t({ en: "Switch", es: "Cambiar" })}
-            </button>
-          )}
+          </div>
         </div>
       </div>
     </nav>
