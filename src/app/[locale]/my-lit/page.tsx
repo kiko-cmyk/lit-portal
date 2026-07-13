@@ -328,7 +328,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPostCancel ? (
           <ReactivateCard
@@ -357,7 +357,7 @@ export default function HubPage() {
                 es: "Gestionar mi suscripción",
               })}
             />
-            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-5">
+            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
               <QuickActionButton
                 icon={QAIcons.ChargeNow}
                 label={t({ en: "Bring forward", es: "Adelantar pedido" })}
@@ -384,15 +384,6 @@ export default function HubPage() {
                 })}
                 onClick={() => setShowSkip(true)}
                 disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.Cancel}
-                label={t({
-                  en: "Cancel subscription",
-                  es: "Cancelar suscripción",
-                })}
-                sub={t({ en: "Delete account", es: "Eliminar cuenta" })}
-                onClick={() => setShowCancel(true)}
               />
               <QuickActionButton
                 icon={QAIcons.Flavor}

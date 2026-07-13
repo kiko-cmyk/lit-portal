@@ -156,13 +156,6 @@ export default function AccountPage() {
     );
   }
 
-  const initials = customer.name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]!.toUpperCase())
-    .join("") || "L";
-
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
   // A cancelled/expired sub still comes back from GET /api/subscription: that
@@ -259,18 +252,6 @@ export default function AccountPage() {
                 "linear-gradient(100deg, rgba(13,10,6,.95) 24%, rgba(13,10,6,.6) 72%, rgba(13,10,6,.35))",
             }}
           />
-          <div
-            className="flex h-[54px] w-[54px] flex-shrink-0 items-center justify-center rounded-2xl font-display font-semibold uppercase tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
-            style={{
-              fontSize: 22,
-              background:
-                "linear-gradient(135deg, var(--color-bold-yellow) 0%, var(--color-retro-ochre) 100%)",
-              boxShadow:
-                "0 0 0 2px var(--color-sharp-white), 0 0 0 3px rgba(50, 55, 67, 0.18)",
-            }}
-          >
-            {initials}
-          </div>
           <div className="min-w-0 flex-1">
             <div
               className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[#F2EEE1]"
@@ -299,7 +280,7 @@ export default function AccountPage() {
         </section>
 
         {subActive && (
-          <section className="mx-6 mb-5 grid grid-cols-3 gap-1.5 md:mx-0 md:grid-cols-5">
+          <section className="mx-6 mb-5 grid grid-cols-2 gap-1.5 md:mx-0 md:grid-cols-4">
             <CompactAction
               icon={QAIcons.ChargeNow}
               label={t({ en: "Bring fwd", es: "Adelantar" })}
@@ -319,11 +300,6 @@ export default function AccountPage() {
               label={t({ en: "Skip", es: "Saltar" })}
               onClick={() => setSkipOpen(true)}
               disabled={!!subscription?.withinCutoff}
-            />
-            <CompactAction
-              icon={QAIcons.Cancel}
-              label={t({ en: "Cancel", es: "Cancelar" })}
-              onClick={() => setCancelOpen(true)}
             />
             <CompactAction
               icon={QAIcons.Flavor}

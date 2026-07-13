@@ -31,19 +31,19 @@ const ITEMS: {
 /** Line icons for the mobile bottom nav (20px, stroke = currentColor). */
 const NAV_ICONS: Record<string, ReactNode> = {
   home: (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 8l-9-5-9 5 9 5 9-5z" />
       <path d="M3 8v8l9 5 9-5V8" />
     </svg>
   ),
   account: (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="8" r="4" />
       <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
     </svg>
   ),
   collection: (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <rect x="4" y="4" width="7" height="7" rx="1.5" />
       <rect x="13" y="4" width="7" height="7" rx="1.5" />
       <rect x="4" y="13" width="7" height="7" rx="1.5" />
@@ -67,7 +67,7 @@ export function BottomNav() {
       // even on short pages like the no-subscription state. Estilo PRE: icono
       // por pestaña, activo en círculo amarillo (mismo lenguaje que la pastilla
       // activa del header desktop).
-      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-2.5 pb-6 backdrop-blur-md md:hidden"
+      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-1.5 pb-5 backdrop-blur-md md:hidden"
       aria-label="Primary"
     >
       {ITEMS.map((it) => {
@@ -81,7 +81,7 @@ export function BottomNav() {
               className="flex cursor-not-allowed flex-col items-center justify-center gap-1 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[color:var(--color-warm-gray)]/50"
               title={t({ en: "Coming soon", es: "Próximamente" })}
             >
-              <span className="flex h-9 w-9 items-center justify-center">{icon}</span>
+              <span className="flex h-8 w-8 items-center justify-center">{icon}</span>
               <span className="flex items-center gap-1">
                 {t({ en: it.en, es: it.es })}
                 <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/60">
@@ -103,7 +103,7 @@ export function BottomNav() {
             }`}
           >
             <span
-              className={`flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+              className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
                 active
                   ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
                   : "text-[color:var(--color-warm-gray)]/70"
