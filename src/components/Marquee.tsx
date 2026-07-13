@@ -49,6 +49,7 @@ export function Marquee() {
                 fontFamily: "var(--font-display)",
                 fontWeight: 600,
                 fontSize: "clamp(1.4rem, 5vw, 2rem)",
+                lineHeight: 1,
                 letterSpacing: "-0.015em",
                 textTransform: "uppercase",
               }}
@@ -63,6 +64,7 @@ export function Marquee() {
               style={{
                 fontFamily: "var(--font-display)",
                 fontSize: "clamp(1.4rem, 5vw, 2rem)",
+                lineHeight: 1,
               }}
             >
               {it.value}
