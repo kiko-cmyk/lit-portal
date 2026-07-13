@@ -145,7 +145,7 @@ export function TopNav() {
             <button
               type="button"
               onClick={openChooser}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[color:var(--color-lit-grey)]/40 bg-[color:var(--color-sharp-white)]/70 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]/80 shadow-[0_1px_2px_rgba(50,40,30,0.08)] transition-colors hover:text-[color:var(--color-lit-grey)]"
+              className="inline-flex cursor-pointer items-center gap-1.5 self-stretch rounded-full border border-[color:var(--color-lit-grey)]/40 bg-[color:var(--color-sharp-white)]/70 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]/80 shadow-[0_1px_2px_rgba(50,40,30,0.08)] transition-colors hover:text-[color:var(--color-lit-grey)]"
             >
               <span aria-hidden className="inline-block h-[6px] w-[6px] rounded-full border border-current opacity-70" />
               {t({ en: "Switch", es: "Cambiar" })}
