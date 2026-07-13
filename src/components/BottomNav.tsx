@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
-import { LangToggle, useLang, useLangValue } from "@/lib/i18n";
+import { useLang, useLangValue } from "@/lib/i18n";
 import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
 import type { ReactNode } from "react";
 
@@ -196,7 +196,6 @@ export function TopNav() {
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
-          <LangToggle />
         </div>
       </div>
     </nav>

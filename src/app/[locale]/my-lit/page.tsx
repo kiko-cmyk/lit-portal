@@ -29,7 +29,7 @@ const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) =>
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 import { api, ApiClientError } from "@/lib/api-client";
-import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref } from "@/lib/portal-link";
 import type {
@@ -320,7 +320,6 @@ export default function HubPage() {
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
-          <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={drops.tierEarned}
@@ -576,7 +575,6 @@ function EmptyState() {
       <TopNav />
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
-        <LangToggle />
       </header>
       <main className="flex flex-1 flex-col items-center justify-center px-6 pt-[88px] pb-24 text-center md:mx-auto md:w-full md:max-w-2xl md:px-8 md:pt-[92px] md:pb-12">
         <span

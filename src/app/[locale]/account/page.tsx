@@ -218,7 +218,6 @@ export default function AccountPage() {
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
-          <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={tier?.earned ?? false}
@@ -227,7 +226,7 @@ export default function AccountPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {/* H1 "CUENTA" eliminado a petición de Juan 2026-05-19: la
             pestaña activa de la nav + el browser tab title ya indican
             dónde está el usuario, el titular interno es redundante. */}
@@ -507,8 +506,17 @@ export default function AccountPage() {
           <PaymentBlock />
         </Section>
 
-        {/* Language picker removed from Account body per Juan 2026-05-18 round 7
-            — the LangToggle in the header is the single source of truth. */}
+        {/* Idioma vive AQUÍ (en el cuerpo de Cuenta), no en el header
+            — decisión de Juan 2026-07-13. */}
+        <Section title={t({ en: "Language", es: "Idioma" })}>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-[color:var(--color-warm-gray)]">
+              {t({ en: "Choose your language", es: "Elige tu idioma" })}
+            </span>
+            <LangToggle />
+          </div>
+        </Section>
+
         <OrdersSection orders={orders} />
 
         <Marquee />
