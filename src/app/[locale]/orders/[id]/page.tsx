@@ -8,7 +8,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { SubSwitchPill } from "@/components/SubSwitchPill";
 import { api, ApiClientError } from "@/lib/api-client";
-import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 import type { CustomerProfile, OrderDetail } from "@/lib/types";
 
@@ -320,7 +320,6 @@ function Frame({
             every state gets the same header. */}
         <div className="flex min-w-0 items-center gap-2.5">
           <SubSwitchPill />
-          <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
         </div>
       </header>

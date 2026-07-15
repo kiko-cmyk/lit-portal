@@ -56,7 +56,7 @@ export function TierPill({
     // (multi-sub pill + toggle + chip + TierPill on ≤390px) instead of
     // overflowing the viewport (audit 2026-07-08).
     <span
-      className="inline-flex min-w-0 items-center overflow-hidden rounded-sm bg-[color:var(--color-bold-yellow)] px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+      className="inline-flex min-w-0 items-center overflow-hidden rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
       style={fresh ? { animation: "tier-appear 0.6s ease-out" } : undefined}
     >
       <span className="min-w-0 truncate">

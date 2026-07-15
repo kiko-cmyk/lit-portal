@@ -22,6 +22,7 @@ import {
   usePageTitle,
 } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
+import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import Link from "next/link";
 import { orderDetailHref } from "@/lib/portal-link";
 import type {
@@ -157,13 +158,6 @@ export default function AccountPage() {
     );
   }
 
-  const initials = customer.name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]!.toUpperCase())
-    .join("") || "L";
-
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
   // A cancelled/expired sub still comes back from GET /api/subscription: that
@@ -213,13 +207,12 @@ export default function AccountPage() {
             <button
               type="button"
               onClick={openChooser}
-              className="shrink-0 inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
+              className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
               style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
             >
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
-          <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={tier?.earned ?? false}
@@ -228,35 +221,48 @@ export default function AccountPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {/* H1 "CUENTA" eliminado a petición de Juan 2026-05-19: la
             pestaña activa de la nav + el browser tab title ya indican
             dónde está el usuario, el titular interno es redundante. */}
 
         {/* Profile chip — alineado al estilo MetaCell del Hub: Display
             semibold (no black), eyebrow en Cond. */}
-        <section className="mx-6 mb-4 flex items-center gap-3.5 rounded-[20px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
-          <div
-            className="flex h-[54px] w-[54px] flex-shrink-0 items-center justify-center rounded-2xl font-display font-semibold uppercase tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
+        <section
+          className="relative isolate mx-6 mb-4 flex items-center gap-3.5 overflow-hidden rounded-[22px] bg-[#16130C] px-5 py-4 md:mx-0"
+          style={{
+            boxShadow:
+              "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
+            isolation: "isolate",
+          }}
+        >
+          {/* Foto de marca velada (PRE) — mismo patrón de bloque oscuro que el hero del Hub */}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 -z-10 bg-cover"
             style={{
-              fontSize: 22,
-              background:
-                "linear-gradient(135deg, var(--color-bold-yellow) 0%, var(--color-retro-ochre) 100%)",
-              boxShadow:
-                "0 0 0 2px var(--color-sharp-white), 0 0 0 3px rgba(50, 55, 67, 0.18)",
+              backgroundImage: `url(${MEMBER_PHOTO_DATA_URI})`,
+              backgroundPosition: "center 32%",
+              filter: "grayscale(1)",
             }}
-          >
-            {initials}
-          </div>
+          />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 -z-10"
+            style={{
+              background:
+                "linear-gradient(100deg, rgba(13,10,6,.95) 24%, rgba(13,10,6,.6) 72%, rgba(13,10,6,.35))",
+            }}
+          />
           <div className="min-w-0 flex-1">
             <div
-              className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
+              className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[#F2EEE1]"
               style={{ fontSize: "clamp(18px, 4.5vw, 22px)" }}
             >
               {customer.name}
             </div>
             <div
-              className="mt-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+              className="mt-1 font-semibold uppercase tracking-[0.22em] text-[#b3ab98]"
               style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
             >
               <T en="Member since" es="Miembro desde" />{" "}
@@ -276,7 +282,7 @@ export default function AccountPage() {
         </section>
 
         {subActive && (
-          <section className="mx-6 mb-5 grid grid-cols-3 gap-1.5 md:mx-0 md:grid-cols-5">
+          <section className="mx-6 mb-5 grid grid-cols-2 gap-1.5 md:mx-0 md:grid-cols-4">
             <CompactAction
               icon={QAIcons.ChargeNow}
               label={t({ en: "Bring fwd", es: "Adelantar" })}
@@ -296,11 +302,6 @@ export default function AccountPage() {
               label={t({ en: "Skip", es: "Saltar" })}
               onClick={() => setSkipOpen(true)}
               disabled={!!subscription?.withinCutoff}
-            />
-            <CompactAction
-              icon={QAIcons.Cancel}
-              label={t({ en: "Cancel", es: "Cancelar" })}
-              onClick={() => setCancelOpen(true)}
             />
             <CompactAction
               icon={QAIcons.Flavor}
@@ -379,7 +380,7 @@ export default function AccountPage() {
               <button
                 type="button"
                 onClick={() => setPlanOpen(true)}
-                className="rounded-sm border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
+                className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
               >
                 <T
                   en="Change boxes or frequency"
@@ -403,7 +404,7 @@ export default function AccountPage() {
 
         <Section title={t({ en: "My details", es: "Mis datos" })}>
           {emailChangeConfirmed && (
-            <div className="mx-6 mb-3 rounded-sm bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
+            <div className="mx-6 mb-3 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
               <T
                 en="Email updated successfully."
                 es="Email actualizado correctamente."
@@ -411,7 +412,7 @@ export default function AccountPage() {
             </div>
           )}
           {emailChangePending && (
-            <div className="mx-6 mb-3 rounded-sm border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs leading-relaxed text-[color:var(--color-lit-grey)] md:mx-0">
+            <div className="mx-6 mb-3 rounded-[14px] border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs leading-relaxed text-[color:var(--color-lit-grey)] md:mx-0">
               <T
                 en={`We sent a confirmation link to ${emailChangePending}. Click it from that inbox to apply the change. Until you do, your account email stays the same.`}
                 es={`Te hemos enviado un enlace de confirmación a ${emailChangePending}. Ábrelo desde ese correo para aplicar el cambio. Hasta entonces tu email actual sigue activo.`}
@@ -484,8 +485,17 @@ export default function AccountPage() {
           <PaymentBlock />
         </Section>
 
-        {/* Language picker removed from Account body per Juan 2026-05-18 round 7
-            — the LangToggle in the header is the single source of truth. */}
+        {/* Idioma vive AQUÍ (en el cuerpo de Cuenta), no en el header
+            — decisión de Juan 2026-07-13. */}
+        <Section title={t({ en: "Language", es: "Idioma" })}>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-[color:var(--color-warm-gray)]">
+              {t({ en: "Choose your language", es: "Elige tu idioma" })}
+            </span>
+            <LangToggle />
+          </div>
+        </Section>
+
         <OrdersSection orders={orders} />
 
         <Marquee />
@@ -660,7 +670,10 @@ function Section({
   onAction?: () => void;
 }) {
   return (
-    <section className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6">
+    <section
+      className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6"
+      style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
+    >
       <div className="mb-4 flex items-baseline justify-between">
         <h2
           className="font-display font-semibold uppercase leading-[1] tracking-[-0.01em] text-[color:var(--color-lit-grey)]"
@@ -1067,7 +1080,10 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
   return (
-    <section className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6">
+    <section
+      className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6"
+      style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
+    >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

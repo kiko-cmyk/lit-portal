@@ -34,25 +34,26 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
           label and the order-count meta — the SectionDivider above already
           says "Historial", this internal eyebrow was duplicate noise. */}
       {orders.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)]/60 px-5 py-6 text-center text-[12px] text-[color:var(--color-warm-gray)]">
+        <div className="rounded-[20px] border border-dashed border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)]/60 px-5 py-6 text-center text-[12px] text-[color:var(--color-warm-gray)] md:rounded-[22px]">
           <T
             en="Your past orders will appear here after your first order."
             es="Tus pedidos pasados aparecerán aquí tras tu primer pedido."
           />
         </div>
       ) : (
-        <ul className="overflow-hidden rounded-2xl border border-[color:var(--color-lit-grey)]/5 bg-[color:var(--color-sharp-white)]">
+        <ul className="space-y-2">
           {orders.map((o) => (
             <li
               key={o.id}
-              className="border-b border-[color:var(--color-lit-grey)]/5 last:border-b-0"
+              className="overflow-hidden rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
+              style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
             >
               <Link
                 href={orderDetailHref(lang, o.id)}
                 className="flex items-center justify-between gap-3 px-5 py-3.5 transition-colors hover:bg-[color:var(--color-brisky-cream)]"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
+                  <div className="text-[13px] font-semibold text-[color:var(--color-lit-grey)]">
                     {o.orderNumber} ·{" "}
                     {new Date(o.date).toLocaleDateString(dateLocale, {
                       month: "short",
@@ -65,7 +66,7 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
                   </div>
                 </div>
                 <span
-                  className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
+                  className="rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.18em]"
                   style={orderStatusStyle(o.status)}
                 >
                   {translateOrderStatus(o.status, lang).toUpperCase()}

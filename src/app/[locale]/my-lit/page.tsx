@@ -30,7 +30,7 @@ const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) =>
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 import { api, ApiClientError } from "@/lib/api-client";
-import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref } from "@/lib/portal-link";
 import type {
@@ -348,13 +348,12 @@ export default function HubPage() {
             <button
               type="button"
               onClick={openChooser}
-              className="shrink-0 inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
+              className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
               style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
             >
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
-          <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={drops.tierEarned}
@@ -363,7 +362,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPostCancel ? (
           <ReactivateCard
@@ -392,7 +391,7 @@ export default function HubPage() {
                 es: "Gestionar mi suscripción",
               })}
             />
-            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-5">
+            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
               <QuickActionButton
                 icon={QAIcons.ChargeNow}
                 label={t({ en: "Bring forward", es: "Adelantar pedido" })}
@@ -419,15 +418,6 @@ export default function HubPage() {
                 })}
                 onClick={() => setShowSkip(true)}
                 disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.Cancel}
-                label={t({
-                  en: "Cancel subscription",
-                  es: "Cancelar suscripción",
-                })}
-                sub={t({ en: "Delete account", es: "Eliminar cuenta" })}
-                onClick={() => setShowCancel(true)}
               />
               <QuickActionButton
                 icon={QAIcons.Flavor}
@@ -578,7 +568,7 @@ function SyncingBanner() {
     <div
       role="status"
       aria-live="polite"
-      className="mx-6 mt-2 flex items-center gap-3 rounded-xl border border-[color:var(--color-bold-yellow)]/40 bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 md:mx-0"
+      className="mx-6 mt-2 flex items-center gap-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:mx-0"
     >
       <span
         className="inline-block h-3 w-3 flex-shrink-0 rounded-full bg-[color:var(--color-bold-yellow)]"
@@ -618,7 +608,6 @@ function EmptyState() {
       <TopNav />
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
-        <LangToggle />
       </header>
       <main className="flex flex-1 flex-col items-center justify-center px-6 pt-[88px] pb-24 text-center md:mx-auto md:w-full md:max-w-2xl md:px-8 md:pt-[92px] md:pb-12">
         <span

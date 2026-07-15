@@ -89,7 +89,7 @@ export function ChargeNowOverlay({
       onClick={busy ? undefined : onClose}
     >
       <div
-        className="zone-cream relative mx-auto w-full max-w-md rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
+        className="zone-cream relative mx-auto w-full max-w-md rounded-t-[24px] bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-[28px]"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -97,20 +97,20 @@ export function ChargeNowOverlay({
           onClick={onClose}
           disabled={busy}
           aria-label="Close"
-          className="absolute right-4 top-4 text-2xl opacity-60 disabled:opacity-30"
+          className="absolute right-4 top-4 text-2xl text-[color:var(--color-warm-gray)] opacity-70 disabled:opacity-30"
         >
           ×
         </button>
 
         {!done ? (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
               <T en="Bring order forward" es="Adelantar pedido" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
               <T en="Get it now" es="¿Recibirlo ya" />?
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               <T
                 en="We'll charge your next order now and it'll arrive within 48-72h. Your calendar will reset from today based on your plan."
                 es="Cobraremos tu próximo pedido ahora y te llegará en las próximas 48-72h. Tu calendario se reajustará desde hoy en función de tu plan contratado."
@@ -118,18 +118,18 @@ export function ChargeNowOverlay({
             </p>
 
             {currentShip && (
-              <div className="mt-6 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+              <div className="mt-6 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:rounded-[22px]">
+                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                   <T en="Scheduled order date" es="Fecha de pedido programada" />
                 </div>
                 <div className="mt-1 flex items-center gap-3">
-                  <span className="font-display text-xl font-black uppercase line-through opacity-45">
+                  <span className="font-display text-xl font-black uppercase line-through text-[#9a9284]">
                     {currentShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
                       day: "numeric",
                       month: "long",
                     })}
                   </span>
-                  <span aria-hidden className="text-lg opacity-50">
+                  <span aria-hidden className="text-lg text-[color:var(--color-warm-gray)]">
                     →
                   </span>
                   <span className="font-display text-2xl font-black uppercase text-[color:var(--color-lit-grey)]">
@@ -143,8 +143,8 @@ export function ChargeNowOverlay({
               <div
                 className={
                   locked
-                    ? "mt-4 rounded-sm bg-amber-50 px-4 py-3 text-xs text-amber-800"
-                    : "mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700"
+                    ? "mt-4 rounded-[14px] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs text-[color:var(--color-lit-grey)]"
+                    : "mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]"
                 }
               >
                 {error}
@@ -155,7 +155,7 @@ export function ChargeNowOverlay({
               type="button"
               disabled={busy || locked}
               onClick={handleCharge}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-50"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
             >
               {busy ? (
                 <T en="Processing…" es="Procesando…" />
@@ -166,20 +166,20 @@ export function ChargeNowOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] underline"
             >
               <T en="Never mind" es="Mejor no" />
             </button>
           </>
         ) : (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
               <T en="Done" es="Listo" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
+            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
               <T en="On its way" es="En camino" />!
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               <T
                 en="We're processing your order. Your new delivery calendar will recalculate in a few moments."
                 es="Vamos a procesar tu pedido. Tu nuevo calendario de envíos se recalculará en unos instantes."
@@ -188,7 +188,7 @@ export function ChargeNowOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>

@@ -16,13 +16,11 @@ interface QuickActionButtonProps {
 }
 
 /**
- * Quick action tile, second pass post-Juan-feedback-2026-05-18:
- * "less Clash Display, more minimalist". Now:
- *   - Label is Barlow (body) — NOT Clash Display. Less shouty.
- *   - Weight 600 (semibold) instead of 900 (heavy black).
- *   - Title-case, not screaming uppercase.
- *   - Soft border + soft hover lift, no big drop shadow.
- *   - Arrow on hover persists (it was the part that worked).
+ * Quick action tile — tema PRE (Juan 2026-07):
+ *   - Label en Clash Display 600 uppercase (peso PRE), sobre tarjeta clara.
+ *   - Label SIEMPRE en dos filas: primera palabra en la fila 1, el resto
+ *     en la fila 2 (p.ej. "Adelantar" / "pedido").
+ *   - Borde suave + lift en hover, sombra suave, flecha al hover.
  */
 export function QuickActionButton({
   icon,
@@ -33,10 +31,15 @@ export function QuickActionButton({
   disabled,
 }: QuickActionButtonProps) {
   const inert = comingSoon || disabled;
+  // Dos filas fijas: 1ª palabra arriba, resto abajo.
+  const trimmedLabel = label.trim();
+  const spaceIdx = trimmedLabel.indexOf(" ");
+  const labelLine1 = spaceIdx === -1 ? trimmedLabel : trimmedLabel.slice(0, spaceIdx);
+  const labelLine2 = spaceIdx === -1 ? "" : trimmedLabel.slice(spaceIdx + 1);
   const base =
-    "group relative flex h-full min-h-[112px] w-full flex-col justify-between gap-2 overflow-hidden rounded-2xl px-5 pt-5 pb-5 text-left transition-all duration-200 ease-out";
+    "group relative flex h-full min-h-[112px] w-full flex-col justify-between gap-2 overflow-hidden rounded-[20px] md:rounded-[22px] px-5 pt-5 pb-5 text-left transition-all duration-200 ease-out";
   const active =
-    "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)]/60 hover:shadow-[0_10px_24px_-18px_rgba(50,55,67,0.35)] active:translate-y-0";
+    "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] shadow-[0_10px_30px_-16px_rgba(40,34,20,0.18)] hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)]/60 hover:shadow-[0_14px_30px_-14px_rgba(40,34,20,0.26)] active:translate-y-0";
   const muted =
     "border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.03] cursor-not-allowed";
 
@@ -46,13 +49,13 @@ export function QuickActionButton({
       onClick={comingSoon ? undefined : onClick}
       disabled={inert}
       aria-disabled={inert}
-      className={`${base} ${comingSoon ? muted : active} disabled:cursor-not-allowed disabled:opacity-55`}
+      className={`${base} ${comingSoon ? muted : active} disabled:cursor-not-allowed disabled:opacity-60`}
     >
       <span
         className={`inline-flex h-5 w-5 transition-transform duration-200 ${
           comingSoon
             ? "text-[color:var(--color-warm-gray)]/50"
-            : "text-[color:var(--color-lit-grey)] group-hover:scale-110"
+            : "text-[color:var(--color-bold-yellow)] group-hover:scale-110"
         }`}
       >
         {icon}
@@ -60,7 +63,7 @@ export function QuickActionButton({
 
       {comingSoon && (
         <span
-          className="absolute right-3 top-3 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+          className="absolute right-3 top-3 rounded-full bg-[color:var(--color-lit-grey)]/10 px-2 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
         >
           <T en="Soon" es="Pronto" />
@@ -69,15 +72,16 @@ export function QuickActionButton({
 
       <div className="flex flex-col gap-1">
         <span
-          className="text-[14px] font-semibold leading-tight tracking-[-0.005em]"
+          className="text-[14px] font-semibold uppercase leading-[1.05] tracking-[0.02em]"
           style={{
-            fontFamily: "var(--font-body)",
+            fontFamily: "var(--font-display)",
             color: comingSoon
               ? "var(--color-warm-gray)"
               : "var(--color-lit-grey)",
           }}
         >
-          {label}
+          <span className="block">{labelLine1}</span>
+          {labelLine2 && <span className="block">{labelLine2}</span>}
         </span>
         {sub && (
           <span

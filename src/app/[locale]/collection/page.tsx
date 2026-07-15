@@ -7,7 +7,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { SubSwitchPill } from "@/components/SubSwitchPill";
 import { TierPill } from "@/components/TierPill";
 import { api } from "@/lib/api-client";
-import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 import type { TierResponse, TimelineEntry } from "@/lib/types";
 
@@ -225,7 +225,6 @@ export default function CollectionPage() {
               (audit 2026-07-08: el pill faltaba en Colección y en el detalle
               de pedido, dejando al multi-sub móvil sin forma de cambiar). */}
           <SubSwitchPill />
-          <LangToggle />
           <TierPill
             visible={tier?.earned ?? false}
             tierEarnedAt={tier?.earnedAt ?? null}

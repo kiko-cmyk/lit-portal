@@ -167,13 +167,13 @@ export function PlanOverlay({
 
         {done ? (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
               <T en="Plan updated" es="Plan actualizado" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
+            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
               <T en="All set" es="Listo" />
             </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
               <T
                 en={`Your new plan: ${boxCount} ${boxCount === 1 ? "box" : "boxes"}, every ${FREQUENCIES.find((f) => f.value === frequency)?.en.replace("Every ", "").toLowerCase()}.`}
                 es={`Tu plan nuevo: ${boxCount} ${boxCount === 1 ? "caja" : "cajas"}, ${FREQUENCIES.find((f) => f.value === frequency)?.es.toLowerCase()}.`}
@@ -182,14 +182,14 @@ export function PlanOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>
           </>
         ) : (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
               <T en="Change subscription" es="Cambiar suscripción" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
@@ -198,7 +198,7 @@ export function PlanOverlay({
 
             {/* Box count picker */}
             <div className="mt-6">
-              <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60 mb-3">
+              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] mb-3">
                 <T en="Boxes per shipment" es="Cajas por envío" />
               </div>
               <div className="grid grid-cols-6 gap-2">
@@ -207,10 +207,10 @@ export function PlanOverlay({
                     key={n}
                     type="button"
                     onClick={() => setBoxCount(n)}
-                    className={`rounded-sm py-3 text-sm font-black ${
+                    className={`rounded-[14px] py-3 text-sm font-black ${
                       boxCount === n
                         ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                        : "bg-[color:var(--color-sharp-white)] opacity-70"
+                        : "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] text-[color:var(--color-warm-gray)]"
                     }`}
                   >
                     {n}
@@ -221,13 +221,13 @@ export function PlanOverlay({
 
             {/* Frequency picker */}
             <div className="mt-5">
-              <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60 mb-3">
+              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] mb-3">
                 <T en="Frequency" es="Frecuencia" />
               </div>
               <select
                 value={frequency}
                 onChange={(e) => setFrequency(e.target.value as Frequency)}
-                className="w-full rounded-sm bg-[color:var(--color-sharp-white)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em]"
+                className="w-full rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]"
               >
                 {FREQUENCIES.map((f) => (
                   <option key={f.value} value={f.value}>
@@ -239,22 +239,22 @@ export function PlanOverlay({
 
             {/* Price preview */}
             {pricing && newPrice !== null && (
-              <div className="mt-5 rounded-2xl bg-[color:var(--color-sharp-white)] p-5">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+              <div className="mt-5 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:rounded-[22px]">
+                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                   <T en="Per shipment" es="Por envío" />
                 </div>
                 <div className="mt-1 flex items-baseline gap-3">
-                  <span className="font-display text-4xl font-black">
+                  <span className="font-display text-4xl font-black text-[color:var(--color-lit-grey)]">
                     €{newPrice.toFixed(2)}
                   </span>
                   {newCompare && newCompare > newPrice && (
-                    <span className="text-sm line-through opacity-50">
+                    <span className="text-sm line-through text-[color:var(--color-warm-gray)]">
                       €{newCompare.toFixed(2)}
                     </span>
                   )}
                 </div>
                 {currentPrice !== null && newPrice !== currentPrice && (
-                  <div className="mt-1 text-[11px] uppercase tracking-[0.15em] opacity-60">
+                  <div className="mt-1 text-[11px] uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
                     <T en="Was" es="Antes" /> €{currentPrice.toFixed(2)} {" "}
                     {newPrice > currentPrice ? "↑" : "↓"} €
                     {Math.abs(newPrice - currentPrice).toFixed(2)}
@@ -264,7 +264,7 @@ export function PlanOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">
+              <div className="mt-4 rounded-[14px] bg-red-50 px-4 py-3 text-xs text-red-700">
                 {error}
               </div>
             )}
@@ -273,7 +273,7 @@ export function PlanOverlay({
               type="button"
               onClick={handleConfirm}
               disabled={!hasChange || busy}
-              className="mt-6 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="mt-6 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
@@ -284,7 +284,7 @@ export function PlanOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] underline"
             >
               <T en="Cancel" es="Cancelar" />
             </button>
