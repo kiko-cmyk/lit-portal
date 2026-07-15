@@ -48,7 +48,7 @@ export function CollectionMiniGrid({ earned }: CollectionMiniGridProps) {
             shipping, so the destination page is a teaser. SOON pill replaces
             the previous "Ver las 12" link. */}
         <span
-          className="inline-flex items-center rounded-full border border-[color:var(--color-bold-yellow)]/60 bg-[#16130C] px-2.5 py-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)]"
+          className="inline-flex items-center rounded-full border border-[color:var(--color-lit-grey)]/25 bg-[color:var(--color-lit-grey)]/[0.06] px-2.5 py-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
         >
           <T en="Soon" es="Pronto" />
