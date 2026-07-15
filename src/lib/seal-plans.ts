@@ -1,43 +1,137 @@
 /**
- * Mapping of LIT product variants + Seal selling plans.
+ * Mapping of LIT flavors → product variants, plus Seal selling plans.
  *
- * Source of truth for the (boxCount, frequency) → (variant, sellingPlan) lookup
- * used when changing a customer's subscription plan via the portal.
+ * Source of truth for the (flavor, boxCount, frequency) → (variant, sellingPlan)
+ * lookup used when changing a customer's plan OR flavor via the portal.
  *
- * IDs verified against Shopify Admin + Seal data 2026-05-06.
+ * IDs verified against Shopify Admin + Seal data 2026-05-06 (Salty Lemon) and
+ * Shopify products.json 2026-07-11 (Salty Watermelon, launches 2026-07-15).
  */
 
 import type { Frequency } from "./types";
 
-/**
- * Shopify product ID for LIT Daily Hydration. All 6 variants live under this product.
- */
-export const LIT_PRODUCT_ID = "16008517550429";
+export type BoxCount = 1 | 2 | 3 | 4 | 5 | 6;
+
+/** Stable key for each LIT flavor. Threaded through the plan route + overlays. */
+export type FlavorKey = "salty-lemon" | "salty-watermelon";
+
+export interface FlavorDef {
+  key: FlavorKey;
+  /** UI label shown in the portal in BOTH languages (Juan 2026-07-11: the
+   *  Account card strips the leading "Salty " → shows LEMON / WATERMELON). */
+  label: string;
+  /** Shopify product id (numeric string). All 6 box-count variants live under it. */
+  productId: string;
+  /**
+   * Variant id by box count (1..6). The variant determines:
+   *  - Sachets per shipment (30 / 60 / 90 / 120 / 150 / 180)
+   *  - Per-shipment price (bulk discount baked in: 25% / 40% / 45%)
+   * Prices are identical across flavors as of launch.
+   */
+  variantByBoxCount: Record<BoxCount, string>;
+}
 
 /**
- * Variant ID by box count (1..6). The variant determines:
- *  - Quantity of sachets per shipment (30 / 60 / 90 / 120 / 150 / 180)
- *  - Per-shipment price (with bulk discount baked in: 25% / 40% / 45%)
+ * Flavor registry — the source of truth for (flavor, boxCount) → variant.
+ *
+ * To add a flavor: create the Shopify product with the 6 box-count variants,
+ * attach it to the 8 Seal selling plans (SELLING_PLAN_BY_FREQUENCY below), then
+ * add an entry here. Everything else (extractFlavor, plan route, overlays,
+ * pricing, box-count resolution) is driven off this map.
  */
-export const VARIANT_BY_BOX_COUNT: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
-  1: "63887092154717",  // SL30  €28.35 (compare €37.80, -25%)
-  2: "64629025341789",  // SL60  €56.70 (compare €75.60, -25%)
-  3: "63887092220253",  // SL90  €67.93 (compare €113.40, -40%)
-  4: "64629029077341",  // SL120 €90.57 (compare €151.20, -40%)
-  5: "64629160477021",  // SL150 €103.95 (compare €189.00, -45%)
-  6: "64629047624029",  // SL180 €124.74 (compare €226.80, -45%)
+export const FLAVORS: Record<FlavorKey, FlavorDef> = {
+  "salty-lemon": {
+    key: "salty-lemon",
+    label: "Salty Lemon",
+    productId: "16008517550429",
+    variantByBoxCount: {
+      1: "63887092154717",  // SL30  €28.35 (compare €37.80, -25%)
+      2: "64629025341789",  // SL60  €56.70 (compare €75.60, -25%)
+      3: "63887092220253",  // SL90  €67.93 (compare €113.40, -40%)
+      4: "64629029077341",  // SL120 €90.57 (compare €151.20, -40%)
+      5: "64629160477021",  // SL150 €103.95 (compare €189.00, -45%)
+      6: "64629047624029",  // SL180 €124.74 (compare €226.80, -45%)
+    },
+  },
+  "salty-watermelon": {
+    key: "salty-watermelon",
+    label: "Salty Watermelon",
+    productId: "16272445112669",
+    variantByBoxCount: {
+      1: "65046727459165",  // W30  €28.35 (compare €37.80, -25%)
+      2: "65046727491933",  // W60  €56.70 (compare €75.60, -25%)
+      3: "65046727524701",  // W90  €67.93 (compare €113.40, -40%)
+      4: "65046727557469",  // W120 €90.57 (compare €151.20, -40%)
+      5: "65046727590237",  // W150 €103.95 (compare €189.00, -45%)
+      6: "65046727623005",  // W180 €124.74 (compare €226.80, -45%)
+    },
+  },
 };
 
+/** The flavor every legacy/unmapped subscription and the storefront default to. */
+export const DEFAULT_FLAVOR: FlavorKey = "salty-lemon";
+export const ALL_FLAVORS: FlavorDef[] = Object.values(FLAVORS);
+export const FLAVOR_KEYS: FlavorKey[] = ALL_FLAVORS.map((f) => f.key);
+
+export function isFlavorKey(v: unknown): v is FlavorKey {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(FLAVORS, v);
+}
+
+/** Default-flavor product id — kept as a named export for pricing/back-compat. */
+export const LIT_PRODUCT_ID = FLAVORS[DEFAULT_FLAVOR].productId;
+
+/** Default-flavor variant map — kept for back-compat (pricing default path). */
+export const VARIANT_BY_BOX_COUNT: Record<BoxCount, string> =
+  FLAVORS[DEFAULT_FLAVOR].variantByBoxCount;
+
 /**
- * Reverse lookup — variant ID back to box count.
+ * Reverse lookup — variant id → box count, UNIONED across every flavor. Critical:
+ * getBoxCount() falls back to quantity=1 for an unmapped variant, which silently
+ * breaks the box-count display AND the webhook/hub cache upserts (box_count CHECK
+ * 1..6). Every flavor's variants must be here.
  */
-export const BOX_COUNT_BY_VARIANT: Record<string, 1 | 2 | 3 | 4 | 5 | 6> =
-  Object.fromEntries(
-    (Object.entries(VARIANT_BY_BOX_COUNT) as [string, string][]).map(([k, v]) => [
-      v,
-      Number(k) as 1 | 2 | 3 | 4 | 5 | 6,
-    ]),
-  );
+export const BOX_COUNT_BY_VARIANT: Record<string, BoxCount> = Object.fromEntries(
+  ALL_FLAVORS.flatMap((f) =>
+    (Object.entries(f.variantByBoxCount) as [string, string][]).map(
+      ([boxes, variantId]) => [variantId, Number(boxes) as BoxCount],
+    ),
+  ),
+);
+
+/** variant id → flavor key, unioned across every flavor. */
+export const FLAVOR_BY_VARIANT: Record<string, FlavorKey> = Object.fromEntries(
+  ALL_FLAVORS.flatMap((f) =>
+    Object.values(f.variantByBoxCount).map((variantId) => [variantId, f.key] as const),
+  ),
+);
+
+/** product id → flavor key. */
+export const FLAVOR_BY_PRODUCT_ID: Record<string, FlavorKey> = Object.fromEntries(
+  ALL_FLAVORS.map((f) => [f.productId, f.key] as const),
+);
+
+/** Target variant id for a (flavor, boxCount). Null if boxCount out of range. */
+export function variantForFlavorBox(flavor: FlavorKey, boxCount: number): string | null {
+  if (!Number.isInteger(boxCount) || boxCount < 1 || boxCount > 6) return null;
+  return FLAVORS[flavor]?.variantByBoxCount[boxCount as BoxCount] ?? null;
+}
+
+/** Flavor key for a variant id (null if unmapped/legacy). */
+export function flavorKeyForVariant(variantId: string | null | undefined): FlavorKey | null {
+  if (!variantId) return null;
+  return FLAVOR_BY_VARIANT[String(variantId)] ?? null;
+}
+
+/** Flavor key for a product id (null if unmapped/legacy). */
+export function flavorKeyForProductId(productId: string | null | undefined): FlavorKey | null {
+  if (!productId) return null;
+  return FLAVOR_BY_PRODUCT_ID[String(productId)] ?? null;
+}
+
+/** UI label for a flavor key (falls back to the default flavor's label). */
+export function flavorLabel(flavor: FlavorKey | null | undefined): string {
+  return (FLAVORS[flavor ?? DEFAULT_FLAVOR] ?? FLAVORS[DEFAULT_FLAVOR]).label;
+}
 
 /**
  * Seal selling plan ID by frequency. The selling plan determines cadence only;

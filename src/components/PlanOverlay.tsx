@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang } from "@/lib/i18n";
 import { BOX_OPTIONS, FREQUENCIES } from "@/lib/plan-options";
+import { DEFAULT_FLAVOR, flavorKeyForVariant } from "@/lib/seal-plans";
 import type { Frequency, PricingResponse, Subscription } from "@/lib/types";
 
 interface PricingWithCompare extends PricingResponse {
@@ -35,10 +36,13 @@ export function PlanOverlay({
   const t = useLang();
 
   useEffect(() => {
-    api<PricingWithCompare>("/api/pricing")
+    // Price the customer's current flavor (identical across flavors today, but
+    // correct if a flavor is ever priced independently).
+    const flavorKey = flavorKeyForVariant(subscription.currentVariantId) ?? DEFAULT_FLAVOR;
+    api<PricingWithCompare>(`/api/pricing?flavor=${flavorKey}`)
       .then(setPricing)
       .catch(() => null);
-  }, []);
+  }, [subscription.currentVariantId]);
 
   const newPrice = pricing ? pricing.perBox[boxCount - 1] : null;
   const newCompare =

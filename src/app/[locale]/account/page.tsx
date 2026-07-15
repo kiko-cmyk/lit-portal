@@ -37,6 +37,7 @@ import type {
 // they download on first open. (2026-06-10 frontend perf pass)
 const AddressOverlay = dynamic(() => import("@/components/AddressOverlay").then((m) => m.AddressOverlay));
 const PlanOverlay = dynamic(() => import("@/components/PlanOverlay").then((m) => m.PlanOverlay));
+const FlavorOverlay = dynamic(() => import("@/components/FlavorOverlay").then((m) => m.FlavorOverlay));
 const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
@@ -49,6 +50,7 @@ export default function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [flavorOpen, setFlavorOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
   const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
@@ -304,7 +306,8 @@ export default function AccountPage() {
             <CompactAction
               icon={QAIcons.Flavor}
               label={t({ en: "Flavor", es: "Sabor" })}
-              comingSoon
+              onClick={() => setFlavorOpen(true)}
+              disabled={!!subscription?.withinCutoff}
             />
           </section>
         )}
@@ -530,6 +533,28 @@ export default function AccountPage() {
             clearJustSkipped();
             setJustSkipped(false);
             setSubscription(updated);
+          }}
+        />
+      )}
+      {flavorOpen && subscription && (
+        <FlavorOverlay
+          subscription={subscription}
+          onClose={() => setFlavorOpen(false)}
+          onUpdated={(updated) => {
+            // Flavor swap keeps the ship date; apply the returned sub, then
+            // refetch to reconcile the fresh mainItemId/variant (the unverified
+            // fallback response can carry the pre-swap item id). Retry once so a
+            // single transient failure can't leave a stale mainItemId that would
+            // 403 the next action until reload.
+            setSubscription(updated);
+            const reconcile = (attempt = 0) => {
+              api<Subscription>("/api/subscription")
+                .then(setSubscription)
+                .catch(() => {
+                  if (attempt < 1) setTimeout(() => reconcile(attempt + 1), 1500);
+                });
+            };
+            reconcile();
           }}
         />
       )}
