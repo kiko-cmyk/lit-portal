@@ -6,6 +6,13 @@ import { addCycle, subCycle } from "@/lib/cadence";
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
 import { portalHref } from "@/lib/portal-link";
+import {
+  ALL_FLAVORS,
+  BOX_COUNT_BY_VARIANT,
+  DEFAULT_FLAVOR,
+  type FlavorKey,
+  flavorKeyForVariant,
+} from "@/lib/seal-plans";
 import type {
   CancelStep1Response,
   CancelStep4Response,
@@ -27,11 +34,12 @@ import type {
  *               "No lo uso" → space out (real next-order date); "Me tomo un
  *               descanso" → skip the next. Applied via /plan or /skip directly.
  *   descuento → 15% off the NEXT charge, only if they reject the solution (or
- *               directly for "No me gusta" / "Otro"). Last resort. Applied via
+ *               directly for "Otro"). Last resort. Applied via
  *               /api/subscription/retention-discount (next-charge-only).
  *   confirmar → final cancellation.
  *
- * "No me gusta" / "Otro" have no plan fix, so they skip `solucion` → `descuento`.
+ * "No me gusta" gets a "try the other flavor" offer in `solucion` (a flavor
+ * swap keeps plan/price/date). "Otro" has no plan fix → skips to `descuento`.
  */
 type Step = "logro" | "motivo" | "solucion" | "descuento" | "done-stayed" | "confirmar" | "done";
 type StayMsg = { en: string; es: string };
@@ -45,16 +53,31 @@ const REASONS: { value: CancellationReason; en: string; es: string }[] = [
 ];
 
 /** Tailored no-discount solution per reason (null → straight to the 15%). */
-function solutionFor(reason: CancellationReason | null): "plan" | "skip" | null {
+function solutionFor(reason: CancellationReason | null): "plan" | "skip" | "flavor" | null {
   switch (reason) {
     case "not_using_enough":
     case "too_expensive":
       return "plan"; // space out / fewer boxes
     case "taking_a_break":
       return "skip"; // skip the next one
+    case "dont_like":
+      return "flavor"; // try the other flavor before leaving
     default:
-      return null; // dont_like, other, too_much_product
+      return null; // other, too_much_product
   }
+}
+
+/**
+ * Whether the "try another flavor" offer can be shown for "No me gusta": the sub
+ * must be on a mapped variant (so we know its box count for the swap) and there
+ * must be at least one OTHER flavor to switch to. Legacy/unmapped subs fall
+ * through to the 15% instead of being offered a swap the backend would refuse.
+ */
+function hasFlavorAlternative(sub: Subscription | null): boolean {
+  if (!sub?.currentVariantId) return false;
+  if (BOX_COUNT_BY_VARIANT[sub.currentVariantId] == null) return false;
+  const current = flavorKeyForVariant(sub.currentVariantId) ?? DEFAULT_FLAVOR;
+  return ALL_FLAVORS.some((f) => f.key !== current);
 }
 
 export function CancelTakeover({
@@ -109,7 +132,17 @@ export function CancelTakeover({
     const noLongerCadence =
       reason === "not_using_enough" &&
       longerFrequencies(subscription?.frequency ?? "1mo").length === 0;
-    setStep(sol && !noSmallerPlan && !noLongerCadence ? "solucion" : "descuento");
+    // Also skip the flavor offer within the 24h cutoff: the plan route blocks
+    // ALL changes then (cutoff_passed), so the offer would be a click-then-fail
+    // dead-end AND its "in your next box" copy would be false (the imminent box
+    // is locked). Fall through to the 15%, which is still actionable. (The copy
+    // is more specific than the sibling offers, so we gate it where they don't.)
+    const noFlavorAlt =
+      reason === "dont_like" &&
+      (!hasFlavorAlternative(subscription) || !!subscription?.withinCutoff);
+    setStep(
+      sol && !noSmallerPlan && !noLongerCadence && !noFlavorAlt ? "solucion" : "descuento",
+    );
   };
 
   // Exit after a REAL cancel (DoneState button and the × on the done step).
@@ -177,8 +210,8 @@ export function CancelTakeover({
             reason={reason}
             subscription={subscription}
             pricing={pricing}
-            onStayed={() => {
-              setStayedMsg({ en: "Your plan is updated.", es: "Tu plan está actualizado." });
+            onStayed={(msg) => {
+              setStayedMsg(msg ?? { en: "Your plan is updated.", es: "Tu plan está actualizado." });
               setStep("done-stayed");
             }}
             onDecline={() => setStep("descuento")}
@@ -366,7 +399,7 @@ function Solucion({
   reason: CancellationReason | null;
   subscription: Subscription | null;
   pricing: PricingResponse | null;
-  onStayed: () => void;
+  onStayed: (msg?: StayMsg) => void;
   onDecline: () => void;
   onBack: () => void;
 }) {
@@ -401,17 +434,28 @@ function Solucion({
   // Saltar (Me tomo un descanso): next order moves forward one cycle.
   const skipShip = currentShip ? addCycle(currentShip, freq) : null;
 
+  // Cambiar sabor (No me gusta): offer the other flavor(s). A flavor swap keeps
+  // plan, price and next-ship date — only the product changes.
+  const currentFlavorKey: FlavorKey =
+    flavorKeyForVariant(subscription?.currentVariantId) ?? DEFAULT_FLAVOR;
+  const flavorAlternatives = ALL_FLAVORS.filter((f) => f.key !== currentFlavorKey);
+  const [offerFlavor, setOfferFlavor] = useState<FlavorKey>(
+    flavorAlternatives[0]?.key ?? currentFlavorKey,
+  );
+
   const planErr = (e: unknown): string => {
     const code = (e as { code?: string; status?: number }).code;
     const status = (e as { status?: number }).status;
     if (code === "cutoff_passed")
       return t({ en: "Too late, your next box ships within 24h.", es: "Demasiado tarde, tu próxima caja se envía en 24h." });
+    if (code === "box_count_unknown")
+      return t({ en: "We couldn't switch your flavor automatically. Please contact us.", es: "No pudimos cambiar el sabor automáticamente. Escríbenos." });
     if (code === "gateway_timeout" || status === 504)
       return t({ en: "The service is taking longer than usual. Try again in a moment.", es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento." });
     return t({ en: "Couldn't update your plan. Try again or contact us.", es: "No se pudo cambiar el plan. Inténtalo de nuevo o escríbenos." });
   };
 
-  const applyPlan = async (body: Record<string, unknown>) => {
+  const applyPlan = async (body: Record<string, unknown>, stayedMsg?: StayMsg) => {
     setBusy(true);
     setError(null);
     try {
@@ -425,7 +469,7 @@ function Solucion({
           ...body,
         }),
       });
-      onStayed();
+      onStayed(stayedMsg);
     } catch (e) {
       setError(planErr(e));
     } finally {
@@ -480,6 +524,70 @@ function Solucion({
       </div>
     </>
   );
+
+  // ── No me gusta → probar otro sabor ──
+  if (reason === "dont_like") {
+    const altLabel = ALL_FLAVORS.find((f) => f.key === offerFlavor)?.label ?? "";
+    return (
+      <>
+        {eyebrow}
+        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
+          <T en="What if you try another flavor?" es="¿Y si pruebas otro sabor?" />
+        </h1>
+        <p className="mt-5 max-w-md text-sm opacity-75">
+          <T
+            en="Same plan, same price, same ship date — just a different flavor in your next box."
+            es="El mismo plan, el mismo precio y la misma fecha. Solo cambia el sabor de tu próxima caja."
+          />
+        </p>
+        <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
+          <T en="Try instead" es="Prueba con" />
+        </div>
+        <div className="mt-2 space-y-2">
+          {flavorAlternatives.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setOfferFlavor(f.key)}
+              className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3.5 text-left ${
+                offerFlavor === f.key
+                  ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/10"
+                  : "border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05]"
+              }`}
+            >
+              <span className="font-display text-lg font-black uppercase leading-tight">
+                {f.label}
+              </span>
+              {offerFlavor === f.key && (
+                <span className="text-[color:var(--color-bold-yellow)]">●</span>
+              )}
+            </button>
+          ))}
+        </div>
+        {errorBox}
+        <div className="mt-8 space-y-3">
+          <button
+            type="button"
+            disabled={busy || offerFlavor === currentFlavorKey}
+            onClick={() =>
+              applyPlan(
+                { flavor: offerFlavor },
+                { en: "Your flavor is updated.", es: "Tu sabor está actualizado." },
+              )
+            }
+            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+          >
+            {busy ? (
+              <T en="Saving…" es="Guardando…" />
+            ) : (
+              <T en={`Switch to ${altLabel}`} es={`Cambiar a ${altLabel}`} />
+            )}
+          </button>
+          {secondary}
+        </div>
+      </>
+    );
+  }
 
   // ── Me parece caro → menos cajas ──
   if (reason === "too_expensive") {
