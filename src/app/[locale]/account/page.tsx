@@ -765,8 +765,18 @@ function EditableRow({
     try {
       await onSave(draft);
       setEditing(false);
-    } catch {
-      setErr(t({ en: "Couldn't save.", es: "No se pudo guardar." }));
+    } catch (e) {
+      // Bad input (a phone/email Shopify rejects) comes back as a typed 400 so
+      // we can point the customer at the field to fix, instead of the generic
+      // "couldn't save" that hid what was actually wrong.
+      const code = e instanceof ApiClientError ? e.code : null;
+      if (code === "invalid_phone") {
+        setErr(t({ en: "That phone number isn't valid. Please check it.", es: "El teléfono no es válido, revísalo." }));
+      } else if (code === "invalid_email") {
+        setErr(t({ en: "That email address isn't valid. Please check it.", es: "El email no es válido, revísalo." }));
+      } else {
+        setErr(t({ en: "Couldn't save.", es: "No se pudo guardar." }));
+      }
     } finally {
       setBusy(false);
     }

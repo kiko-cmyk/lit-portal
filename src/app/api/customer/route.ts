@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { shopifyAdmin } from "@/lib/shopify-admin";
+import { shopifyAdmin, ShopifyUserError } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CustomerProfile } from "@/lib/types";
 
@@ -66,11 +66,31 @@ export const PATCH = withCustomer(async (req, ctx) => {
 
   // Apply non-email fields immediately (they're idempotent + reversible).
   if (body.firstName || body.lastName || body.phone) {
-    await shopifyAdmin.updateCustomer(ctx.customerId, {
-      firstName: body.firstName,
-      lastName: body.lastName,
-      phone: body.phone,
-    });
+    try {
+      await shopifyAdmin.updateCustomer(ctx.customerId, {
+        firstName: body.firstName,
+        lastName: body.lastName,
+        phone: body.phone,
+      });
+    } catch (err) {
+      // Shopify rejected the input itself (typically a malformed phone the
+      // customer typed). That's a 400, not a 500 — surface a typed validation
+      // error so the FE tells them to fix it, and so we don't page a false
+      // internal_error / spam #server-errors. Anything else (network, auth, a
+      // real bug) still bubbles up to the generic 500. We rely on Shopify's own
+      // validation rather than a hand-rolled regex: its phone rules are
+      // country-specific, so any regex we wrote would either reject valid
+      // numbers or miss ones Shopify still refuses.
+      if (err instanceof ShopifyUserError) {
+        const badPhone = err.userErrors.some((e) => e.field?.includes("phone"));
+        throw new ApiHttpError(
+          400,
+          badPhone ? "invalid_phone" : "invalid_input",
+          badPhone ? "Phone number is not valid" : "One of the fields is not valid",
+        );
+      }
+      throw err;
+    }
   }
 
   // Email change → verification flow.

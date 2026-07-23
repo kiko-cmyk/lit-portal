@@ -121,6 +121,21 @@ class ShopifyAdminError extends Error {
   }
 }
 
+/**
+ * A Shopify mutation came back with `userErrors` — i.e. the INPUT was rejected
+ * (a malformed phone, an email already in use, a name too long…). That's the
+ * customer's data, not a bug on our side, so callers can catch this and map it
+ * to a 400 instead of letting a plain Error bubble up as a generic 500 (which
+ * also fires a false internal_error alert into #server-errors). Carries the raw
+ * userErrors so the caller can branch on the offending field.
+ */
+export class ShopifyUserError extends Error {
+  constructor(public userErrors: Array<{ field: string[]; message: string }>) {
+    super(`Shopify user errors: ${JSON.stringify(userErrors)}`);
+    this.name = "ShopifyUserError";
+  }
+}
+
 class ShopifyAdminClient {
   private endpoint(): string {
     if (!SHOPIFY_STORE) throw new Error("SHOPIFY_STORE not set");
@@ -658,7 +673,7 @@ class ShopifyAdminClient {
       { input: { id: gid, ...fields } },
     );
     if (data.customerUpdate.userErrors.length > 0) {
-      throw new Error(`Shopify customerUpdate errors: ${JSON.stringify(data.customerUpdate.userErrors)}`);
+      throw new ShopifyUserError(data.customerUpdate.userErrors);
     }
   }
 
