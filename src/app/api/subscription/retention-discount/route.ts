@@ -14,9 +14,17 @@ import { supabaseAdmin } from "@/lib/supabase";
  * Cancel-flow "15% a la desesperada": apply a 15% discount to the customer's
  * NEXT charge (and none after). It applies a Shopify discount code to the Seal
  * subscription; a Seal code recurs on every charge, so the "next charge only"
- * guarantee is enforced by removing it in the billing_attempt.succeeded webhook
- * right after the first discounted charge (see /api/webhooks/seal). The Shopify
- * code is also created with a 1-cycle limit as a backstop.
+ * guarantee is enforced by REMOVING it right after the first discounted charge.
+ *
+ * Removal is driven by lib/retention-discount (consumeRetentionDiscountIfCharged),
+ * called from the seal webhook (subscription/updated — and billing_attempt/succeeded
+ * if ever subscribed) AND a daily cron sweep (/api/cron/retention-discount-sweep)
+ * as the guaranteed backstop. NOTE: there is NO Shopify-side cap — LITSTAY15 has
+ * usageLimit=null and Seal's recurring charges do not count against
+ * appliesOncePerCustomer/asyncUsageCount, so removal is the ONLY thing that stops
+ * the recurrence (incident 2026-07-23, when the only trigger — a
+ * billing_attempt/succeeded webhook that was never subscribed in Seal — meant no
+ * discount was ever removed).
  *
  * Guardrails (Juan): only on the customer's FIRST cancellation, and only ONCE
  * ever per customer (retention_discounts.customer_id is the primary key). So the

@@ -531,14 +531,41 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
     try {
       await seal.applyDiscountCode(sealSubscriptionId, retentionCarry.code);
-      // Refresh the UUID so the removal webhook finds the new application.
+      // Refresh the UUID so the removal consumer finds the new application, and
+      // REVIVE the row to pending_charge: a consumer (webhook/cron) racing this
+      // swap could have read the transient detached state and closed the row
+      // ("already-gone"); reviving keeps the freshly re-applied code tracked so
+      // it still gets removed after the discounted charge (audit 2026-07-23).
       const after = await seal.getSubscriptionById(sealSubscriptionId);
       const newId = after ? findAppliedDiscountCodeId(after, retentionCarry.code) : null;
-      await supabaseAdmin()
-        .from("retention_discounts")
-        .update({ discount_code_id: newId, updated_at: new Date().toISOString() })
-        .eq("customer_id", ctx.customerId);
-      log("retention-discount-reattached", { hasUuid: !!newId });
+      const revive = () =>
+        supabaseAdmin()
+          .from("retention_discounts")
+          .update({
+            discount_code_id: newId,
+            status: "pending_charge",
+            removed_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("customer_id", ctx.customerId);
+      // Retry once: a swallowed revive failure can leave the re-applied code live
+      // while the row stays 'removed' (a consumer closed it mid-swap) → untracked
+      // leak. One retry absorbs a transient Supabase blip before we alert.
+      let { error: reviveErr } = await revive();
+      if (reviveErr) ({ error: reviveErr } = await revive());
+      if (reviveErr) {
+        // The 15% is back on Seal but the tracking row failed to revive. If a
+        // racing consumer had closed it, it now stays 'removed' with the code
+        // live → the backstops (which filter pending_charge) won't catch it.
+        // Surface it so support can re-open the row or remove the code.
+        alertSlackError({
+          path: "/api/subscription/plan",
+          code: "retention_discount_revive_failed",
+          msg: `sub ${sealSubscriptionId}: 15% re-applied after swap but tracking revive failed (${reviveErr.message}) — verify retention_discounts row / remove code in Seal`,
+          customerId: ctx.customerId,
+        });
+      }
+      log("retention-discount-reattached", { hasUuid: !!newId, revived: !reviveErr });
     } catch (e) {
       // Detached but not re-applied: the customer LOST the 15% (money-safe
       // direction, but support must re-apply). Loud alert.
@@ -638,6 +665,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   // Happy path: swap done (or no swap needed) — put the 15% back on the sub.
+  // The reattach revives the tracking row to pending_charge; the seal webhook /
+  // daily cron then removes the code after the (already-happened or upcoming)
+  // discounted charge. We do NOT settle it in-request: an unbounded extra Seal
+  // read here could time out the plan change and drop the re-anchor intent
+  // written below (audit 2026-07-23 round 2). The cron is the backstop.
   await reattachRetentionDiscount();
 
   // VERIFICATION POST-MUTATION (Juan 2026-05-19 round 2):

@@ -564,10 +564,11 @@ class SealClient {
    *   PUT /subscription-discount-code { subscription_id, action:"apply", discount_code }
    *
    * IMPORTANT: a Seal discount code recurs on EVERY future charge until removed.
-   * The "15% next charge only" guarantee comes from removing it in the
-   * `billing_attempt.succeeded` webhook right after the first discounted charge
-   * (see removeDiscountCode + /api/webhooks/seal). The Shopify code is also
-   * created with a 1-cycle limit as a second safety net.
+   * The "15% next charge only" guarantee comes from removing it after the first
+   * discounted charge via lib/retention-discount (webhook + daily cron sweep).
+   * There is NO Shopify-side cap: Seal's recurring charges bypass Shopify's
+   * usageLimit / appliesOncePerCustomer entirely, so API removal is the only
+   * thing that stops the recurrence (incident 2026-07-23).
    */
   async applyDiscountCode(subscriptionId: number, code: string): Promise<void> {
     const res = await this.req<{ success?: boolean; message?: string }>(
