@@ -27,7 +27,7 @@ export default function GlobalError({
     typeof window === "undefined" || !/\/en(\/|$)/.test(window.location.pathname);
 
   return (
-    <html lang={es ? "es" : "en"}>
+    <html lang={es ? "es" : "en"} translate="no" className="notranslate">
       <body
         style={{
           margin: 0,

@@ -56,15 +56,23 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${barlow.variable} ${barlowCondensed.variable} h-full antialiased`}
+      translate="no"
+      className={`notranslate ${barlow.variable} ${barlowCondensed.variable} h-full antialiased`}
     >
       <head>
         {/*
-          Clash Display from Fontshare is the v2 display face. We preconnect
-          + preload the stylesheet so it's available before first paint of
-          the hero. Falls back to Helvetica Neue / Arial Black via the
-          --font-display token in globals.css when the network blocks it.
+          Do NOT let the browser auto-translate the portal. It is already fully
+          bilingual (es/en, self-managed via LangProvider + a toggle), so a
+          browser/in-app translator adds nothing and actively breaks the app:
+          translators mutate the DOM text nodes, and React then throws on
+          reconcile (removeChild/insertBefore NotFoundError), crashing the whole
+          tree into the error boundary. Real case: a subscriber inside the
+          Outlook mail app's in-app browser with auto-translate on, who could
+          never load the portal to cancel (Jose Luis, 2026-07). `translate="no"`
+          + the notranslate class/meta are the standard signals; between them
+          they cover Google/Chrome and Microsoft/Outlook translators.
         */}
+        <meta name="google" content="notranslate" />
         <link rel="preconnect" href="https://api.fontshare.com" crossOrigin="anonymous" />
         <link
           href="https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap"
