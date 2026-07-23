@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { reportClientError } from "@/lib/report-client-error";
 
 /**
  * Root-level fallback. Replaces the root layout when an error escapes it (or
@@ -19,6 +20,7 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error("[global-error-boundary]", error);
+    reportClientError(error, "global");
   }, [error]);
 
   // No LangProvider up here, so read the locale straight off the URL. LIT is

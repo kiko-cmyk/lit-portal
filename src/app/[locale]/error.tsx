@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { Logo } from "@/components/Logo";
 import { T } from "@/lib/i18n";
+import { reportClientError } from "@/lib/report-client-error";
 
 /**
  * Route-level error boundary for every [locale] portal page. Turns an
@@ -24,8 +25,10 @@ export default function PortalError({
 }) {
   useEffect(() => {
     // Full detail to the console for debugging; the customer only ever sees
-    // the friendly copy below.
+    // the friendly copy below. Also relay to Slack so we SEE client crashes
+    // instead of deducing them from screenshots.
     console.error("[portal-error-boundary]", error);
+    reportClientError(error, "portal");
   }, [error]);
 
   return (
