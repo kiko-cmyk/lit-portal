@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 
 // Body workhorse + the editorial condensed cuts the v2 design relies on.
@@ -48,14 +49,23 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Label the document with the ACTUAL locale of the content. The root layout
+  // sits above the [locale] segment so it can't read the route param directly;
+  // `src/proxy.ts` stamps the detected locale on the `x-portal-locale` request
+  // header, which we read here. Previously this was hardcoded lang="en" on
+  // Spanish /es/* pages, and that mismatch is exactly what invites a browser to
+  // "translate from English to Spanish" — which mutates the DOM and crashes
+  // React (see the translate="no" note below). Default to es (the portal's
+  // primary + fallback locale) when the header is absent.
+  const locale = (await headers()).get("x-portal-locale") === "en" ? "en" : "es";
   return (
     <html
-      lang="en"
+      lang={locale}
       translate="no"
       className={`notranslate ${barlow.variable} ${barlowCondensed.variable} h-full antialiased`}
     >

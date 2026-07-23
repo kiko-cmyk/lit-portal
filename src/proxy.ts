@@ -115,13 +115,20 @@ export function proxy(req: NextRequest) {
         );
       }
     }
+    // Propagate the real locale to the app so the root layout can set
+    // <html lang> correctly. A hardcoded lang="en" on Spanish /es/* pages is
+    // what invited browser auto-translation (which crashes React); see
+    // src/app/layout.tsx.
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set("x-portal-locale", first);
+
     // ES translated slug → rewrite to canonical EN slug (browser URL unchanged)
     if (first === "es" && second && ES_TO_CANONICAL[second]) {
       const url = req.nextUrl.clone();
       url.pathname = `/es/${ES_TO_CANONICAL[second]}${rest.length ? "/" + rest.join("/") : ""}`;
-      return NextResponse.rewrite(url);
+      return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
     }
-    return;
+    return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
   // No locale prefix → redirect to the default locale.

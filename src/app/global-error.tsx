@@ -46,6 +46,7 @@ export default function GlobalError({
         }}
       >
         <title>LIT</title>
+        <meta name="google" content="notranslate" />
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, textTransform: "uppercase" }}>
           {es ? "Algo no cargó bien" : "Something didn't load"}
         </h1>
