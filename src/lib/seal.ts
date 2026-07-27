@@ -11,6 +11,8 @@
  * "close date", regenerated attempts after reschedule, etc).
  */
 
+import { deadlineIn, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
+
 const SEAL_API_BASE = "https://app.sealsubscriptions.com/shopify/merchant/api";
 
 // Transient-failure retry budget for idempotent GETs. A single hiccup talking
@@ -20,6 +22,15 @@ const SEAL_API_BASE = "https://app.sealsubscriptions.com/shopify/merchant/api";
 const SEAL_MAX_RETRIES = 2;
 const SEAL_BACKOFF_MS = 300;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Deadlines (incident 2026-07-27, see lib/http-timeout.ts). Seal answers in
+// ~150-400ms in the healthy case, so 6s per attempt is already 15-40x normal:
+// anything slower is a stall, not slowness. The 9s total caps attempt + retries
+// + backoff together, which matters more than the per-attempt cap — 3 attempts
+// of 6s plus backoff would otherwise sum past the App Proxy's ~10s patience and
+// reproduce the exact bug we're fixing.
+const SEAL_ATTEMPT_TIMEOUT_MS = 6_000;
+const SEAL_TOTAL_BUDGET_MS = 9_000;
 
 // Backoff with jitter, honouring Seal's `Retry-After` header when present.
 // Jitter avoids retry stampedes across concurrent requests; Retry-After avoids
@@ -127,13 +138,27 @@ interface SealListResponse<T> {
 // ============ Client ============
 
 class SealClient {
-  private async req<T>(path: string, init?: RequestInit, attempt = 0): Promise<T> {
+  private async req<T>(
+    path: string,
+    init?: RequestInit,
+    attempt = 0,
+    deadline?: number,
+  ): Promise<T> {
     // Retry transient failures (network error, 429, 5xx) — but ONLY on
     // idempotent GETs. Mutations (PUT/POST) must never be retried: Seal
     // regenerates billing_attempts on every write, so a retried skip /
     // reschedule / charge-now could double-apply.
     const method = (init?.method ?? "GET").toUpperCase();
     const retriable = method === "GET";
+    // Budget spans the whole call including retries; set once on attempt 0 and
+    // threaded through the recursion.
+    const budget = deadline ?? deadlineIn(SEAL_TOTAL_BUDGET_MS);
+    const left = msLeft(budget);
+    if (left <= 0) throw new UpstreamTimeoutError("seal", path, SEAL_TOTAL_BUDGET_MS);
+    const { signal, timedOut } = fetchDeadline(
+      Math.min(SEAL_ATTEMPT_TIMEOUT_MS, left),
+      init?.signal ?? null,
+    );
     try {
       const res = await fetch(`${SEAL_API_BASE}${path}`, {
         ...init,
@@ -142,6 +167,9 @@ class SealClient {
           "Content-Type": "application/json",
           ...(init?.headers ?? {}),
         },
+        // After the spread: a caller-supplied signal is folded into `signal`
+        // above, so this must win.
+        signal,
       });
       if (!res.ok) {
         if (
@@ -149,26 +177,41 @@ class SealClient {
           attempt < SEAL_MAX_RETRIES &&
           (res.status === 429 || res.status >= 500)
         ) {
-          await sleep(backoffMs(attempt, res));
-          return this.req<T>(path, init, attempt + 1);
+          const wait = backoffMs(attempt, res);
+          // Only retry if the budget can still fit the backoff plus a usable
+          // attempt; otherwise fail now instead of sleeping into a timeout.
+          if (msLeft(budget) > wait + 500) {
+            await sleep(wait);
+            return this.req<T>(path, init, attempt + 1, budget);
+          }
         }
         const body = await res.text().catch(() => "");
         throw new SealApiError(res.status, body);
       }
-      return res.json() as Promise<T>;
+      return (await res.json()) as T;
     } catch (err) {
-      // fetch() itself rejected (DNS / connection reset / timeout). Retry
-      // idempotent calls. Never retry aborts (caller-driven cancellation) or
-      // a SealApiError we already chose not to retry above.
+      // Our own deadline fired: a stalled socket, not an error Seal reported.
+      // Surface it typed so api-helpers can alert and return a retryable 503
+      // rather than letting it hang out the route's full maxDuration.
+      if (timedOut()) {
+        throw new UpstreamTimeoutError("seal", path, SEAL_ATTEMPT_TIMEOUT_MS);
+      }
+      // fetch() itself rejected (DNS / connection reset). Retry idempotent
+      // calls. Never retry aborts (caller-driven cancellation) or a
+      // SealApiError we already chose not to retry above.
       const name = (err as { name?: string }).name;
       if (
         retriable &&
         attempt < SEAL_MAX_RETRIES &&
         name !== "AbortError" &&
-        !(err instanceof SealApiError)
+        !(err instanceof SealApiError) &&
+        !(err instanceof UpstreamTimeoutError)
       ) {
-        await sleep(backoffMs(attempt));
-        return this.req<T>(path, init, attempt + 1);
+        const wait = backoffMs(attempt);
+        if (msLeft(budget) > wait + 500) {
+          await sleep(wait);
+          return this.req<T>(path, init, attempt + 1, budget);
+        }
       }
       throw err;
     }
@@ -327,6 +370,11 @@ class SealClient {
       return sub;
     } catch (e) {
       if ((e as { name?: string }).name === "AbortError") throw e;
+      // A blown deadline is NOT "not found". Swallowing it to null is what
+      // turns a stall into the customer-visible lie "no tienes suscripción"
+      // (and, on an explicit multi-sub selection, clears their choice). Always
+      // propagate so api-helpers can return a retryable 503 and alert.
+      if (e instanceof UpstreamTimeoutError) throw e;
       if (
         opts?.throwTransient &&
         e instanceof SealApiError &&

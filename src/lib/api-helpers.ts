@@ -8,6 +8,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackError } from "./alert";
+import { UpstreamTimeoutError } from "./http-timeout";
 import { hashSessionId } from "./session";
 import { AppProxyAuthError, parseAuthRequest, type AppProxyContext } from "./shopify-app-proxy";
 import { supabaseAdmin } from "./supabase";
@@ -142,6 +143,32 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
       }
       if (err instanceof ApiHttpError) {
         return NextResponse.json({ error: err.code, message: err.message }, { status: err.status });
+      }
+      // An upstream blew its deadline (Seal / Shopify Admin / Supabase stalled).
+      // Transient, so the customer gets a retryable 503 and NOT a false
+      // internal_error P0 — but it DOES alert, because before this existed a
+      // stall produced zero signal anywhere: the function ran until Vercel
+      // killed it, nothing threw, and the only trace was the customer writing
+      // to support (incident 2026-07-27). alertSlackError dedupes per
+      // (path, code) for 60s, so a real upstream outage can't spam the channel.
+      if (err instanceof UpstreamTimeoutError) {
+        console.warn(
+          `[api] ${err.upstream} timeout on ${req.nextUrl.pathname} → 503 upstream_timeout`,
+          { target: err.target, ms: err.ms },
+        );
+        alertSlackError({
+          path: req.nextUrl.pathname,
+          code: `upstream_timeout:${err.upstream}`,
+          msg: err.message,
+          customerId: customerId ?? undefined,
+        });
+        return NextResponse.json(
+          {
+            error: "upstream_timeout",
+            message: "That took too long on our side. Please try again in a moment.",
+          },
+          { status: 503 },
+        );
       }
       // A sustained Seal 429 (edge throttle) or 5xx (upstream outage) is
       // transient, not a bug in our code — the retries in seal.ts just couldn't

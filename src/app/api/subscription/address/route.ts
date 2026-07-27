@@ -1,10 +1,33 @@
+import { after } from "next/server";
+
+import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { provinceFromEsPostalCode } from "@/lib/es-provinces";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
+
+/**
+ * Hard ceiling for this route. The default is 60s (vercel.json), which is 6x
+ * longer than Shopify's App Proxy will wait: past ~10s the customer has already
+ * been handed storefront HTML, so the remaining ~50s are spent on a request
+ * nobody is listening to, invisible in every channel we watch. 20s leaves room
+ * for the upstream budgets in lib/http-timeout.ts plus the `after()` sync while
+ * bounding the invisible tail. Deliberately NOT applied to /plan or /cancel:
+ * those chain several Seal mutations, where being killed early is worse than
+ * being slow (partial state). Their protection is the per-call deadlines.
+ */
+export const maxDuration = 20;
+
+/**
+ * How long the read phase may take before we refuse to write at all. Kept just
+ * under the App Proxy's ~10s so a save either completes where the customer can
+ * see it, or does not happen.
+ */
+const PROXY_BUDGET_MS = 8_500;
 
 interface AddressBody {
   address1: string;
@@ -45,6 +68,7 @@ interface AddressBody {
  *     Fixes Juan's `subscription_not_found` after a cancel+reactivate.
  */
 export const PATCH = withCustomer(async (req, ctx) => {
+  const startedAt = Date.now();
   await enforceRateLimit(ctx.customerId, "address", { limit: 10, windowMs: 60_000 });
 
   const url = new URL(req.url);
@@ -116,6 +140,46 @@ export const PATCH = withCustomer(async (req, ctx) => {
     );
   }
 
+  // Province is NOT collected by the form (AddressOverlay has no province or
+  // country field), so whatever the client sent is inherited from the address
+  // being replaced. For a Spanish address the province IS the first two digits
+  // of the postal code, so derive it and let it win: without this, a subscriber
+  // moving her box from Madrid to a summer house in Asturias shipped with
+  // `province: Madrid / M` against a 33xxx postal code (incident 2026-07-27).
+  // Non-ES or unrecognised code → keep whatever we were given, never worse.
+  const derived =
+    body.countryCode.toUpperCase() === "ES"
+      ? provinceFromEsPostalCode(body.postalCode)
+      : null;
+  const province = derived?.name ?? body.province;
+  const provinceCode = derived?.code ?? body.provinceCode;
+  if (derived && derived.code !== body.provinceCode) {
+    console.log(
+      `[address] province derived from postal code: ${body.provinceCode ?? "∅"} → ${derived.code} (${derived.name})`,
+    );
+  }
+
+  // Deadline guard. Everything above is reads; the write starts here. Shopify's
+  // App Proxy stops waiting at ~10s and hands the customer storefront HTML,
+  // which the FE reports as `gateway_timeout` — so a write that lands after that
+  // point succeeds INVISIBLY: her address changes while she reads "no se pudo
+  // guardar" and writes to support. Refusing to start the write is the honest
+  // outcome: retrying is safe and cheap, an untracked silent success is not.
+  const elapsed = Date.now() - startedAt;
+  if (elapsed > PROXY_BUDGET_MS) {
+    alertSlackError({
+      path: "/api/subscription/address",
+      code: "proxy_budget_exceeded",
+      msg: `Reads took ${elapsed}ms (> ${PROXY_BUDGET_MS}ms) — refused to write so the save can't succeed invisibly`,
+      customerId: ctx.customerId,
+    });
+    throw new ApiHttpError(
+      503,
+      "upstream_timeout",
+      `Too slow to save safely (${elapsed}ms). Please try again.`,
+    );
+  }
+
   await seal.updateShippingAddress(sealSub.id, {
     firstName,
     lastName,
@@ -125,30 +189,47 @@ export const PATCH = withCustomer(async (req, ctx) => {
     postalCode: body.postalCode,
     country,
     countryCode: body.countryCode,
-    province: body.province,
-    provinceCode: body.provinceCode,
+    province,
+    provinceCode,
     phone: body.phone,
   });
 
-  // Sync Shopify customer default address (best-effort — drives one-off
-  // storefront orders, not the subscription box).
-  shopifyAdmin
-    .updateCustomerDefaultAddress(ctx.customerId, {
-      address1: body.address1,
-      address2: body.address2,
-      city: body.city,
-      zip: body.postalCode,
-      country,
-      countryCode: body.countryCode,
-      province: body.province,
-      provinceCode: body.provinceCode,
-      firstName,
-      lastName,
-      phone: body.phone,
-    })
-    .catch((err) => {
+  // Sync the Shopify customer default address (drives one-off storefront
+  // orders, not the subscription box). Runs via `after()` so it is NOT
+  // fire-and-forget: a bare floating promise on serverless can be killed the
+  // moment the response is flushed, which is how `customerAddressCreate` can
+  // land while the follow-up `customerDefaultAddressUpdate` never runs, leaving
+  // an orphan address that is not the default. `after()` keeps the invocation
+  // alive until it settles, and still never blocks the customer's response.
+  // Shopify canonicalises the province from `provinceCode`, so we deliberately
+  // do not send a display name it might not recognise.
+  after(async () => {
+    try {
+      await shopifyAdmin.updateCustomerDefaultAddress(ctx.customerId, {
+        address1: body.address1,
+        address2: body.address2,
+        city: body.city,
+        zip: body.postalCode,
+        country,
+        countryCode: body.countryCode,
+        provinceCode,
+        firstName,
+        lastName,
+        phone: body.phone,
+      });
+    } catch (err) {
+      // Seal already has the address, so the box ships correctly either way —
+      // but a silent divergence between Seal and Shopify is exactly what made
+      // this bug invisible for weeks. Alert instead of only console.warn.
       console.warn("[address-sync] Shopify default address update failed:", err);
-    });
+      alertSlackError({
+        path: "/api/subscription/address",
+        code: "shopify_address_sync_failed",
+        msg: err instanceof Error ? err.message : String(err),
+        customerId: ctx.customerId,
+      });
+    }
+  });
 
   // Re-fetch Seal for the response (eventual consistency — Seal usually
   // catches up within ~1s). Use the fast singular by-id endpoint, not the

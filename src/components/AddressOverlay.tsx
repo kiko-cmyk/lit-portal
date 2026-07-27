@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api-client";
+import { provinceFromEsPostalCode } from "@/lib/es-provinces";
 import { T, useLang } from "@/lib/i18n";
 import type { Subscription, SubscriptionAddress } from "@/lib/types";
 
@@ -107,6 +108,11 @@ export function AddressOverlay({
   const set = <K extends keyof SubscriptionAddress>(k: K, v: SubscriptionAddress[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  const detectedProvince =
+    (form.countryCode || "ES").toUpperCase() === "ES"
+      ? provinceFromEsPostalCode(form.postalCode)?.name ?? null
+      : null;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
@@ -151,6 +157,20 @@ export function AddressOverlay({
             <Field label={t({ en: "City", es: "Ciudad" })} value={form.city} onChange={(v) => set("city", v)} />
           </div>
         </div>
+
+        {/* There is no province field on purpose: in Spain the province IS the
+            first two digits of the postal code, so the server derives it (see
+            lib/es-provinces.ts). We echo it back so a customer moving to another
+            province can SEE that we understood, instead of discovering a label
+            that still says her old province (incident 2026-07-27). */}
+        {detectedProvince && (
+          <p className="mt-3 text-[11px] text-[color:var(--color-warm-gray)]">
+            {t({
+              en: `Province: ${detectedProvince} (from your postal code)`,
+              es: `Provincia: ${detectedProvince} (según tu código postal)`,
+            })}
+          </p>
+        )}
 
         {error && (
           <div className="mt-4 rounded-[12px] bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>

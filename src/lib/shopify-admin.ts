@@ -23,6 +23,8 @@
  * Shopify signs proxy requests with that app's client_secret).
  */
 
+import { deadlineIn, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
+
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // e.g. "lit-tienda.myshopify.com"
 const ADMIN_CLIENT_ID = process.env.SHOPIFY_ADMIN_CLIENT_ID ?? process.env.SHOPIFY_API_KEY;
 const ADMIN_CLIENT_SECRET = process.env.SHOPIFY_ADMIN_CLIENT_SECRET ?? process.env.SHOPIFY_API_SECRET;
@@ -57,15 +59,28 @@ async function getAdminToken(): Promise<string> {
     throw new Error("SHOPIFY_STORE, SHOPIFY_ADMIN_CLIENT_ID (or SHOPIFY_API_KEY), SHOPIFY_ADMIN_CLIENT_SECRET (or SHOPIFY_API_SECRET) required");
   }
 
-  const res = await fetch(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: ADMIN_CLIENT_ID,
-      client_secret: ADMIN_CLIENT_SECRET,
-      grant_type: "client_credentials",
-    }),
-  });
+  // The token exchange is the first hop of every cold invocation, so it gets a
+  // deadline of its own: a stall here used to hang the whole route before a
+  // single GraphQL byte moved.
+  const { signal, timedOut } = fetchDeadline(SHOPIFY_TOKEN_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: ADMIN_CLIENT_ID,
+        client_secret: ADMIN_CLIENT_SECRET,
+        grant_type: "client_credentials",
+      }),
+      signal,
+    });
+  } catch (err) {
+    if (timedOut()) {
+      throw new UpstreamTimeoutError("shopify", "oauth/access_token", SHOPIFY_TOKEN_TIMEOUT_MS);
+    }
+    throw err;
+  }
   if (!res.ok) {
     throw new Error(`Shopify token exchange failed: ${res.status} ${await res.text()}`);
   }
@@ -85,6 +100,15 @@ async function getAdminToken(): Promise<string> {
 const SHOPIFY_MAX_RETRIES = 2;
 const SHOPIFY_BACKOFF_MS = 300;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Deadlines (incident 2026-07-27, see lib/http-timeout.ts). Admin GraphQL
+// answers in ~150ms healthy, so 6s per attempt only ever catches a stall. The
+// 9s total is what actually matters: it bounds token exchange + all retries +
+// backoff, keeping the client inside the App Proxy's ~10s patience instead of
+// silently burning the route's 60s maxDuration.
+const SHOPIFY_ATTEMPT_TIMEOUT_MS = 6_000;
+const SHOPIFY_TOTAL_BUDGET_MS = 9_000;
+const SHOPIFY_TOKEN_TIMEOUT_MS = 5_000;
 
 // Shopify GraphQL error codes (in `errors[].extensions.code`) safe to retry on
 // an idempotent read. Everything else (validation, ACCESS_DENIED, user-level
@@ -147,10 +171,17 @@ class ShopifyAdminClient {
     // POSTs, so we classify the document itself; mutations are never retried
     // (see isRetryableReadDocument).
     const readRetryable = isRetryableReadDocument(query);
+    // Budget covers the whole call: token exchange + every attempt + backoff.
+    const budget = deadlineIn(SHOPIFY_TOTAL_BUDGET_MS);
     const token = await getAdminToken();
 
     for (let attempt = 0; ; attempt++) {
       const canRetry = readRetryable && attempt < SHOPIFY_MAX_RETRIES;
+      const left = msLeft(budget);
+      if (left <= 0) {
+        throw new UpstreamTimeoutError("shopify", "graphql", SHOPIFY_TOTAL_BUDGET_MS);
+      }
+      const { signal, timedOut } = fetchDeadline(Math.min(SHOPIFY_ATTEMPT_TIMEOUT_MS, left));
       try {
         const res = await fetch(this.endpoint(), {
           method: "POST",
@@ -159,31 +190,51 @@ class ShopifyAdminClient {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ query, variables }),
+          signal,
         });
         if (!res.ok) {
           if (canRetry && (res.status === 429 || res.status >= 500)) {
-            await sleep(SHOPIFY_BACKOFF_MS * (attempt + 1));
-            continue;
+            const wait = SHOPIFY_BACKOFF_MS * (attempt + 1);
+            if (msLeft(budget) > wait + 500) {
+              await sleep(wait);
+              continue;
+            }
           }
           throw new ShopifyAdminError(`Shopify Admin ${res.status}: ${await res.text()}`);
         }
         const json = (await res.json()) as { data?: T; errors?: unknown };
         if (json.errors) {
           if (canRetry && hasTransientGraphqlError(json.errors)) {
-            await sleep(SHOPIFY_BACKOFF_MS * (attempt + 1));
-            continue;
+            const wait = SHOPIFY_BACKOFF_MS * (attempt + 1);
+            if (msLeft(budget) > wait + 500) {
+              await sleep(wait);
+              continue;
+            }
           }
           throw new ShopifyAdminError(`Shopify Admin errors: ${JSON.stringify(json.errors)}`);
         }
         return json.data as T;
       } catch (err) {
+        // Our own deadline fired: a stalled socket. Typed so api-helpers can
+        // alert and return a retryable 503 instead of hanging the whole route.
+        if (timedOut()) {
+          throw new UpstreamTimeoutError("shopify", "graphql", SHOPIFY_ATTEMPT_TIMEOUT_MS);
+        }
         // fetch() itself rejected (network / DNS / connection reset). Retry
         // idempotent reads. Never retry a ShopifyAdminError we already chose to
         // throw above (terminal), nor a caller-driven AbortError.
         const name = (err as { name?: string })?.name;
-        if (canRetry && !(err instanceof ShopifyAdminError) && name !== "AbortError") {
-          await sleep(SHOPIFY_BACKOFF_MS * (attempt + 1));
-          continue;
+        if (
+          canRetry &&
+          !(err instanceof ShopifyAdminError) &&
+          !(err instanceof UpstreamTimeoutError) &&
+          name !== "AbortError"
+        ) {
+          const wait = SHOPIFY_BACKOFF_MS * (attempt + 1);
+          if (msLeft(budget) > wait + 500) {
+            await sleep(wait);
+            continue;
+          }
         }
         throw err;
       }
