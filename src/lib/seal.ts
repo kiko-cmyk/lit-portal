@@ -538,20 +538,24 @@ class SealClient {
    * Seal support 2026-05-14: "the only way to swap products in a subscription
    * via the API is to add the new product, and then remove the old product."
    *
+   * VERIFIED 2026-07-27 (scripts/probe-mix.mjs): a SINGLE add_items call with N
+   * items creates all N at once (no partial application), each stays recurring, and
+   * Seal honours a custom per-unit `price` — SL30 went in at 22.64 when its
+   * catalogue price is 28.35. `total_value` comes back as Σ(price × quantity).
+   *
    * GOTCHA: `price` is per-unit, not total. With quantity=2 and price=10,
-   * Seal charges 20. To preserve a desired total, divide first. We omit
-   * `price` here when caller doesn't pass it — Seal then defaults to the
-   * variant's current Shopify price (safer for routine plan changes).
+   * Seal charges 20. To preserve a desired total, divide first. And it is
+   * REQUIRED, not optional: omitting it returns "Item is missing price value."
+   * (contradicting an earlier comment here that claimed Seal would default to
+   * the Shopify price).
    *
    * GOTCHA: any discount_codes active on a REMOVED item carry over to the
    * newly-added item. Caller that wants to drop a discount on swap must
    * call DELETE /subscription-discount-code afterwards.
    *
-   * `selling_plan_id` — undocumented but appears to be accepted per Seal's
-   * own portal mutations. We pass it when caller wants a per-line cadence
-   * (variant + plan combined change). Seal may also need a separate
-   * `edit { delivery_interval }` call to make the subscription-level
-   * cadence match — to be confirmed when this code runs against prod.
+   * `selling_plan_id` — accepted but effectively IGNORED: Seal overwrites it with
+   * the plan matching the subscription's current `delivery_interval`, so change the
+   * interval first and let Seal align every line. Confirmed in prod.
    */
   async addItems(
     subscriptionId: number,
@@ -563,13 +567,16 @@ class SealClient {
       sku: string;
       taxable?: boolean;
       requiresShipping?: boolean;
-      price?: string;       // per-unit; omit to let Seal use Shopify default
+      price?: string;       // per-unit; REQUIRED by Seal in practice
       sellingPlanId?: string;
-      properties?: Record<string, unknown>;
+      /** Shopify line-item properties. Seal's contract is an ARRAY of {key,value}
+       *  (was mistyped as an object here until 2026-07-27). */
+      properties?: SealItemProperty[];
       /** Add-to-next-order only: Seal removes it after the next renewal. */
       oneTime?: boolean;
     }>,
   ): Promise<void> {
+    if (!items.length) return;
     const body = {
       action: "add_items",
       id: subscriptionId,
@@ -597,9 +604,62 @@ class SealClient {
   }
 
   /**
+   * Edit EXISTING lines in place, by Seal item id — quantity, per-unit price,
+   * one_time and/or properties.
+   *
+   * VERIFIED 2026-07-27 (scripts/probe-mix.mjs): Seal answers "Items were edited in
+   * the subscription.", the quantity and price change, and **the item ids do NOT
+   * change**. The billing_attempts schedule is untouched.
+   *
+   * This is the safe primitive and should be preferred over add_items+removeItems
+   * whenever the set of variants isn't changing. Because nothing is removed, it
+   * cannot trigger the invisible discount-code carry-over; because item ids survive,
+   * a client's cached `mainItemId` stays valid; and because there is no window with
+   * both an old and a new line present, it cannot leave a customer paying for two.
+   * That window is exactly what overcharged 7 subscriptions in June-July 2026 (see
+   * scripts/repair-duplicate-lines.mjs).
+   *
+   * `price` is per-unit, same as add_items.
+   */
+  async editItems(
+    subscriptionId: number,
+    edits: Array<{
+      itemId: number;
+      quantity?: number;
+      /** per-unit, 2dp string */
+      price?: string;
+      oneTime?: boolean;
+      properties?: SealItemProperty[];
+    }>,
+  ): Promise<void> {
+    if (!edits.length) return;
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          action: "edit_items",
+          id: subscriptionId,
+          edit_items: edits.map((e) => ({
+            id: e.itemId,
+            ...(e.quantity !== undefined ? { quantity: e.quantity } : {}),
+            ...(e.price !== undefined ? { price: e.price } : {}),
+            ...(e.oneTime !== undefined ? { one_time: e.oneTime ? 1 : 0 } : {}),
+            ...(e.properties !== undefined ? { properties: e.properties } : {}),
+          })),
+        }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal edit_items rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
    * Remove items by their Seal item ID (`SealItem.id`, NOT variant_id).
    */
   async removeItems(subscriptionId: number, itemIds: number[]): Promise<void> {
+    if (!itemIds.length) return;
     const res = await this.req<{ success?: boolean; message?: string }>(
       "/subscription",
       {

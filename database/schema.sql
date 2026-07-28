@@ -78,6 +78,32 @@ create index if not exists idx_reanchor_pending
 
 alter table subscription_reanchor_intents enable row level security;
 
+-- Line repairs: when /api/subscription/plan cannot converge a subscription's lines
+-- in-request (a failed remove_items that also couldn't be rolled back), it records
+-- the desired end state here and /api/cron/mix-repair-drain reconciles it. Without
+-- this, that failure leaves BOTH the old and the new line live and the next charge is
+-- too HIGH — which is exactly what overcharged 7 subs in June-July 2026. See
+-- migrations/2026-07-28_subscription_line_repairs.sql.
+create table if not exists subscription_line_repairs (
+  customer_id           text not null,
+  seal_subscription_id  text not null,
+  desired               jsonb not null,               -- TargetLine[] the sub must end up with
+  snapshot              jsonb not null,               -- pre-mutation lines, for manual restore
+  status                text not null default 'pending'
+                          check (status in ('pending', 'done', 'failed')),
+  attempts              int  not null default 0,
+  last_error            text,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  primary key (customer_id, seal_subscription_id)
+);
+
+create index if not exists idx_line_repairs_pending
+  on subscription_line_repairs (updated_at)
+  where status = 'pending';
+
+alter table subscription_line_repairs enable row level security;
+
 create table if not exists subscription_changes (
   id            uuid primary key default uuid_generate_v4(),
   -- No FK: subscriptions now has a composite PK, so a single-column FK to

@@ -108,15 +108,28 @@ export function PlanOverlay({
             es: "No se pudo cambiar la frecuencia. Inténtalo de nuevo en un momento.",
           }),
         );
-      } else if (err.code === "multiline_not_supported") {
-        // >1 recurring line: changing one would leave the other and overcharge them.
+      } else if (err.code === "subscription_changed" || err.code === "mix_requires_explicit_intent") {
         setError(
           t({
-            en: "Your subscription has more than one product, so we can't change it from here yet. Contact us and we'll do it for you.",
-            es: "Tu suscripción tiene más de un producto, así que todavía no podemos cambiarla desde aquí. Escríbenos y lo hacemos por ti.",
+            en: "Your subscription changed since this page loaded. Reload and try again.",
+            es: "Tu suscripción cambió desde que se cargó esta página. Recárgala y vuelve a intentarlo.",
           }),
         );
-      } else if (err.code === "variant_change_failed") {
+      } else if (err.code === "mix_price_mismatch") {
+        setError(
+          t({
+            en: "We couldn't apply your plan at the right price. Nothing was charged differently. Try again.",
+            es: "No pudimos aplicar tu plan al precio correcto. No se ha cobrado nada distinto, inténtalo de nuevo.",
+          }),
+        );
+      } else if (err.code === "mix_line_not_recurring") {
+        setError(
+          t({
+            en: "We couldn't apply your plan. Contact us and we'll do it for you.",
+            es: "No pudimos aplicar tu plan. Escríbenos y lo hacemos por ti.",
+          }),
+        );
+      } else if (err.code === "variant_change_failed" || err.code === "seal_edit_items_failed") {
         setError(
           t({
             en: "Couldn't change the number of boxes. Try again in a moment.",

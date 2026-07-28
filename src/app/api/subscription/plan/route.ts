@@ -3,18 +3,31 @@ import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { alertSlackError } from "@/lib/alert";
-import { findAppliedDiscountCodeId, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
-import { centsToPrice, compositionLabel } from "@/lib/mix";
+import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import {
+  centsToPrice,
+  compositionFromLines,
+  compositionLabel,
+  diffLines,
+  type FlavorComposition,
+  type MixPlan,
+  mixBoxCount,
+  planTargetLines,
+  priceToCents,
+  resplitOnBoxChange,
+  shapeFor,
+  type SubscriptionLine,
+  validateMix,
+} from "@/lib/mix";
+import { priceForBoxCount } from "@/lib/pricing";
 import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
-  FLAVORS,
   type FlavorKey,
   flavorKeyForVariant,
   flavorLabel,
   isFlavorKey,
   SELLING_PLAN_BY_FREQUENCY,
-  variantForFlavorBox,
 } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -103,11 +116,30 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
      * discount carry-over, verification, rollback). See lib/seal-plans FLAVORS.
      */
     flavor?: FlavorKey;
+    /**
+     * Target flavor MIX: boxes per flavor, e.g.
+     *   [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-watermelon", boxes: 1 }]
+     *
+     * AUTHORITATIVE for the box count — the sum IS the target — so a mix change and a
+     * box-count change are the same operation. Mutually exclusive with `flavor`; if
+     * `boxCount` is also sent it must equal the sum.
+     *
+     * A single-entry mix is a pure flavor and resolves to today's pack variant, so
+     * existing subscribers need no migration.
+     */
+    mix?: unknown;
     /** Optional fast-path: when present, skips the slow Seal pagination. */
     sealSubscriptionId?: number | string;
     mainItemId?: number;
     currentVariantId?: string;
     currentFrequency?: Frequency;
+    /**
+     * Optimistic concurrency for mix-aware clients: the Seal item ids the client
+     * believes the subscription has. If the live set differs, the customer is acting
+     * on a stale screen and we refuse rather than apply a diff against a state they
+     * never saw. A tab left open for a day is exactly how a mix gets destroyed.
+     */
+    expectedLineIds?: number[];
     /**
      * The customer's current next-ship date (ISO), sent by the FE so we can
      * re-anchor it after Seal regenerates billing_attempts. Without this, a
@@ -149,8 +181,38 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   if (body.flavor !== undefined && !isFlavorKey(body.flavor)) {
     throw new ApiHttpError(400, "invalid_flavor", `Unknown flavor: ${body.flavor}`);
   }
-  if (body.boxCount === undefined && body.frequency === undefined && body.flavor === undefined) {
-    throw new ApiHttpError(400, "no_changes", "Provide boxCount, frequency and/or flavor");
+
+  // ── mix ──
+  // Validated before anything else touches Seal or Shopify. Unknown flavor keys are
+  // REJECTED rather than dropped: silently ignoring an unrecognised entry would ship
+  // 1 box to a customer who asked for 3.
+  let requestedMix: FlavorComposition[] | null = null;
+  if (body.mix !== undefined && body.mix !== null) {
+    if (body.flavor !== undefined) {
+      throw new ApiHttpError(400, "conflicting_flavor_intent", "Send `mix` or `flavor`, not both");
+    }
+    const v = validateMix(body.mix);
+    if (!v.ok) {
+      throw new ApiHttpError(400, "invalid_mix", `Invalid mix (${v.code})`);
+    }
+    requestedMix = v.mix;
+    const sum = mixBoxCount(requestedMix);
+    if (body.boxCount !== undefined && body.boxCount !== sum) {
+      throw new ApiHttpError(
+        400,
+        "mix_box_count_mismatch",
+        `mix sums to ${sum} but boxCount is ${body.boxCount}`,
+      );
+    }
+  }
+
+  if (
+    body.boxCount === undefined &&
+    body.frequency === undefined &&
+    body.flavor === undefined &&
+    requestedMix === null
+  ) {
+    throw new ApiHttpError(400, "no_changes", "Provide boxCount, frequency, flavor and/or mix");
   }
 
   // Fast-path: the FE passed sealSubscriptionId + mainItemId + currentVariantId
@@ -256,28 +318,20 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   }
 
-  // GUARD (Phase 1 of the flavor mix, 2026-07-27): refuse to touch a subscription
-  // that already holds more than one recurring line.
-  //
-  // 11 ACTIVE subs do (mostly two-flavor orders created at checkout). This route
-  // still swaps exactly ONE line: it adds the new variant and removes `mainItemId`,
-  // leaving the other line alive — so the customer ends up with more boxes and a
-  // bigger charge than they picked. That bug predates this work, and it is how 4
-  // ACTIVE subs ended up charging double.
-  //
-  // Blocking is strictly safer than the silent corruption: those customers lose
-  // self-serve plan changes until Phase 2 teaches this route to diff N lines, and
-  // support can still change them in Seal. Remove this guard in Phase 2.
-  if (preMutationSub) {
-    const liveLines = getLines(preMutationSub);
-    if (liveLines.length > 1) {
-      log("multiline-sub-blocked", {
-        lines: liveLines.map((l) => `${l.variantId}×${l.quantity}`),
-      });
+  // Optimistic concurrency (replaces the Phase 1 multi-line block): when a
+  // mix-aware client tells us which lines it saw, refuse if the live set differs.
+  // Applying a diff against a state the customer never saw is how a mix silently
+  // becomes something else.
+  if (preMutationSub && body.expectedLineIds?.length) {
+    const live = new Set(getLines(preMutationSub).map((l) => l.itemId));
+    const expected = new Set(body.expectedLineIds.map(Number));
+    const same = live.size === expected.size && [...expected].every((id) => live.has(id));
+    if (!same) {
+      log("subscription-changed", { live: [...live], expected: [...expected] });
       throw new ApiHttpError(
         409,
-        "multiline_not_supported",
-        `Subscription has ${liveLines.length} recurring lines; plan changes are disabled until multi-line support ships`,
+        "subscription_changed",
+        "This subscription changed since the page loaded; reload and try again",
       );
     }
   }
@@ -305,40 +359,99 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // changed boxes would have been silently swapped back to Salty Lemon). A
   // flavor change is just a variant swap to another product's variant for the
   // same box count, so it flows through the identical add/remove machinery.
+  // Live lines are authoritative. `mainItemId` / `currentVariantId` from the body are
+  // only ever used for the ownership check above — every target is computed from what
+  // Seal actually holds, which is what makes a retry safe.
+  const currentLines: SubscriptionLine[] = preMutationSub
+    ? getLines(preMutationSub)
+    : [];
+  const currentComposition = compositionFromLines(currentLines);
+  const currentShape = shapeFor(currentComposition);
+  const currentBoxCount = currentLines.length
+    ? currentLines.reduce((s, l) => s + l.boxes, 0)
+    : BOX_COUNT_BY_VARIANT[String(mainItemVariantId)] ?? null;
   const currentFlavor: FlavorKey = flavorKeyForVariant(mainItemVariantId) ?? DEFAULT_FLAVOR;
-  const currentBoxCount = BOX_COUNT_BY_VARIANT[String(mainItemVariantId)] ?? null;
-  const targetFlavor: FlavorKey = body.flavor ?? currentFlavor;
-  // A pure flavor change keeps the current box count; a box change overrides it.
-  const targetBoxCount = body.boxCount ?? currentBoxCount;
   const targetFrequency = body.frequency ?? currentFrequency;
 
   // A flavor swap must know which box count to land on. The only way this is
   // unknown is a legacy sub on a variant not in any flavor's map — refuse
   // rather than silently no-op a requested flavor change.
-  if (body.flavor !== undefined && targetBoxCount == null) {
+  if ((body.flavor !== undefined || requestedMix === null) && currentBoxCount == null && body.boxCount === undefined) {
     throw new ApiHttpError(
       409,
       "box_count_unknown",
-      "Cannot change flavor: this subscription's box count could not be determined.",
+      "Cannot change this subscription: its box count could not be determined.",
     );
   }
 
-  const newVariantNumeric =
-    targetBoxCount != null ? variantForFlavorBox(targetFlavor, targetBoxCount) : null;
-  if (targetBoxCount != null && !newVariantNumeric) {
+  // Legacy clients (a tab opened before the mix shipped) send no `mix`. On a SPLIT
+  // sub we must not guess:
+  //   - `flavor` means "make it all X", which on a mix is almost certainly not what
+  //     the customer has on screen → refuse and make them reload.
+  //   - `boxCount` alone → PRESERVE the mix proportionally, never collapse it.
+  if (currentShape === "split" && requestedMix === null && body.flavor !== undefined) {
+    log("mix-requires-explicit-intent", { currentComposition });
     throw new ApiHttpError(
-      500,
-      "variant_not_mapped",
-      `No ${targetFlavor} variant for ${targetBoxCount} box(es)`,
+      409,
+      "mix_requires_explicit_intent",
+      "This subscription has a flavor mix; reload the page to edit it",
     );
   }
+
+  const targetComposition: FlavorComposition[] = (() => {
+    if (requestedMix) return requestedMix;
+    if (body.flavor !== undefined) {
+      return [{ flavor: body.flavor, boxes: body.boxCount ?? currentBoxCount! }];
+    }
+    if (body.boxCount !== undefined) {
+      // Box-count-only change. resplitOnBoxChange is identity for a single flavor and
+      // proportional (largest remainder, deterministic) for a mix, so a legacy client
+      // can move boxes without destroying the customer's split.
+      return currentComposition.length
+        ? resplitOnBoxChange(currentComposition, body.boxCount)
+        : [{ flavor: currentFlavor, boxes: body.boxCount }];
+    }
+    // Frequency-only change: keep the composition exactly as it is.
+    return currentComposition.length
+      ? currentComposition
+      : [{ flavor: currentFlavor, boxes: currentBoxCount! }];
+  })();
+
+  const targetBoxCount = mixBoxCount(targetComposition);
   const targetSellingPlanNumeric = SELLING_PLAN_BY_FREQUENCY[targetFrequency];
   if (!targetSellingPlanNumeric) {
     throw new ApiHttpError(500, "selling_plan_not_mapped", `No selling plan for ${targetFrequency}`);
   }
 
-  const variantChanged = newVariantNumeric !== null && newVariantNumeric !== mainItemVariantId;
+  // Tier price for the TARGET box count, from live Shopify prices (5-min cache), so a
+  // marketing price change propagates to mixes with no code change. Taken from the
+  // dominant flavor's ladder; verify-flavor-setup asserts every flavor shares one
+  // ladder, so this is exact.
+  let tierTotalCents: number;
+  try {
+    const tier = await priceForBoxCount(targetBoxCount, targetComposition[0].flavor);
+    tierTotalCents = Math.round(tier * 100);
+  } catch (e) {
+    throw new ApiHttpError(
+      500,
+      "pricing_unavailable",
+      `Could not price ${targetBoxCount} box(es): ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  if (!Number.isFinite(tierTotalCents) || tierTotalCents <= 0) {
+    throw new ApiHttpError(500, "pricing_unavailable", `Bad tier price ${tierTotalCents}`);
+  }
+
+  // Target lines + the minimal set of Seal writes to get there. `diffLines` prefers
+  // in-place edit_items, so changing the split of the same total, or the box count
+  // while keeping flavors, needs NO add/remove at all — which is what makes this
+  // idempotent: a retry sees the target already present and converges instead of
+  // adding a second line. That failure mode overcharged 7 subs in June-July 2026.
+  const targetPlan = planTargetLines(targetComposition, tierTotalCents);
+  const diff = diffLines(currentLines, targetPlan.lines);
+
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
+  const itemsChanged = !diff.noop;
 
   // Skip retention "espaciar": with reanchorMode="natural" the next order should
   // land on Seal's natural regenerated date (last completed charge + new
@@ -363,20 +476,27 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // retention) when available, else the preserved current date (normal change).
   const effectivePreserveYYYYMMDD = naturalYYYYMMDD ?? preserveYYYYMMDD;
 
-  const flavorChanged = targetFlavor !== currentFlavor;
-  log("change-detected", { variantChanged, planChanged, flavorChanged, currentFlavor, targetFlavor, targetFrequency, targetBoxCount, reanchorMode, naturalYYYYMMDD });
-  if (!variantChanged && !planChanged) {
+  log("change-detected", {
+    planChanged,
+    itemsChanged,
+    currentComposition,
+    targetComposition,
+    currentShape,
+    targetShape: targetPlan.shape,
+    targetFrequency,
+    targetBoxCount,
+    tierTotalCents,
+    charge: targetPlan.totalCents,
+    residual: targetPlan.residualCents,
+    diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
+    reanchorMode,
+    naturalYYYYMMDD,
+  });
+  if (!itemsChanged && !planChanged) {
     log("no-op");
-    // No-op: return a synthetic sub matching the input state. We don't
-    // have the full pre-mutation sub fetched on the fast path, so build
-    // a minimal placeholder; the FE already has the real state cached.
-    return synthesizeNoOpSub(
-      sealSubscriptionId,
-      mainItemNumericId,
-      mainItemVariantId,
-      currentFrequency,
-      ctx.customerId,
-    );
+    // Already in the target state. Naturally idempotent: a retry of an operation that
+    // actually landed returns success instead of mutating again.
+    return synthesizeNoOpSub(sealSubscriptionId, targetPlan, currentLines, currentFrequency, ctx.customerId);
   }
 
   const intervalLabelByFrequency: Record<Frequency, string> = {
@@ -398,33 +518,32 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // (api-helpers.dryRunAllowed). (2026-06-19)
   if (dryRun) {
     const projectedDate = planChanged ? effectivePreserveYYYYMMDD : preserveYYYYMMDD;
-    log("dry-run-short-circuit", { projectedDate, reanchorMode, variantChanged, planChanged });
+    log("dry-run-short-circuit", { projectedDate, reanchorMode, itemsChanged, planChanged });
     return synthesizePostMutationSub(
       sealSubscriptionId,
-      mainItemNumericId,
-      variantChanged ? newVariantNumeric! : mainItemVariantId,
+      targetPlan,
+      currentLines,
       expectedInterval,
       ctx.customerId,
       projectedDate,
     );
   }
 
-  // Build the new item we'll add. The variant is either the requested new
-  // one OR the existing one (when only the cadence is changing).
-  const effectiveVariantNumeric = variantChanged ? newVariantNumeric! : mainItemVariantId;
-  const variantDetails = await shopifyAdmin.getVariantForSealAddItems(effectiveVariantNumeric);
-  if (!variantDetails) {
-    throw new ApiHttpError(500, "variant_lookup_failed", `Shopify has no variant ${effectiveVariantNumeric}`);
+  // Shopify details for every variant we're about to ADD (title/sku/taxable/shipping —
+  // Seal requires them). Parallel so N adds cost one round-trip, and only for adds:
+  // edits and removes need nothing from Shopify.
+  const addDetails = await Promise.all(
+    diff.adds.map(async (line) => {
+      const d = await shopifyAdmin.getVariantForSealAddItems(line.variantId);
+      if (!d) {
+        throw new ApiHttpError(500, "variant_lookup_failed", `Shopify has no variant ${line.variantId}`);
+      }
+      return { line, details: d };
+    }),
+  );
+  if (addDetails.length) {
+    log("variants-resolved", { skus: addDetails.map((a) => a.details.sku) });
   }
-  log("variant-resolved", {
-    productId: variantDetails.productId,
-    variantId: variantDetails.variantId,
-    sku: variantDetails.sku,
-    price: variantDetails.price,
-  });
-
-  // Always write the canonical selling_plan_id for the target frequency.
-  const effectiveSellingPlan = targetSellingPlanNumeric;
 
   // Mutation order (REORDERED 2026-05-20 Juan):
   //   Before: add_items → remove_items → editSubscription
@@ -485,7 +604,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       }
     }
     // Pause so Seal can regenerate billing_attempts before the next call.
-    if (variantChanged) {
+    if (itemsChanged) {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
@@ -498,8 +617,17 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // every future charge silently. Safe order: detach BEFORE the swap,
   // re-apply AFTER. Never re-apply without a successful detach — applying on
   // top of a carried-over code is the invisible-duplicate scenario.
+  //
+  // Gated on adds/removes ONLY, not on edits: the carry-over moves a code from a
+  // REMOVED line to an ADDED one, so an edit_items-only change (the common mix case:
+  // same variants, different quantities) has nothing to move and keeps the code on
+  // the same line id. Not detaching there avoids two Seal calls and, more
+  // importantly, avoids a window where a failed re-attach costs the customer their
+  // 15%. The verification step asserts the code count didn't change, so if Seal ever
+  // surprises us on the edit path we find out from production instead of guessing.
+  const swapsItems = diff.adds.length > 0 || diff.removes.length > 0;
   let retentionCarry: { code: string; detached: boolean } | null = null;
-  if (variantChanged) {
+  if (swapsItems) {
     const { data: rd } = await supabaseAdmin()
       .from("retention_discounts")
       .select("code, discount_code_id")
@@ -508,15 +636,23 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       .eq("status", "pending_charge")
       .maybeSingle();
     if (rd) {
-      const appliedId =
-        (rd.discount_code_id as string | null) ??
-        (preMutationSub ? findAppliedDiscountCodeId(preMutationSub, rd.code as string) : null);
+      // ALL the UUIDs, not just the first: on a multi-line sub the same code can
+      // surface once per line, and removing one would leave a permanent discount on
+      // the others (the leak class of incident 2026-07-23).
+      const appliedIds = preMutationSub
+        ? findAllAppliedDiscountCodeIds(preMutationSub, rd.code as string)
+        : [];
+      const ids = appliedIds.length
+        ? appliedIds
+        : rd.discount_code_id
+          ? [rd.discount_code_id as string]
+          : [];
       retentionCarry = { code: rd.code as string, detached: false };
-      if (appliedId) {
+      if (ids.length) {
         try {
-          await seal.removeDiscountCode(sealSubscriptionId, appliedId);
+          for (const id of ids) await seal.removeDiscountCode(sealSubscriptionId, id);
           retentionCarry.detached = true;
-          log("retention-discount-detached-pre-swap");
+          log("retention-discount-detached-pre-swap", { count: ids.length });
         } catch (e) {
           log("retention-discount-detach-failed", {
             msg: e instanceof Error ? e.message : String(e),
@@ -539,9 +675,9 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       // it is invisible, do NOT apply on top (invisible duplicate). Alert.
       try {
         const fresh = await seal.getSubscriptionById(sealSubscriptionId);
-        const lateId = fresh ? findAppliedDiscountCodeId(fresh, retentionCarry.code) : null;
-        if (lateId) {
-          await seal.removeDiscountCode(sealSubscriptionId, lateId);
+        const lateIds = fresh ? findAllAppliedDiscountCodeIds(fresh, retentionCarry.code) : [];
+        if (lateIds.length) {
+          for (const id of lateIds) await seal.removeDiscountCode(sealSubscriptionId, id);
           retentionCarry.detached = true;
         }
       } catch {
@@ -565,7 +701,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       // ("already-gone"); reviving keeps the freshly re-applied code tracked so
       // it still gets removed after the discounted charge (audit 2026-07-23).
       const after = await seal.getSubscriptionById(sealSubscriptionId);
-      const newId = after ? findAppliedDiscountCodeId(after, retentionCarry.code) : null;
+      const newId = after ? findAllAppliedDiscountCodeIds(after, retentionCarry.code)[0] ?? null : null;
       const revive = () =>
         supabaseAdmin()
           .from("retention_discounts")
@@ -609,85 +745,181 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   };
 
-  // ───── Step 2: swap the variant (add new, remove old) ─────
+  // ───── Step 2: converge the lines on the target (edits → adds → removes) ─────
   //
-  // We do this AFTER the edit so the new item Seal creates is already
-  // aligned to the target cadence. Per reference_seal_api, Seal sets the
-  // item's selling_plan_id to match the sub's current delivery_interval
-  // regardless of what we pass in `selling_plan_id`. Doing the edit
-  // first guarantees the right plan.
-  if (variantChanged) {
-    // 2a. Add the new item.
+  // Runs AFTER the interval edit so every line Seal creates or realigns is already on
+  // the target cadence (Seal overwrites selling_plan_id from the sub's interval no
+  // matter what we send).
+  //
+  // Order matters: EDITS FIRST. An edit-only change — same variants, different
+  // quantities, which is the common case for a mix and for a box-count change on a
+  // mixed sub — then never enters the add/remove region at all, so it cannot leave
+  // both an old and a new line present. That window is what overcharged 7
+  // subscriptions in June-July 2026 (scripts/repair-duplicate-lines.mjs). And if an
+  // edit fails we abort with the subscription completely untouched.
+
+  // The snapshot IS the manual restore script: log it in full before mutating.
+  log("pre-mutation-snapshot", { lines: currentLines });
+
+  /** Undo whatever we managed to apply: drop lines that weren't in the snapshot and
+   *  put the snapshot's quantities/prices back. One read, then at most two writes. */
+  const restoreSnapshot = async (): Promise<"restored" | "inconsistent"> => {
     try {
-      await seal.addItems(sealSubscriptionId, [{
-        productId: variantDetails.productId,
-        variantId: variantDetails.variantId,
-        quantity: 1, // LIT model: always 1, box count encoded in variant
-        title: variantDetails.title,
-        sku: variantDetails.sku,
-        taxable: variantDetails.taxable,
-        requiresShipping: variantDetails.requiresShipping,
-        price: variantDetails.price,
-        sellingPlanId: effectiveSellingPlan,
-      }]);
-      log("seal-add-items-ok");
+      const live = await seal.getSubscriptionById(sealSubscriptionId);
+      if (!live) return "inconsistent";
+      const liveLines = getLines(live);
+      const snapIds = new Set(currentLines.map((l) => l.itemId));
+      const strays = liveLines.filter((l) => !snapIds.has(l.itemId)).map((l) => l.itemId);
+      if (strays.length) await seal.removeItems(sealSubscriptionId, strays);
+      const reEdits = currentLines.flatMap((snap) => {
+        const now = liveLines.find((l) => l.itemId === snap.itemId);
+        if (!now) return [];
+        const same = Number(now.quantity) === Number(snap.quantity) && now.unitPrice === snap.unitPrice;
+        return same ? [] : [{ itemId: snap.itemId, quantity: snap.quantity, price: snap.unitPrice }];
+      });
+      if (reEdits.length) await seal.editItems(sealSubscriptionId, reEdits);
+      log("snapshot-restored", { strays: strays.length, reEdits: reEdits.length });
+      return "restored";
+    } catch (e) {
+      log("snapshot-restore-failed", { msg: e instanceof Error ? e.message : String(e) });
+      return "inconsistent";
+    }
+  };
+
+  /** Record the desired end state so the repair cron can converge asynchronously.
+   *  Written when we cannot get the subscription to a correct state in-request —
+   *  the case that used to end as a silent duplicate charging the customer twice. */
+  const scheduleRepair = async (reason: string) => {
+    const nowIso = new Date().toISOString();
+    const { error } = await supabaseAdmin()
+      .from("subscription_line_repairs")
+      .upsert(
+        {
+          customer_id: ctx.customerId,
+          seal_subscription_id: String(sealSubscriptionId),
+          desired: targetPlan.lines,
+          snapshot: currentLines,
+          status: "pending",
+          attempts: 0,
+          last_error: reason,
+          created_at: nowIso,
+          updated_at: nowIso,
+        },
+        { onConflict: "customer_id,seal_subscription_id" },
+      );
+    if (error) {
+      log("repair-intent-write-failed", { msg: error.message });
+      return false;
+    }
+    log("repair-intent-written");
+    return true;
+  };
+
+  // 2a. Edits in place — no item ids change, nothing is removed.
+  if (diff.edits.length) {
+    try {
+      await seal.editItems(
+        sealSubscriptionId,
+        diff.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
+      );
+      log("seal-edit-items-ok", { count: diff.edits.length });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("seal-edit-items-failed", { msg });
+      // Nothing added or removed yet, so the sub is either untouched or partially
+      // edited; restore and abort.
+      await restoreSnapshot();
+      await reattachRetentionDiscount();
+      throw new ApiHttpError(
+        502,
+        planChanged ? "variant_change_failed_after_interval" : "seal_edit_items_failed",
+        msg,
+      );
+    }
+    if (diff.adds.length || diff.removes.length) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  // 2b. Adds — ALL new lines in ONE call, so the number of round-trips (and the
+  // latency budget against the App Proxy's ~10s patience) doesn't grow with the
+  // number of flavors. Verified 2026-07-27: Seal applies the whole array or none.
+  if (diff.adds.length) {
+    try {
+      await seal.addItems(
+        sealSubscriptionId,
+        addDetails.map(({ line, details }) => ({
+          productId: details.productId,
+          variantId: details.variantId,
+          quantity: line.quantity,
+          title: details.title,
+          sku: details.sku,
+          taxable: details.taxable,
+          requiresShipping: details.requiresShipping,
+          // Per-unit, distributing the tier total so a mix costs exactly what the
+          // equivalent pure plan costs.
+          price: centsToPrice(line.unitPriceCents),
+          sellingPlanId: targetSellingPlanNumeric,
+        })),
+      );
+      log("seal-add-items-ok", { count: diff.adds.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log("seal-add-items-failed", { msg });
-      // Items are unchanged — put the 15% back before surfacing the error.
+      await restoreSnapshot();
       await reattachRetentionDiscount();
-      // If the edit landed but add failed, the sub has the new cadence
-      // but old variant. The customer can retry box change separately.
       throw new ApiHttpError(
         502,
         planChanged ? "variant_change_failed_after_interval" : "seal_add_items_failed",
         msg,
       );
     }
+    if (diff.removes.length) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 
-    // Pause so Seal can index the new item before the remove call.
-    await new Promise((r) => setTimeout(r, 500));
-
-    // 2b. Remove the old item.
+  // 2c. Removes — ALL obsolete lines in ONE call. This includes duplicate lines a
+  // previous interrupted change may have left behind, so a corrupted subscription
+  // heals the first time its owner touches their plan.
+  if (diff.removes.length) {
     try {
-      await seal.removeItems(sealSubscriptionId, [mainItemNumericId]);
-      log("seal-remove-items-ok");
+      await seal.removeItems(sealSubscriptionId, diff.removes);
+      log("seal-remove-items-ok", { count: diff.removes.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log("seal-remove-items-failed", { msg });
-      let compensated = false;
+      // Worse than a failed add: the old AND new lines are both live, so the next
+      // charge would be too HIGH. Retry once, then try to restore, then hand it to
+      // the repair cron rather than leaving a silent double charge.
+      await new Promise((r) => setTimeout(r, 800));
+      let converged = false;
       try {
-        // Singular by-id endpoint (1 call) — the legacy getSubscription scans
-        // the whole store (~50 pages in parallel) and trips Seal's rate limit,
-        // worst possible move mid-rollback (audit 2026-07-06).
-        const afterAdd = await seal.getSubscriptionById(sealSubscriptionId);
-        const added = (afterAdd?.items ?? []).find(
-          (it) =>
-            !it.is_one_time_item &&
-            it.id !== mainItemNumericId &&
-            it.variant_id === variantDetails.variantId,
-        );
-        if (added?.id) {
-          await seal.removeItems(sealSubscriptionId, [added.id]);
-          compensated = true;
-          log("seal-compensate-remove-ok", { addedItemId: added.id });
-        } else {
-          log("seal-compensate-skipped-no-added-item-found");
-        }
-      } catch (rollbackErr) {
-        log("seal-compensate-remove-failed", {
-          msg: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
-        });
+        await seal.removeItems(sealSubscriptionId, diff.removes);
+        converged = true;
+        log("seal-remove-items-ok-on-retry");
+      } catch {
+        const outcome = await restoreSnapshot();
+        if (outcome === "restored") converged = true;
       }
-      // Whether or not the add was rolled back, restore the 15% before
-      // surfacing the error (support will sort the items either way).
       await reattachRetentionDiscount();
+      if (converged) {
+        throw new ApiHttpError(502, "seal_remove_items_failed", `${msg} (rolled back)`);
+      }
+      const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
+      alertSlackError({
+        path: "/api/subscription/plan",
+        code: "mix_inconsistent_state",
+        msg:
+          `sub ${sealSubscriptionId}: could not converge lines. desired=${JSON.stringify(targetPlan.lines)} ` +
+          `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
+          `If a charge fires before the cron converges, REFUND the duplicate line.`,
+        customerId: ctx.customerId,
+      });
       throw new ApiHttpError(
         502,
-        compensated ? "seal_remove_items_failed" : "seal_inconsistent_state",
-        compensated
-          ? `${msg} (rolled back add)`
-          : `${msg} (could NOT roll back add — subscription has duplicate items, contact support)`,
+        "seal_inconsistent_state",
+        `${msg} (subscription has extra lines; a repair is scheduled)`,
       );
     }
   }
@@ -754,44 +986,95 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   if (verified) {
-    const refreshedMainItem =
-      verified.items.find((it) => !it.is_one_time_item) ?? verified.items[0];
     const actualInterval = (verified.delivery_interval ?? "").toLowerCase().trim();
     const expectedNormalized = expectedInterval.toLowerCase().trim();
     const stripPlural = (s: string) => s.replace(/s\b/g, "").trim();
     const intervalMatches =
       stripPlural(actualInterval) === stripPlural(expectedNormalized);
-    const variantMatches =
-      !variantChanged ||
-      refreshedMainItem?.variant_id === variantDetails.variantId;
 
-    if (!intervalMatches || !variantMatches) {
+    // Verify the whole LINE SET, not just one item: same variants, same quantities,
+    // same per-unit prices, every line still recurring, and every line on the target
+    // selling plan. Checking only the first item is how a multi-line sub could pass
+    // verification while silently holding a duplicate.
+    const finalLines = getLines(verified);
+    const wanted = new Map(targetPlan.lines.map((l) => [String(l.variantId), l]));
+    const linesMatch =
+      finalLines.length === targetPlan.lines.length &&
+      finalLines.every((l) => {
+        const t = wanted.get(String(l.variantId));
+        return (
+          !!t &&
+          Number(l.quantity) === t.quantity &&
+          priceToCents(l.unitPrice) === t.unitPriceCents
+        );
+      });
+
+    // THE MONEY ASSERTION. Σ quantity × unit price must equal the tier total, so a mix
+    // costs exactly what the equivalent pure plan costs. Deliberately computed from
+    // the items and NOT from Seal's `total_value`, which nets out discount codes and
+    // would false-positive for anyone on the retention 15%.
+    const actualCents = getChargeTotalCents(verified);
+    const moneyMatches = Math.abs(actualCents - targetPlan.totalCents) <= 1;
+
+    // A line that landed as one-time means its product isn't attached to the selling
+    // plan: it would ship once and vanish, silently changing what the customer gets.
+    const oneTimeLeak = (verified.items ?? []).some(
+      (it) => it.is_one_time_item && wanted.has(String(it.variant_id)),
+    );
+
+    if (!intervalMatches || !linesMatch || !moneyMatches || oneTimeLeak) {
       console.error("[plan-change] verification MISMATCH — Seal silent lie", {
         expectedInterval,
         actualInterval: verified.delivery_interval,
-        expectedVariant: variantDetails.variantId,
-        actualVariant: refreshedMainItem?.variant_id,
-        intervalMatches,
-        variantMatches,
+        wanted: targetPlan.lines.map((l) => `${l.variantId}×${l.quantity}@${centsToPrice(l.unitPriceCents)}`),
+        actual: finalLines.map((l) => `${l.variantId}×${l.quantity}@${l.unitPrice}`),
+        expectedCents: targetPlan.totalCents,
+        actualCents,
+        intervalMatches, linesMatch, moneyMatches, oneTimeLeak,
       });
-      if (!intervalMatches && variantMatches) {
+      if (oneTimeLeak) {
         throw new ApiHttpError(
           502,
-          variantChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
+          "mix_line_not_recurring",
+          `A line landed as one-time (product not attached to the selling plan). Contact support.`,
+        );
+      }
+      // Money first: it is the most consequential mismatch and the early warning that
+      // Seal is not honouring our per-unit price.
+      if (!moneyMatches) {
+        alertSlackError({
+          path: "/api/subscription/plan",
+          code: "mix_price_mismatch",
+          msg:
+            `sub ${sealSubscriptionId}: after the change Seal charges ${actualCents}c but the ` +
+            `${targetPlan.boxCount}-box tier is ${targetPlan.totalCents}c. Seal may be ignoring the ` +
+            `per-unit price we send. Verify before the next charge.`,
+          customerId: ctx.customerId,
+        });
+        throw new ApiHttpError(
+          502,
+          "mix_price_mismatch",
+          `Seal did not apply the expected price (${actualCents}c vs ${targetPlan.totalCents}c).`,
+        );
+      }
+      if (!intervalMatches && linesMatch) {
+        throw new ApiHttpError(
+          502,
+          itemsChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
           `Seal accepted the edit but delivery_interval is still "${verified.delivery_interval}" (expected "${expectedInterval}").`,
         );
       }
-      if (intervalMatches && !variantMatches) {
+      if (intervalMatches && !linesMatch) {
         throw new ApiHttpError(
           502,
           "variant_change_failed",
-          `Seal accepted add_items/remove_items but the sub still has variant ${refreshedMainItem?.variant_id} (expected ${variantDetails.variantId}).`,
+          `Seal accepted the item changes but the lines don't match the target.`,
         );
       }
       throw new ApiHttpError(
         502,
         "plan_verification_failed",
-        `Both interval and variant didn't match expected values after plan change.`,
+        `Both interval and lines didn't match expected values after plan change.`,
       );
     }
 
@@ -831,7 +1114,8 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     log("done-verified", {
       sealSubscriptionId,
       finalInterval: verified.delivery_interval,
-      finalVariant: refreshedMainItem?.variant_id,
+      finalLines: finalLines.map((l) => `${l.variantId}×${l.quantity}`),
+      finalChargeCents: actualCents,
       finalNextShipDate,
     });
     return { ...mapToSubscription(verified, ctx.customerId), nextShipDate: finalNextShipDate };
@@ -855,12 +1139,12 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     sealSubscriptionId,
     verifyOutcome,
     finalInterval: expectedInterval,
-    finalVariant: variantChanged ? variantDetails.variantId : mainItemVariantId,
+    finalLines: targetPlan.lines.map((l) => `${l.variantId}×${l.quantity}`),
   });
   return synthesizePostMutationSub(
     sealSubscriptionId,
-    mainItemNumericId,
-    variantChanged ? variantDetails.variantId : mainItemVariantId,
+    targetPlan,
+    currentLines,
     expectedInterval,
     ctx.customerId,
     effectivePreserveYYYYMMDD,
@@ -868,72 +1152,71 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
 });
 
 /**
- * Mix fields for a synthetic response describing a SINGLE pack-variant line.
+ * Mix fields for a synthetic response, projected from the target plan.
  *
- * Both synthesizers below answer for the `packed` shape: one variant, quantity 1.
- * (Phase 2 gives the route real multi-line targets; until then no code path here
- * can produce a split sub.)
- *
- * `chargeTotalCents` is 0 when the price isn't known — a synthetic response never
- * read the sub back, so it cannot claim a charge total. The money assertion must
- * only ever use `getChargeTotalCents()` on a subscription read FROM Seal, never a
- * synthesized one.
+ * A synthetic response never read the subscription back, so the Seal item ids of
+ * lines we just ADDED are unknown. Those get `itemId: 0`, and the FE reconciles with
+ * a refetch — which it already does after a plan change precisely because item ids
+ * churn. `itemId` is reused from the pre-mutation line when the diff kept it (the
+ * edit-only path), which is the common case and means the FE's cached ids stay valid.
  */
-function packedMixFields(
-  itemId: number,
-  variantId: string,
+function projectedMixFields(
+  plan: MixPlan,
+  previousLines: SubscriptionLine[],
   sellingPlanId: string,
-  unitPriceCents: number | null,
 ): Pick<Subscription, "lines" | "composition" | "shape" | "flavorSummary" | "chargeTotalCents"> {
-  const flavor = flavorKeyForVariant(variantId) ?? DEFAULT_FLAVOR;
-  const boxes = BOX_COUNT_BY_VARIANT[variantId] ?? 1;
-  const composition = [{ flavor, boxes }];
+  const lines: SubscriptionLine[] = plan.lines.map((t) => ({
+    itemId: previousLines.find((p) => String(p.variantId) === String(t.variantId))?.itemId ?? 0,
+    productId: t.productId,
+    variantId: t.variantId,
+    flavor: t.flavor,
+    boxes: t.boxes,
+    quantity: t.quantity,
+    unitPrice: centsToPrice(t.unitPriceCents),
+    sellingPlanId,
+  }));
+  const composition = plan.lines.map((l) => ({ flavor: l.flavor, boxes: l.boxes }));
   return {
-    lines: [{
-      itemId,
-      productId: FLAVORS[flavor].productId,
-      variantId,
-      flavor,
-      boxes,
-      quantity: 1,
-      unitPrice: unitPriceCents == null ? "0.00" : centsToPrice(unitPriceCents),
-      sellingPlanId,
-    }],
+    lines,
     composition,
-    shape: "packed" as const,
+    shape: plan.shape,
     flavorSummary: compositionLabel(composition),
-    chargeTotalCents: unitPriceCents ?? 0,
+    chargeTotalCents: plan.totalCents,
   };
 }
 
+/** Dominant line of a projected plan — the back-compat `mainItemId`/`currentVariantId`. */
+function dominantOf(fields: Pick<Subscription, "lines">): SubscriptionLine | null {
+  return [...fields.lines].sort((a, b) => b.boxes - a.boxes)[0] ?? null;
+}
+
 /**
- * Build the Subscription response shape from the IDs we already know,
- * without fetching from Seal. The FE's silent re-poll picks up the
- * regenerated nextShipDate on the next dashboard refresh.
+ * Build the Subscription response shape from what we know, without fetching from
+ * Seal. The FE's silent re-poll picks up the regenerated nextShipDate on the next
+ * dashboard refresh.
  */
 function synthesizePostMutationSub(
   sealSubscriptionId: number,
-  mainItemId: number,
-  finalVariantId: string,
+  plan: MixPlan,
+  previousLines: SubscriptionLine[],
   expectedInterval: string,
   customerId: string,
   /** When set, show this date optimistically (a re-anchor intent is pending). */
   preserveYYYYMMDD?: string | null,
 ): Subscription {
-  // Derive the resulting boxCount from the variant id. Falls back to 1
-  // for unmapped variants (shouldn't happen — we only mutate to mapped ones).
-  const boxCount = BOX_COUNT_BY_VARIANT[finalVariantId] ?? 1;
   const frequency = normalizeFrequency(expectedInterval);
+  const mix = projectedMixFields(plan, previousLines, SELLING_PLAN_BY_FREQUENCY[frequency]);
+  const dom = dominantOf(mix);
   return {
     customerId,
     sealSubscriptionId: String(sealSubscriptionId),
-    mainItemId,
-    currentVariantId: finalVariantId,
-    boxCount,
-    ...packedMixFields(mainItemId, finalVariantId, SELLING_PLAN_BY_FREQUENCY[frequency], null),
+    mainItemId: dom?.itemId ?? 0,
+    currentVariantId: dom?.variantId ?? "",
+    boxCount: plan.boxCount,
+    ...mix,
     frequency,
     frequencyLabel: expectedInterval,
-    flavor: flavorLabel(flavorKeyForVariant(finalVariantId)),
+    flavor: flavorLabel(dom?.flavor ?? DEFAULT_FLAVOR),
     // Optimistic: show the preserved date while the cron finishes the skip.
     // Otherwise null and the FE re-polls for the regenerated date.
     nextShipDate: preserveYYYYMMDD ? `${preserveYYYYMMDD}T13:00:00Z` : null,
@@ -952,27 +1235,28 @@ function synthesizePostMutationSub(
 }
 
 /**
- * No-op response: nothing changed, so return current state without any
- * Seal calls. The FE will refresh the dashboard separately.
+ * No-op response: already in the target state, so return it without any Seal calls.
+ * The FE will refresh the dashboard separately.
  */
 function synthesizeNoOpSub(
   sealSubscriptionId: number,
-  mainItemId: number,
-  variantId: string,
+  plan: MixPlan,
+  currentLines: SubscriptionLine[],
   frequency: Frequency,
   customerId: string,
 ): Subscription {
-  const boxCount = BOX_COUNT_BY_VARIANT[variantId] ?? 1;
+  const mix = projectedMixFields(plan, currentLines, SELLING_PLAN_BY_FREQUENCY[frequency]);
+  const dom = dominantOf(mix);
   return {
     customerId,
     sealSubscriptionId: String(sealSubscriptionId),
-    mainItemId,
-    currentVariantId: variantId,
-    boxCount,
-    ...packedMixFields(mainItemId, variantId, SELLING_PLAN_BY_FREQUENCY[frequency], null),
+    mainItemId: dom?.itemId ?? 0,
+    currentVariantId: dom?.variantId ?? "",
+    boxCount: plan.boxCount,
+    ...mix,
     frequency,
     frequencyLabel: frequency,
-    flavor: flavorLabel(flavorKeyForVariant(variantId)),
+    flavor: flavorLabel(dom?.flavor ?? DEFAULT_FLAVOR),
     nextShipDate: null,
     nextBoxNumber: null,
     status: "active",

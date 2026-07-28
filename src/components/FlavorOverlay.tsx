@@ -85,17 +85,30 @@ export function FlavorOverlay({
             es: "No pudimos cambiar el sabor de esta suscripción automáticamente. Escríbenos y lo hacemos por ti.",
           }),
         );
-      } else if (err.code === "multiline_not_supported") {
-        // The sub already holds >1 recurring line (usually two flavors bought in the
-        // same checkout). Swapping one line would leave the other alive and overcharge
-        // them, so the backend refuses until multi-line support ships.
+      } else if (err.code === "subscription_changed" || err.code === "mix_requires_explicit_intent") {
+        // The subscription changed since this screen loaded (another tab, support), so
+        // applying what's on screen would overwrite a state the customer never saw.
         setError(
           t({
-            en: "Your subscription has more than one product, so we can't change it from here yet. Contact us and we'll do it for you.",
-            es: "Tu suscripción tiene más de un producto, así que todavía no podemos cambiarla desde aquí. Escríbenos y lo hacemos por ti.",
+            en: "Your subscription changed since this page loaded. Reload and try again.",
+            es: "Tu suscripción cambió desde que se cargó esta página. Recárgala y vuelve a intentarlo.",
           }),
         );
-      } else if (err.code === "variant_change_failed" || err.code === "seal_add_items_failed") {
+      } else if (err.code === "mix_price_mismatch") {
+        setError(
+          t({
+            en: "We couldn't apply your flavors at the right price. Nothing was charged differently. Try again.",
+            es: "No pudimos aplicar tus sabores al precio correcto. No se ha cobrado nada distinto, inténtalo de nuevo.",
+          }),
+        );
+      } else if (err.code === "mix_line_not_recurring") {
+        setError(
+          t({
+            en: "We couldn't apply your flavors. Contact us and we'll do it for you.",
+            es: "No pudimos aplicar tus sabores. Escríbenos y lo hacemos por ti.",
+          }),
+        );
+      } else if (err.code === "variant_change_failed" || err.code === "seal_add_items_failed" || err.code === "seal_edit_items_failed") {
         setError(
           t({
             en: "Couldn't change your flavor. Try again in a moment.",
@@ -103,10 +116,12 @@ export function FlavorOverlay({
           }),
         );
       } else if (err.code === "seal_inconsistent_state") {
+        // A repair intent is written and the cron converges it, so promise the
+        // customer they won't be double charged instead of just sending them away.
         setError(
           t({
-            en: "Something went wrong updating your flavor. Please contact support so we can fix it.",
-            es: "Algo no fue bien actualizando tu sabor. Por favor contáctanos y lo arreglamos.",
+            en: "We're still finishing your change. You won't be charged twice, we'll sort it within the next few minutes.",
+            es: "Estamos terminando de aplicar tu cambio. No se te cobrará dos veces, lo dejamos resuelto en unos minutos.",
           }),
         );
       } else if (err.code === "gateway_timeout" || err.status === 504) {

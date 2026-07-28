@@ -28,6 +28,10 @@
       "schedule": "0 6 * * *"
     },
     {
+      "path": "/api/cron/mix-repair-drain",
+      "schedule": "30 6 * * *"
+    },
+    {
       "path": "/api/cron/retention-discount-sweep",
       "schedule": "30 6 * * *"
     }
