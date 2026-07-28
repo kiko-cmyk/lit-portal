@@ -101,6 +101,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
+    // Cancelled/paused: there is no pending attempt to move, so there is nothing to
+    // preserve. Without this the intent spun 72 times (once every 5 min for the whole
+    // 6h TTL) and then fired the "customer may be billed early" error, which is FALSE
+    // for a sub that isn't charging at all. Found 8 such intents on 2026-07-28, all
+    // for CANCELLED subs. Close it quietly.
+    if (sub.status !== "ACTIVE") {
+      await sb
+        .from("subscription_reanchor_intents")
+        .delete()
+        .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", intent.seal_subscription_id);
+      done++;
+      continue;
+    }
+
     const firstPending = getNextBillingAttempt(sub);
     const firstDay = firstPending?.date.slice(0, 10) ?? null;
 

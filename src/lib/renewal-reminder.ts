@@ -52,7 +52,7 @@ import { alertSlackErrorAwaited } from "./alert";
 import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
 import { klaviyo } from "./klaviyo";
-import { type FlavorComposition, shortLabel } from "./mix";
+import { diffLines, type FlavorComposition, planTargetLines, shortLabel } from "./mix";
 import { priceForBoxCount } from "./pricing";
 import {
   extractFlavorSummary,
@@ -174,21 +174,70 @@ async function assertMixPrice(
   try {
     const expected = Math.round((await priceForBoxCount(boxCount, composition[0].flavor)) * 100);
     const actual = getChargeTotalCents(s);
+    const lines = getLines(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
-    if (Math.abs(actual - expected) > getLines(s).length) {
-      console.error(`[${cfg.label}] mix price drift`, {
-        sealId: s.id, actual, expected, boxCount, charge: chargeDate,
-      });
-      await alertSlackErrorAwaited({
-        path: cfg.path,
-        code: "mix_price_drift",
-        msg:
-          `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
-          `Seal may have refreshed the item prices and dropped our per-unit price. ` +
-          `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
-      });
+    if (Math.abs(actual - expected) <= lines.length) return;
+
+    console.error(`[${cfg.label}] mix price drift`, {
+      sealId: s.id, actual, expected, boxCount, charge: chargeDate,
+    });
+
+    // ── SELF-HEAL, only in the over-charge direction ──
+    //
+    // We never got to verify with a real charge that Seal preserves a custom per-unit
+    // price (that probe was declined, 2026-07-28), so this alert is the ONLY thing
+    // standing between a price refresh and a ~25% over-charge. An alert that nobody
+    // reads within 48h is not a control, so it repairs itself and then reports.
+    //
+    // Direction matters: only correct when the customer would be charged MORE than
+    // their tier. An amount BELOW the tier is either the known 1-cent rounding or
+    // something deliberate (a promo, a manual adjustment in Seal), and silently
+    // raising what someone pays is never a safe automated action.
+    //
+    // Safe to run from a cron: edit_items is idempotent, preserves item ids and does
+    // not touch billing_attempts (verified 2026-07-27). If the state already matches,
+    // diffLines is empty and nothing is sent.
+    let healed: "not-attempted" | "healed" | "failed" = "not-attempted";
+    if (actual > expected) {
+      try {
+        const plan = planTargetLines(composition, expected);
+        const diff = diffLines(lines, plan.lines);
+        if (diff.adds.length || diff.removes.length) {
+          // Prices alone can't explain a different SET of lines; that is a different
+          // problem (a half-applied change) and belongs to the repair cron, not here.
+          console.warn(`[${cfg.label}] sub ${s.id}: drift needs add/remove, leaving to mix-repair-drain`);
+        } else if (diff.edits.length) {
+          await seal.editItems(
+            s.id,
+            diff.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
+          );
+          await new Promise<void>((r) => setTimeout(r, 1200));
+          // Verify by reading back, never by trusting the mutation response.
+          const after = await seal.getSubscriptionById(s.id);
+          const now = after ? getChargeTotalCents(after) : -1;
+          healed = Math.abs(now - expected) <= lines.length ? "healed" : "failed";
+        }
+      } catch (e) {
+        healed = "failed";
+        console.error(`[${cfg.label}] self-heal failed for sub ${s.id}:`, e);
+      }
     }
+
+    await alertSlackErrorAwaited({
+      path: cfg.path,
+      code: healed === "healed" ? "mix_price_drift_healed" : "mix_price_drift",
+      msg:
+        healed === "healed"
+          ? `sub ${s.id}: charge total was ${actual}c but the ${boxCount}-box tier is ${expected}c — ` +
+            `the per-unit prices were REPAIRED automatically and verified. Charge lands ` +
+            `${chargeDate.slice(0, 10)}. Worth checking why Seal dropped them.`
+          : `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
+            (actual > expected
+              ? `Automatic repair ${healed === "failed" ? "FAILED" : "was not possible"}. `
+              : `Charging BELOW the tier, so not touched automatically. `) +
+            `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
+    });
   } catch (e) {
     // Never let the price check stop the reminder from going out.
     console.warn(`[${cfg.label}] price check failed for sub ${s.id}:`, e);

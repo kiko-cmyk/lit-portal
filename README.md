@@ -91,6 +91,23 @@ lit-portal/
 - Cutoff: 72h before next ship
 - Reactivation: no cooldown (1st cancel within 90d → drops restored; 2nd cancel → drops reset to 0 immediately)
 - Card webhook: Shopify `fulfillments/create` (NOT Hive — Hive is not integrated)
+
+
+## Crons externos (cada 5 min)
+
+Vercel Hobby solo permite crons **diarios**, así que `vercel.json` lleva una entrada diaria
+como respaldo y los drains que necesitan ir rápido se llaman desde el **crontab del usuario
+`kiko` en el VPS de LIT** (37.27.200.214), vía `~/cron-wrapper.sh` y con el secreto en
+`/home/kiko/lit-tools/.env` (`LIT_PORTAL_CRON_SECRET`):
+
+| Endpoint | Cada | Log |
+|---|---|---|
+| `/api/cron/reanchor-drain` | 5 min | `~/lit-tools/logs/lit_portal_reanchor_drain.log` |
+| `/api/cron/mix-repair-drain` | 5 min | `~/lit-tools/logs/lit_portal_mix_repair_drain.log` |
+
+Si añades un drain nuevo, **clona la línea existente** con `sed` en vez de escribirla a
+mano: lleva comillas anidadas y una lectura del `.env` que es fácil de romper. Sin la
+entrada del crontab, un drain solo corre una vez al día y una reparación puede tardar 24h.
 - Multi-box: linear +100 Drops/box
 - Extras admin: Shopify collection tagged `add-to-box`
 - Pricing: flat €14/box placeholder until MVP launch — single edit in `src/lib/pricing.ts`

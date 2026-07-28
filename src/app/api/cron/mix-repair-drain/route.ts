@@ -103,6 +103,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
+    // Cancelled/paused: nothing will be charged, so there is nothing to repair. Close it
+    // instead of retrying to the TTL and alerting about an over-charge that can't happen
+    // (the same trap the re-anchor drain fell into: 8 dead intents, all cancelled subs).
+    if (sub.status !== "ACTIVE") {
+      await close("done", `subscription is ${sub.status}, nothing to repair`);
+      alreadyOk++;
+      continue;
+    }
+
     const live = getLines(sub);
     const diff = diffLines(live, desired);
     if (diff.noop) {
