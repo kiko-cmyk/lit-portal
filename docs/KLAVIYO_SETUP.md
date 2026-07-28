@@ -139,6 +139,7 @@ Para implementar en Klaviyo: usar **smart sending + frequency caps** en cada flo
 |---|---|
 | `is_mix` | `true` cuando la suscripción reparte sus cajas entre varios sabores |
 | `flavor_mix` | `[{flavor: "Lemon", boxes: 2}, {flavor: "Watermelon", boxes: 1}]` |
+| `frequency` | `15d`, `45d`, `1mo`…`6mo`, o ausente si el plan no está en el registro |
 
 **`flavor` sigue siendo utilizable tal cual**: con un solo sabor devuelve la etiqueta
 exacta de siempre ("Salty Lemon"), y con una mezcla devuelve `"2× Lemon · 1× Watermelon"`.
@@ -175,6 +176,35 @@ por `$locale_language` y estas dos plantillas:
 
 El id `Utdb9S` que aparecía más abajo en este documento **ya no existe** (verificado
 2026-07-28). Antes de editar una plantilla, resolver el flow y su `template_id` como aquí.
+
+### Una plantilla atada a un flow NO se puede editar por API
+
+`PATCH /api/templates/{id}` sobre `Ty5ZeT` o `VReESZ` devuelve **404**, y tampoco salen en el
+listado de la biblioteca. No es cuestión de permisos: con la misma clave, clonar y hacer PATCH
+sobre el clon funciona. Las plantillas que viven dentro de un mensaje de flow son de solo
+lectura desde la API.
+
+El camino que sí funciona, y que hay que repetir para cualquier cambio futuro:
+
+1. Crear/actualizar una plantilla **de biblioteca** por API (`POST /api/templates/`).
+2. Verificarla con `POST /api/template-render/` pasándole el `context` de cada caso. Es el
+   único render fiable: un intérprete propio de Liquid da falsos positivos.
+3. **Por UI**, asignar esa plantilla al mensaje del flow. Klaviyo genera entonces una copia
+   viva con id nuevo (así nació `SfinKC` desde `RT2Kv3` en el recordatorio de 7 días).
+
+Plantillas de biblioteca de la bienvenida, rehechas 2026-07-28 con el estilo de maquetación
+del resto de emails (480px, Clash Display + Barlow, hero con foto, bloque de datos oscuro):
+
+| Idioma | Template id de biblioteca | Mensaje del flow al que va |
+|---|---|---|
+| ES | `S367L2` | acción `106246515` de `UAH3ug` |
+| EN | `YzLBbj` | acción `105935906` de `UAH3ug` |
+
+Qué arreglan además del estilo: la pluralización de `box_count`, la mezcla de sabores, la
+cadencia (`frequency`, prop nueva) y **la fecha de entrega inventada**. La plantilla vieja
+decía "Tu primera caja llega sobre el {{ event.delivery_date|default:'pronto' }}" y
+`confirmation_sent` **nunca ha mandado `delivery_date`**, así que todos los clientes leían
+"llega sobre el pronto". Las nuevas no prometen fecha: dicen que avisamos al salir del almacén.
 
 ---
 
