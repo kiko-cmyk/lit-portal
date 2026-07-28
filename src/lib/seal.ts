@@ -508,14 +508,50 @@ class SealClient {
   }
 
   /**
-   * Apply Seal's `pause` action. Subscriber stops being billed; can be reactivated.
-   * NOTE: this is destructive. Caller must confirm intent.
+   * THERE IS NO pauseSubscription() HERE, ON PURPOSE.
+   *
+   * A `pauseSubscription()` wrapper for Seal's `pause` action existed from the
+   * first version of this client and never had a single caller: pausing is not a
+   * product we offer. What we offer instead is the skip / spacing retention
+   * wizard (see /api/subscription/skip), which keeps the subscription alive.
+   *
+   * It was removed on 2026-07-28 while investigating 86 customer-side pauses,
+   * all of them made inside Seal's own customer portal. Dead code whose only
+   * possible effect is to stop billing a paying customer is a liability, and its
+   * presence made the pauses look for a while like they might have been ours.
+   *
+   * To un-pause, use `resumeSubscription` below.
    */
-  async pauseSubscription(subscriptionId: number): Promise<void> {
-    await this.req("/subscription", {
-      method: "PUT",
-      body: JSON.stringify({ action: "pause", id: subscriptionId }),
-    });
+
+  /**
+   * Bring a PAUSED subscription back to ACTIVE.
+   *
+   * Uses `resume`, not `reactivate`. Seal's docs say the two are interchangeable:
+   * "There is almost no difference in the resume and reactivate actions, except
+   * that you generally resume paused subscriptions and reactivate the cancelled
+   * subscriptions. But you can use any of these two actions." What is NOT
+   * interchangeable is the webhook Seal fires afterwards: `resume` emits
+   * subscription/resumed and `reactivate` emits subscription/reactivated. Using
+   * the verb that matches the state keeps the audit trail honest.
+   *
+   * Kept as its own method rather than having callers reach for
+   * `reactivateSubscription` because the two flows must stay apart: resuming a
+   * pause restores no Drops and must not touch cancel_count.
+   *
+   * Like reactivate, Seal regenerates billing_attempts asynchronously, so the
+   * list can be briefly empty right after this returns.
+   */
+  async resumeSubscription(subscriptionId: number): Promise<void> {
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({ action: "resume", id: subscriptionId }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal resume rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
   }
 
   updatePlan(_subscriptionId: number, _changes: { boxCount?: number; frequency?: string }): Promise<SealSubscription> {
@@ -1143,7 +1179,8 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
     payment: {
       cardExpiryMonth: s.card_expiry_month || null,
       cardExpiryYear: s.card_expiry_year || null,
-      sealEditUrl: s.edit_url || null,
+      // `s.edit_url` is deliberately NOT mapped — see the comment on
+      // Subscription["payment"] in lib/types.ts.
     },
   };
 }

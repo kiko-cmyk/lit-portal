@@ -54,6 +54,8 @@ export default function AccountPage() {
   const [skipOpen, setSkipOpen] = useState(false);
   const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   // Mirror Mi LIT: an active skip drives the "Saltada" indicator next
   // to the Skip QA + an undo affordance. Persisted in localStorage so
   // it survives navigation between Mi LIT y Cuenta.
@@ -171,6 +173,51 @@ export default function AccountPage() {
       subscription.status === "paused" ||
       subscription.status === "reactivating");
   const subCancelled = subscription != null && !subActive;
+  // Paused (2026-07-28). Cuenta has always rendered a paused sub as fully
+  // manageable, which was never true: of the four quick actions, Bring forward,
+  // Plan, Skip and Flavor, the backend rejects skip / charge-now / extras and
+  // the cancel wizard's last step, because they all reason about a pending
+  // billing attempt that a paused sub doesn't have. So the paused customer got a
+  // grid of buttons that error. Now they get the one action that makes sense.
+  const subPaused = subscription != null && subscription.status === "paused";
+
+  const handleResume = async () => {
+    if (resuming || !subscription) return;
+    setResuming(true);
+    setResumeError(null);
+    try {
+      // Name the sub explicitly, same reason as the Hub: the route otherwise
+      // resumes "the first paused one", and 18 of the 86 paused subs belong to a
+      // customer who has more than one subscription.
+      await api("/api/subscription/resume", {
+        method: "POST",
+        body: JSON.stringify({ sealSubscriptionId: subscription.sealSubscriptionId }),
+      });
+      const fresh = await api<Subscription>("/api/subscription");
+      setSubscription(fresh);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      console.error("[account] resume failed", e);
+      setResumeError(
+        code === "rate_limited"
+          ? t({
+              en: "Too many tries. Wait a minute and try again.",
+              es: "Demasiados intentos. Espera un minuto e inténtalo de nuevo.",
+            })
+          : code === "subscription_not_paused"
+            ? t({
+                en: "This subscription is already active. Reload the page.",
+                es: "Esta suscripción ya está activa. Recarga la página.",
+              })
+            : t({
+                en: "Couldn't resume. Try again or write to us.",
+                es: "No se pudo reanudar. Inténtalo de nuevo o escríbenos.",
+              }),
+      );
+    } finally {
+      setResuming(false);
+    }
+  };
 
   const handleUndoSkip = async () => {
     if (!subscription) return;
@@ -281,7 +328,42 @@ export default function AccountPage() {
           </div>
         </section>
 
-        {subActive && (
+        {subPaused && (
+          <section className="mx-6 mb-5 rounded-[18px] border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+              <T en="Paused" es="En pausa" />
+            </div>
+            <p className="mt-2 text-[13px] leading-[1.5] text-[color:var(--color-lit-grey)]">
+              <T
+                en="Your subscription is paused, so there are no charges and no shipments. Resume it and the next box is scheduled from today."
+                es="Tu suscripción está en pausa, así que no hay cobros ni envíos. Reanúdala y la próxima caja se programa desde hoy."
+              />
+            </p>
+            {resumeError && (
+              <p className="mt-3 text-[12px] text-[color:var(--color-danger)]">{resumeError}</p>
+            )}
+            <button
+              type="button"
+              onClick={handleResume}
+              disabled={resuming}
+              className="mt-4 rounded-full bg-[color:var(--color-lit-grey)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-brisky-cream)] disabled:opacity-60"
+            >
+              {resuming ? (
+                <T en="Resuming…" es="Reanudando…" />
+              ) : (
+                <T en="Resume subscription" es="Reanudar suscripción" />
+              )}
+            </button>
+            <p className="mt-3 text-[11px] leading-[1.4] text-[color:var(--color-warm-gray)]">
+              <T
+                en="Prefer to cancel instead of resuming? Write to us at hola@litsalt.com and we'll take care of it."
+                es="¿Prefieres cancelar en vez de reanudar? Escríbenos a hola@litsalt.com y lo hacemos nosotros."
+              />
+            </p>
+          </section>
+        )}
+
+        {subActive && !subPaused && (
           <section className="mx-6 mb-5 grid grid-cols-2 gap-1.5 md:mx-0 md:grid-cols-4">
             <CompactAction
               icon={QAIcons.ChargeNow}
@@ -376,18 +458,26 @@ export default function AccountPage() {
                 }
               />
             </div>
-            <div className="mt-4">
-              <button
-                type="button"
-                onClick={() => setPlanOpen(true)}
-                className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
-              >
-                <T
-                  en="Change boxes or frequency"
-                  es="Cambiar cajas o frecuencia"
-                />
-              </button>
-            </div>
+            {/* Hidden while paused. The summary above is fine to read, but this
+                button opens PlanOverlay, which posts the four fast-path ids to
+                /api/subscription/plan and would mutate a paused subscription.
+                The backend refuses it now, so leaving the button here would just
+                show the customer an error where a resume banner already tells
+                them what to do. */}
+            {!subPaused && (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => setPlanOpen(true)}
+                  className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
+                >
+                  <T
+                    en="Change boxes or frequency"
+                    es="Cambiar cajas o frecuencia"
+                  />
+                </button>
+              </div>
+            )}
           </Section>
         )}
 
@@ -500,7 +590,12 @@ export default function AccountPage() {
 
         <Marquee />
 
-        {subActive && (
+        {/* Cancel is hidden while paused: the wizard's confirm step reasons about
+            the next billing attempt, which a paused sub doesn't have, so the
+            button 400s at the end after making the customer walk the whole flow.
+            Not a dark pattern, the paused banner above says in plain words to
+            email us to cancel, and a paused sub isn't being charged meanwhile. */}
+        {subActive && !subPaused && (
           <DangerZone
             onCancel={() => setCancelOpen(true)}
             signoutUrl="https://litsalt.com/account/logout"

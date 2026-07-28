@@ -30,7 +30,14 @@ export const GET = withCustomer<{ subscriptions: Subscription[] }>(async (req, c
   const subs = await seal.getSubscriptionsByEmail(email);
 
   const manageable = subs.filter((s) => {
-    if (s.status !== "ACTIVE" && !s.cancellation_scheduled_for) return false;
+    // PAUSED counts as manageable (2026-07-28). Without it, 18 of the 86 paused
+    // subscriptions were unreachable: their owner ALSO has an active sub, so the
+    // Hub's selection picks the active one (correctly, it prefers ACTIVE) and the
+    // chooser never listed the paused one, leaving no way to reach the resume
+    // card. That is 21% of the population this whole change exists to serve.
+    // Status only, never `paused_on`: Seal never clears that timestamp, so
+    // paused-then-cancelled subs still carry it.
+    if (s.status !== "ACTIVE" && s.status !== "PAUSED" && !s.cancellation_scheduled_for) return false;
     // Defence-in-depth: only ever return subs that belong to this email.
     try {
       assertSubscriptionBelongsToCustomer(s, email, "subscriptions:GET");

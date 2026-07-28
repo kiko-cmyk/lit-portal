@@ -53,6 +53,24 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   if (!sub) {
     const subsRes = await seal.getSubscriptionsByEmail(email);
     sub = subsRes.find((s) => s.status === "ACTIVE") ?? null;
+    // Resume surface (2026-07-28): a PAUSED sub matched NOTHING here — not the
+    // ACTIVE pick above, not the CANCELLED fallback below — so all 86 paused
+    // customers hit the 404 and were shown the "buy a subscription" EmptyState,
+    // the same orphan-sub trap the reactivation surface below was built to fix.
+    // Their only working resume button was the one inside Seal's own portal.
+    // mapStatus turns this into "paused" and the Hub renders the resume card.
+    // No eligibility gate: a pause is not a cancel, there is no hold window and
+    // nothing to restore, so a paused sub is always resumable.
+    if (!sub) {
+      // Status ONLY, not `paused_on`: Seal never clears that timestamp, so a
+      // paused-then-cancelled sub still carries it (two exist today) and would
+      // shadow the reactivation branch below, showing a cancelled customer a
+      // resume button that bypasses the cancel policy.
+      sub =
+        subsRes
+          .filter((s) => s.status === "PAUSED")
+          .sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ?? null;
+    }
     // Reactivation surface (audit 2026-07-08): portal cancels are IMMEDIATE
     // in Seal (no cancellation_scheduled_for), so a cancelled customer who
     // comes back has no ACTIVE sub and used to 404 here — the Hub then showed

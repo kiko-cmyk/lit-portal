@@ -85,7 +85,13 @@ export interface Subscription {
   payment: {
     cardExpiryMonth: string | null;
     cardExpiryYear: string | null;
-    sealEditUrl: string | null;
+    // NO `sealEditUrl` here on purpose. Seal's `edit_url` is a magic link into
+    // Seal's OWN customer portal, which we must never expose: the premise of
+    // this portal is that the customer never lands there (that UI is not ours,
+    // it is not branded, it bypasses the retention wizard, and until
+    // 2026-07-28 it also carried a PAUSE button that produced 86 pauses we
+    // never saw). No component ever rendered it, but it travelled to the
+    // client in every /api/subscription response. Removed 2026-07-28.
   };
 }
 

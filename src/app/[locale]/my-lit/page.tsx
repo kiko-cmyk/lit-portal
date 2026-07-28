@@ -104,7 +104,11 @@ export default function HubPage() {
           fresh.subscription &&
           !fresh.subscription.nextShipDate &&
           fresh.subscription.status !== "post_cancel" &&
-          fresh.subscription.status !== "expired"
+          fresh.subscription.status !== "expired" &&
+          // A paused sub has no scheduled charge by definition — polling for one
+          // would spin the "updating your calendar" banner for 60 s and then
+          // give up, on a screen whose only job is to offer the resume button.
+          fresh.subscription.status !== "paused"
         ) {
           setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
         }
@@ -188,6 +192,63 @@ export default function HubPage() {
             : t({
                 en: "Couldn't reactivate. Try again or contact us.",
                 es: "No se pudo reactivar. Inténtalo de nuevo o escríbenos.",
+              }),
+      );
+    } finally {
+      setReactivating(false);
+    }
+  };
+
+  /**
+   * Resume a PAUSED subscription. Separate endpoint from reactivate: a pause
+   * never entered the cancel accounting, so there's no 90-day window and no
+   * Drops snapshot to restore, and /reactivate would 400 with `no_cancellation`.
+   *
+   * Shares the `reactivating` / `reactivateError` state with handleReactivate —
+   * same card, same in-flight and inline-failure semantics.
+   */
+  const handleResume = async () => {
+    if (reactivating) return; // guard against a double-tap firing two POSTs
+    setReactivating(true);
+    setReactivateError(null);
+    try {
+      // Name the sub explicitly. The route falls back to "the customer's first
+      // paused sub" when no id arrives, and 18 of the 86 paused subs belong to a
+      // customer with more than one, so an id-less POST could resume, and start
+      // charging, a subscription other than the one on screen.
+      await api("/api/subscription/resume", {
+        method: "POST",
+        body: JSON.stringify({ sealSubscriptionId: sub.sealSubscriptionId }),
+      });
+      const fresh = await api<HubDashboard>("/api/hub/dashboard");
+      setData(fresh);
+      // Seal regenerates billing_attempts asynchronously after a resume, so the
+      // next-ship date can still be missing here. Kick off the same silent
+      // re-poll a plan change uses instead of showing a blank hero.
+      if (!fresh.subscription?.nextShipDate) {
+        // Same tolerated impurity as the dropsHeldDays computation below: this
+        // runs inside an event handler, not during render, and the value is a
+        // wall-clock deadline for the poll loop.
+        // eslint-disable-next-line react-hooks/purity
+        setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
+      }
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      console.error("[hub] resume failed", e);
+      setReactivateError(
+        code === "rate_limited"
+          ? t({
+              en: "Too many tries. Wait a minute and try again.",
+              es: "Demasiados intentos. Espera un minuto e inténtalo de nuevo.",
+            })
+          : code === "subscription_not_paused"
+            ? t({
+                en: "This subscription is already active. Reload the page.",
+                es: "Esta suscripción ya está activa. Recarga la página.",
+              })
+            : t({
+                en: "Couldn't resume. Try again or contact us.",
+                es: "No se pudo reanudar. Inténtalo de nuevo o escríbenos.",
               }),
       );
     } finally {
@@ -298,12 +359,16 @@ export default function HubPage() {
   const cutoffEndsAt = sub.cutoffEndsAt ? new Date(sub.cutoffEndsAt) : null;
   const nextShipDate = sub.nextShipDate ? new Date(sub.nextShipDate) : null;
   const isPostCancel = sub.status === "post_cancel" || sub.status === "expired";
+  // Paused (2026-07-28). Until today this state was unreachable here: the
+  // dashboard 404'd on a PAUSED sub and the customer got the "buy a
+  // subscription" empty state. Rendered as its own card with resume copy.
+  const isPaused = sub.status === "paused";
   const isNew = sub.nextBoxNumber === 1 && timeline.length === 0;
   // Whenever the sub exists but Seal hasn't reattached a next ship date —
   // either right after a plan change or on cold reloads while Seal rebuilds —
   // show the syncing banner so the customer never sees a blank date hero.
   const showSyncingBanner =
-    syncingUntil !== null || (!isPostCancel && !nextShipDate);
+    syncingUntil !== null || (!isPostCancel && !isPaused && !nextShipDate);
 
   const variant: NextBoxHeroVariant = justSkipped
     ? "skipped"
@@ -364,7 +429,14 @@ export default function HubPage() {
 
       <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
-        {isPostCancel ? (
+        {isPaused ? (
+          <ReactivateCard
+            variant="paused"
+            onReactivate={handleResume}
+            busy={reactivating}
+            error={reactivateError}
+          />
+        ) : isPostCancel ? (
           <ReactivateCard
             dropsHeld={drops.balance}
             dropsHeldDays={dropsHeldDays ?? undefined}
@@ -457,21 +529,28 @@ export default function HubPage() {
 
       <BottomNav />
 
-      {showPlan && (
+      {/* Overlays live outside the isPaused/isPostCancel branch, so they can open
+          on top of the resume card. One route reaches them without a click: the
+          renewal-reminder email deep-links to mi-lit?action=skip, and the mount
+          effect sets showSkip before the dashboard has loaded, so a customer whose
+          subscription got paused between the email and the click would land on
+          SkipOverlay over a paused sub (where the backend rejects the skip). Gate
+          every mutation overlay on the sub being live. */}
+      {showPlan && !isPaused && (
         <PlanOverlay
           subscription={sub}
           onClose={() => setShowPlan(false)}
           onUpdated={handlePlanUpdated}
         />
       )}
-      {showFlavor && (
+      {showFlavor && !isPaused && (
         <FlavorOverlay
           subscription={sub}
           onClose={() => setShowFlavor(false)}
           onUpdated={handleFlavorUpdated}
         />
       )}
-      {showSkip && (
+      {showSkip && !isPaused && (
         <SkipOverlay
           subscription={sub}
           onClose={() => setShowSkip(false)}
@@ -502,7 +581,7 @@ export default function HubPage() {
           }}
         />
       )}
-      {showChargeNow && (
+      {showChargeNow && !isPaused && (
         <ChargeNowOverlay
           subscription={sub}
           onClose={() => setShowChargeNow(false)}
@@ -521,7 +600,7 @@ export default function HubPage() {
           }}
         />
       )}
-      {showCancel && (
+      {showCancel && !isPaused && (
         <CancelTakeover
           customer={customer}
           subscription={sub}
