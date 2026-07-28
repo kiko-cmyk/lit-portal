@@ -16,6 +16,10 @@
       "schedule": "0 7 * * *"
     },
     {
+      "path": "/api/cron/renewal-reminder-7d",
+      "schedule": "30 7 * * *"
+    },
+    {
       "path": "/api/cron/drops-cleanup",
       "schedule": "0 1 * * *"
     },
