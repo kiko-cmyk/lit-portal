@@ -3,10 +3,12 @@ import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { alertSlackError } from "@/lib/alert";
-import { findAppliedDiscountCodeId, getLastCompletedChargeDate, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { findAppliedDiscountCodeId, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { centsToPrice, compositionLabel } from "@/lib/mix";
 import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
+  FLAVORS,
   type FlavorKey,
   flavorKeyForVariant,
   flavorLabel,
@@ -251,6 +253,32 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     // slices to the day BEFORE; that bug put 27-Jul in as 26-Jul).
     if (subForCheck && nextAttemptDate === null) {
       nextAttemptDate = getNextBillingAttempt(subForCheck)?.date ?? null;
+    }
+  }
+
+  // GUARD (Phase 1 of the flavor mix, 2026-07-27): refuse to touch a subscription
+  // that already holds more than one recurring line.
+  //
+  // 11 ACTIVE subs do (mostly two-flavor orders created at checkout). This route
+  // still swaps exactly ONE line: it adds the new variant and removes `mainItemId`,
+  // leaving the other line alive — so the customer ends up with more boxes and a
+  // bigger charge than they picked. That bug predates this work, and it is how 4
+  // ACTIVE subs ended up charging double.
+  //
+  // Blocking is strictly safer than the silent corruption: those customers lose
+  // self-serve plan changes until Phase 2 teaches this route to diff N lines, and
+  // support can still change them in Seal. Remove this guard in Phase 2.
+  if (preMutationSub) {
+    const liveLines = getLines(preMutationSub);
+    if (liveLines.length > 1) {
+      log("multiline-sub-blocked", {
+        lines: liveLines.map((l) => `${l.variantId}×${l.quantity}`),
+      });
+      throw new ApiHttpError(
+        409,
+        "multiline_not_supported",
+        `Subscription has ${liveLines.length} recurring lines; plan changes are disabled until multi-line support ships`,
+      );
     }
   }
 
@@ -840,6 +868,45 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
 });
 
 /**
+ * Mix fields for a synthetic response describing a SINGLE pack-variant line.
+ *
+ * Both synthesizers below answer for the `packed` shape: one variant, quantity 1.
+ * (Phase 2 gives the route real multi-line targets; until then no code path here
+ * can produce a split sub.)
+ *
+ * `chargeTotalCents` is 0 when the price isn't known — a synthetic response never
+ * read the sub back, so it cannot claim a charge total. The money assertion must
+ * only ever use `getChargeTotalCents()` on a subscription read FROM Seal, never a
+ * synthesized one.
+ */
+function packedMixFields(
+  itemId: number,
+  variantId: string,
+  sellingPlanId: string,
+  unitPriceCents: number | null,
+): Pick<Subscription, "lines" | "composition" | "shape" | "flavorSummary" | "chargeTotalCents"> {
+  const flavor = flavorKeyForVariant(variantId) ?? DEFAULT_FLAVOR;
+  const boxes = BOX_COUNT_BY_VARIANT[variantId] ?? 1;
+  const composition = [{ flavor, boxes }];
+  return {
+    lines: [{
+      itemId,
+      productId: FLAVORS[flavor].productId,
+      variantId,
+      flavor,
+      boxes,
+      quantity: 1,
+      unitPrice: unitPriceCents == null ? "0.00" : centsToPrice(unitPriceCents),
+      sellingPlanId,
+    }],
+    composition,
+    shape: "packed" as const,
+    flavorSummary: compositionLabel(composition),
+    chargeTotalCents: unitPriceCents ?? 0,
+  };
+}
+
+/**
  * Build the Subscription response shape from the IDs we already know,
  * without fetching from Seal. The FE's silent re-poll picks up the
  * regenerated nextShipDate on the next dashboard refresh.
@@ -863,6 +930,7 @@ function synthesizePostMutationSub(
     mainItemId,
     currentVariantId: finalVariantId,
     boxCount,
+    ...packedMixFields(mainItemId, finalVariantId, SELLING_PLAN_BY_FREQUENCY[frequency], null),
     frequency,
     frequencyLabel: expectedInterval,
     flavor: flavorLabel(flavorKeyForVariant(finalVariantId)),
@@ -901,6 +969,7 @@ function synthesizeNoOpSub(
     mainItemId,
     currentVariantId: variantId,
     boxCount,
+    ...packedMixFields(mainItemId, variantId, SELLING_PLAN_BY_FREQUENCY[frequency], null),
     frequency,
     frequencyLabel: frequency,
     flavor: flavorLabel(flavorKeyForVariant(variantId)),

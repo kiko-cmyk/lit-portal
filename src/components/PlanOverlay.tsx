@@ -108,6 +108,14 @@ export function PlanOverlay({
             es: "No se pudo cambiar la frecuencia. Inténtalo de nuevo en un momento.",
           }),
         );
+      } else if (err.code === "multiline_not_supported") {
+        // >1 recurring line: changing one would leave the other and overcharge them.
+        setError(
+          t({
+            en: "Your subscription has more than one product, so we can't change it from here yet. Contact us and we'll do it for you.",
+            es: "Tu suscripción tiene más de un producto, así que todavía no podemos cambiarla desde aquí. Escríbenos y lo hacemos por ti.",
+          }),
+        );
       } else if (err.code === "variant_change_failed") {
         setError(
           t({

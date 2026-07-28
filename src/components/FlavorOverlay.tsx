@@ -85,6 +85,16 @@ export function FlavorOverlay({
             es: "No pudimos cambiar el sabor de esta suscripción automáticamente. Escríbenos y lo hacemos por ti.",
           }),
         );
+      } else if (err.code === "multiline_not_supported") {
+        // The sub already holds >1 recurring line (usually two flavors bought in the
+        // same checkout). Swapping one line would leave the other alive and overcharge
+        // them, so the backend refuses until multi-line support ships.
+        setError(
+          t({
+            en: "Your subscription has more than one product, so we can't change it from here yet. Contact us and we'll do it for you.",
+            es: "Tu suscripción tiene más de un producto, así que todavía no podemos cambiarla desde aquí. Escríbenos y lo hacemos por ti.",
+          }),
+        );
       } else if (err.code === "variant_change_failed" || err.code === "seal_add_items_failed") {
         setError(
           t({

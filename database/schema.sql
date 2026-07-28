@@ -31,11 +31,27 @@ create table if not exists subscriptions (
                               check (status in ('active','paused','post_cancel','reactivating','expired')),
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
+  -- Flavor mix (2026-07-27). A sub can hold one recurring Seal line PER FLAVOR.
+  -- Cache only: the composition is derived from Seal's own items, so Seal stays the
+  -- single source of truth. See migrations/2026-07-27_subscriptions_mix.sql.
+  composition            jsonb,
+  shape                  text not null default 'packed' check (shape in ('packed','split')),
+  line_count             int  not null default 1 check (line_count between 1 and 12),
+  charge_total_cents     int,
   primary key (customer_id, seal_subscription_id)
 );
 
+-- `create table if not exists` above does NOT add columns to an existing database,
+-- and `npm run migrate` only runs this file — so the mix columns need an explicit
+-- ALTER too (same pattern as drops_events.dedup_key below).
+alter table subscriptions add column if not exists composition jsonb;
+alter table subscriptions add column if not exists shape text not null default 'packed';
+alter table subscriptions add column if not exists line_count int not null default 1;
+alter table subscriptions add column if not exists charge_total_cents int;
+
 create index if not exists idx_subscriptions_status on subscriptions(status);
 create index if not exists idx_subscriptions_next_ship on subscriptions(next_ship_date);
+create index if not exists idx_subscriptions_split on subscriptions (shape) where shape = 'split';
 
 -- Re-anchor intents: preserve the next-ship date across a plan change (Seal
 -- regenerates the whole schedule anchored on "today"; the cron drain finishes
