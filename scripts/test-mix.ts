@@ -274,6 +274,31 @@ eq(chargeTotalCents(f14692586), TIER[3], "sub de pruebas: cobra 67.93 = tramo de
 eq(compositionLabel(compositionFromLines(f14692586)), "2× Watermelon · 1× Lemon",
    "sub de pruebas: 2 sandía + 1 limón");
 
+// ── 7.bis Auto-reparación del precio: la deriva es SOLO de precios ────────────
+// Si Seal refresca los precios de los items, sustituye el precio por unidad custom
+// (22,64) por el de catálogo (28,35) pero NO toca variantes ni cantidades. Esa es la
+// propiedad que permite repararlo con un solo edit_items, sin add/remove, que es lo que
+// hace seguro hacerlo desde un cron. Es la compensación de no haber podido verificar el
+// precio con un cobro real.
+console.log("\n=== auto-reparación del precio (deriva solo de precios) ===");
+const drifted = [
+  line(501, L, 1, 2, "28.35"), // Seal "refrescó" el precio: 22.64 -> 28.35
+  line(502, W, 1, 1, "28.35"), //                            22.65 -> 28.35
+];
+eq(chargeTotalCents(drifted), 8505, "deriva: cobraría 85.05 en vez de 67.93 (+25%)");
+const healPlan = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }], TIER[3]);
+const healDiff = diffLines(drifted, healPlan.lines);
+eq(healDiff.adds.length, 0, "reparación: sin adds");
+eq(healDiff.removes.length, 0, "reparación: sin removes");
+eq(healDiff.edits.length, 2, "reparación: 2 edits en sitio");
+eq(healDiff.edits.map((e) => `${e.itemId}@${e.unitPrice}`).sort(), ["501@22.64", "502@22.65"],
+   "reparación: mismos ids de item, precios restaurados");
+// Y aplicar el plan reparado deja el cobro exacto.
+eq(healPlan.totalCents, TIER[3], "reparación: vuelve a cobrar 67.93");
+// Dirección: por debajo del tramo NO se toca (podría ser una promo deliberada).
+const below = [line(601, L, 1, 2, "20.00"), line(602, W, 1, 1, "20.00")];
+ok(chargeTotalCents(below) < TIER[3], "por debajo del tramo se detecta pero no se repara sola");
+
 // ── 8. Downstream: Drops por ENVÍO y box_count del email ─────────────────────
 console.log("\n=== downstream: Drops y box_count del email ===");
 
