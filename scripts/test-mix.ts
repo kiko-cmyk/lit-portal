@@ -274,6 +274,59 @@ eq(chargeTotalCents(f14692586), TIER[3], "sub de pruebas: cobra 67.93 = tramo de
 eq(compositionLabel(compositionFromLines(f14692586)), "2× Watermelon · 1× Lemon",
    "sub de pruebas: 2 sandía + 1 limón");
 
+// ── 8. Downstream: Drops por ENVÍO y box_count del email ─────────────────────
+console.log("\n=== downstream: Drops y box_count del email ===");
+
+const V2 = FLAVORS;
+/** Réplica de la cuenta de Drops del webhook fulfillments/create: una unidad por
+ *  selling plan distinto entre las líneas del registro, más la cantidad para el
+ *  resto. Los Drops son por ENVÍO, no por caja (el comentario del código miente). */
+function dropsUnits(lines: Array<{ variantId?: string; qty: number; plan: string | null }>): number {
+  const sub = lines.filter((l) => l.plan);
+  const inReg = sub.filter((l) => l.variantId && boxesForVariantQuantity(l.variantId, 1) > 0 && BOX_IN_REGISTRY(l.variantId));
+  const other = sub.filter((l) => !(l.variantId && BOX_IN_REGISTRY(l.variantId)));
+  return new Set(inReg.map((l) => l.plan!)).size + other.reduce((s, l) => s + l.qty, 0);
+}
+function BOX_IN_REGISTRY(variantId: string): boolean {
+  return ALL_VARIANTS.has(variantId);
+}
+const ALL_VARIANTS = new Set(
+  [L, W].flatMap((f) => Object.values(V2[f].variantByBoxCount)),
+);
+const PLAN = "691259900253";
+
+// La propiedad crítica: una mezcla NO puede inflar los Drops.
+eq(dropsUnits([{ variantId: V2[L].variantByBoxCount[3], qty: 1, plan: PLAN }]), 1,
+   "sub pura de 3 cajas -> 1 unidad (100 Drops), igual que hoy");
+eq(dropsUnits([
+     { variantId: V2[L].variantByBoxCount[1], qty: 2, plan: PLAN },
+     { variantId: V2[W].variantByBoxCount[1], qty: 1, plan: PLAN },
+   ]), 1,
+   "mezcla 2L+1W -> 1 unidad (100 Drops), SIN inflación 3x");
+eq(dropsUnits([{ variantId: "999", qty: 4, plan: null }]), 0, "B2B / una sola compra -> 0 Drops");
+eq(dropsUnits([{ variantId: "extra-999", qty: 2, plan: null }]), 0, "solo extras -> 0 Drops");
+eq(dropsUnits([
+     { variantId: V2[L].variantByBoxCount[1], qty: 1, plan: PLAN },
+     { variantId: V2[L].variantByBoxCount[1], qty: 1, plan: "691259834717" },
+   ]), 2,
+   "dos subs con cadencias distintas en un pedido -> 2 unidades (como hoy)");
+
+/** Réplica del box_count del email: cajas de la variante × cantidad. */
+function emailBoxCount(lines: Array<{ variantId: string; qty: number }>): number {
+  return lines.reduce((s, l) => s + boxesForVariantQuantity(l.variantId, l.qty), 0);
+}
+eq(emailBoxCount([{ variantId: V2[L].variantByBoxCount[3], qty: 1 }]), 3,
+   "email: SL90 x1 -> 3 cajas (antes decia 1, para TODOS los suscriptores)");
+eq(emailBoxCount([{ variantId: V2[L].variantByBoxCount[6], qty: 1 }]), 6,
+   "email: SL180 x1 -> 6 cajas (antes decia 1)");
+eq(emailBoxCount([
+     { variantId: V2[L].variantByBoxCount[1], qty: 2 },
+     { variantId: V2[W].variantByBoxCount[1], qty: 1 },
+   ]), 3,
+   "email: mezcla 2L+1W -> 3 cajas");
+eq(emailBoxCount([{ variantId: V2[L].variantByBoxCount[1], qty: 1 }]), 1,
+   "email: SL30 x1 -> 1 caja (sin cambio)");
+
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);
 if (failures.length) {

@@ -1,10 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { klaviyo } from "@/lib/klaviyo";
+import { alertSlackError } from "@/lib/alert";
+import { type FlavorComposition, shortLabel } from "@/lib/mix";
+import { priceForBoxCount } from "@/lib/pricing";
 import {
-  extractFlavor,
+  extractFlavorSummary,
   getBoxCount,
+  getChargeTotalCents,
+  getComposition,
+  getLines,
   getNextBillingAttempt,
+  getShape,
   mapStatus,
   normalizeFrequency,
   seal,
@@ -54,7 +61,10 @@ type Candidate = {
   nextShipDate: string; // full ISO with tz
   boxCount: number;
   frequency: string;
+  /** Mix summary when split; the plain flavor label otherwise. */
   flavor: string;
+  /** Boxes per flavor, so the 48h email can list a mix. */
+  composition: FlavorComposition[];
 };
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -93,14 +103,56 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (Number.isNaN(t) || t < lower || t >= upper) continue;
     const email = s.email?.trim();
     if (!email) continue;
+    const boxCount = getBoxCount(s);
+    const composition = getComposition(s);
+
+    // ── THE MONEY ASSERTION (flavor mix, 2026-07-28) ──
+    //
+    // A split subscription carries a CUSTOM per-unit price so a mix costs the same as
+    // the equivalent pure plan. If Seal ever refreshes item prices from Shopify (the
+    // merchant "propagate product price changes" action, an app update, a price edit),
+    // that override is silently replaced by the catalogue price and the customer is
+    // over-charged by ~25% with no signal anywhere in the portal.
+    //
+    // This cron is the only thing that already reads the WHOLE Seal book ~48h before
+    // every charge, so it is the cheapest possible early-warning: check the split subs
+    // and alert while there is still time to fix it before the card is hit.
+    if (getShape(s) === "split") {
+      try {
+        const expected = Math.round((await priceForBoxCount(boxCount, composition[0].flavor)) * 100);
+        const actual = getChargeTotalCents(s);
+        // Tolerance = one cent per line: the tier split can legitimately land a cent
+        // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
+        if (Math.abs(actual - expected) > getLines(s).length) {
+          console.error("[renewal-reminder 48h] mix price drift", {
+            sealId: s.id, actual, expected, boxCount, charge: next.date,
+          });
+          alertSlackError({
+            path: "/api/cron/renewal-reminder",
+            code: "mix_price_drift",
+            msg:
+              `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
+              `Seal may have refreshed the item prices and dropped our per-unit price. ` +
+              `THE CHARGE LANDS ${next.date.slice(0, 10)} — fix before then.`,
+          });
+        }
+      } catch (e) {
+        // Never let the price check stop the reminder from going out.
+        console.warn(`[renewal-reminder 48h] price check failed for sub ${s.id}:`, e);
+      }
+    }
+
     candidates.push({
       sealId: String(s.id),
       email,
       shipDate: next.date.slice(0, 10),
       nextShipDate: next.date,
-      boxCount: getBoxCount(s),
+      boxCount,
       frequency: normalizeFrequency(s.delivery_interval),
-      flavor: extractFlavor(s),
+      // The mix summary, so the 48h email names both flavors. A single flavor yields
+      // the same string extractFlavor always returned.
+      flavor: extractFlavorSummary(s),
+      composition,
     });
   }
 
@@ -178,6 +230,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           boxCount: c.boxCount,
           frequency: c.frequency,
           flavor: c.flavor,
+          is_mix: c.composition.length > 1,
+          flavor_mix: c.composition.map((x) => ({ flavor: shortLabel(x.flavor), boxes: x.boxes })),
           locale,
         });
       } catch (err) {
