@@ -26,5 +26,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     fromH: 12,
     toH: 60,
     label: "renewal-reminder 48h",
+    path: "/api/cron/renewal-reminder",
   });
 }
