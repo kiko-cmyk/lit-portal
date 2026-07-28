@@ -3,6 +3,14 @@
  * Single source of truth for API contracts between FE and BE.
  */
 
+import type {
+  FlavorComposition,
+  SubscriptionLine,
+  SubscriptionShape,
+} from "./mix";
+
+export type { FlavorComposition, SubscriptionLine, SubscriptionShape };
+
 export type SubscriptionStatus =
   | "active"
   | "paused"
@@ -71,9 +79,37 @@ export interface Subscription {
   mainItemId: number;
   /** Current variant id of the main item. Exposed for the same reason. */
   currentVariantId: string;
+  /** TOTAL boxes per shipment = Σ over lines of (variant box count × quantity). */
   boxCount: number;
+  /**
+   * Every recurring Seal line, dominant (most boxes) first.
+   *
+   * A subscription holds one line per flavor when the customer splits their boxes
+   * ("2× Salty Lemon + 1× Salty Watermelon"). `mainItemId` / `currentVariantId` /
+   * `flavor` describe lines[0] only, and exist for clients that predate the mix.
+   * Required, not optional, so tsc finds all 3 producers of this type.
+   */
+  lines: SubscriptionLine[];
+  /** Boxes per flavor, aggregated. One entry = a single flavor; 2+ = a mix. */
+  composition: FlavorComposition[];
+  /** `packed` = one pack-variant line (what every single-flavor sub uses).
+   *  `split`  = one 1-box-variant line per flavor, with distributed unit prices. */
+  shape: SubscriptionShape;
+  /** Customer-facing flavor text: "Salty Lemon" or "2× Lemon · 1× Watermelon".
+   *  Use this for display; `flavor` is the dominant label kept for back-compat. */
+  flavorSummary: string;
+  /** Σ quantity × unit price over recurring lines, in cents. Compared against the
+   *  tier price to detect Seal dropping a custom price. */
+  chargeTotalCents: number;
+  /**
+   * Server-computed gate for the mix builder: feature flag AND boxCount >= 2 AND the
+   * subscription is active. One field so the FE needs no NEXT_PUBLIC flag and the
+   * cohort can change with an env edit. Reading an existing mix is NOT gated by this.
+   */
+  canEditMix: boolean;
   frequency: Frequency;
   frequencyLabel: string;
+  /** DOMINANT flavor label. Unchanged for a single-flavor sub. */
   flavor: string;
   nextShipDate: string | null; // ISO
   nextBoxNumber: number | null;

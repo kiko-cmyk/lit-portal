@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang } from "@/lib/i18n";
+import { compositionLabel, resplitOnBoxChange } from "@/lib/mix";
 import { BOX_OPTIONS, FREQUENCIES } from "@/lib/plan-options";
 import { DEFAULT_FLAVOR, flavorKeyForVariant } from "@/lib/seal-plans";
 import type { Frequency, PricingResponse, Subscription } from "@/lib/types";
@@ -52,6 +53,17 @@ export function PlanOverlay({
   const hasChange =
     boxCount !== subscription.boxCount || frequency !== subscription.frequency;
 
+  // Mixed subscription + a box-count change: the split has to be recomputed, and the
+  // customer must SEE the result before confirming. The server refuses to guess
+  // (409 mix_needs_recomposition territory) precisely so a mix is never silently
+  // rebalanced, so the projection is computed here with the same shared function the
+  // server would use and sent explicitly.
+  const currentMix = subscription.composition ?? [];
+  const isMixed = currentMix.length > 1;
+  const boxesChanged = boxCount !== subscription.boxCount;
+  const projectedMix = isMixed && boxesChanged ? resplitOnBoxChange(currentMix, boxCount) : null;
+  const mixCollapses = !!projectedMix && projectedMix.length < currentMix.length;
+
   const handleConfirm = async () => {
     if (!hasChange) return;
     setBusy(true);
@@ -66,10 +78,14 @@ export function PlanOverlay({
         body: JSON.stringify({
           boxCount,
           frequency,
+          // Mixed sub changing box count: send the split we SHOWED the customer, so
+          // the server applies exactly that instead of inferring one.
+          ...(projectedMix ? { mix: projectedMix } : {}),
           sealSubscriptionId: subscription.sealSubscriptionId,
           mainItemId: subscription.mainItemId,
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
+          expectedLineIds: subscription.lines?.map((l) => l.itemId) ?? undefined,
           // Preserve the customer's current next-ship date. Seal regenerates
           // billing_attempts on any plan change and re-anchors the next charge
           // to "today + interval", which would silently undo a prior skip
@@ -108,7 +124,28 @@ export function PlanOverlay({
             es: "No se pudo cambiar la frecuencia. Inténtalo de nuevo en un momento.",
           }),
         );
-      } else if (err.code === "variant_change_failed") {
+      } else if (err.code === "subscription_changed" || err.code === "mix_requires_explicit_intent") {
+        setError(
+          t({
+            en: "Your subscription changed since this page loaded. Reload and try again.",
+            es: "Tu suscripción cambió desde que se cargó esta página. Recárgala y vuelve a intentarlo.",
+          }),
+        );
+      } else if (err.code === "mix_price_mismatch") {
+        setError(
+          t({
+            en: "We couldn't apply your plan at the right price. Nothing was charged differently. Try again.",
+            es: "No pudimos aplicar tu plan al precio correcto. No se ha cobrado nada distinto, inténtalo de nuevo.",
+          }),
+        );
+      } else if (err.code === "mix_line_not_recurring") {
+        setError(
+          t({
+            en: "We couldn't apply your plan. Contact us and we'll do it for you.",
+            es: "No pudimos aplicar tu plan. Escríbenos y lo hacemos por ti.",
+          }),
+        );
+      } else if (err.code === "variant_change_failed" || err.code === "seal_edit_items_failed") {
         setError(
           t({
             en: "Couldn't change the number of boxes. Try again in a moment.",
@@ -218,6 +255,33 @@ export function PlanOverlay({
                 ))}
               </div>
             </div>
+
+            {/* Mixed sub + box change: show the resulting split BEFORE confirming.
+                The server never rebalances a mix on its own, so what's shown here is
+                literally what gets sent. */}
+            {projectedMix && (
+              <div className="mt-5 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-5 py-4">
+                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+                  <T en="Your mix" es="Tu mezcla" />
+                </div>
+                <div className="mt-1 font-display text-lg font-black uppercase leading-tight text-[color:var(--color-lit-grey)]">
+                  {compositionLabel(projectedMix)}
+                </div>
+                <p className="mt-2 text-[11px] opacity-60">
+                  {mixCollapses ? (
+                    <T
+                      en={`With ${boxCount} box${boxCount > 1 ? "es" : ""} we'll keep ${compositionLabel(projectedMix)}.`}
+                      es={`Con ${boxCount} caja${boxCount > 1 ? "s" : ""} mantendremos ${compositionLabel(projectedMix)}.`}
+                    />
+                  ) : (
+                    <T
+                      en="We split your boxes to match your new plan. You can adjust it after saving."
+                      es="Repartimos tus cajas según el plan nuevo. Puedes ajustarlo después de guardar."
+                    />
+                  )}
+                </p>
+              </div>
+            )}
 
             {/* Frequency picker */}
             <div className="mt-5">

@@ -3,6 +3,7 @@
 import { frequencyLabel } from "@/lib/frequency-label";
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import type { Subscription } from "@/lib/types";
+import { compositionLabel } from "@/lib/mix";
 
 /**
  * First-screen subscription chooser. Shown by SubscriptionGate BEFORE the portal
@@ -54,7 +55,7 @@ export function SubscriptionChooser({
               >
                 <span>
                   <span className="block font-display text-xl font-semibold uppercase leading-tight text-[color:var(--color-lit-grey)]">
-                    {s.flavor}
+                    {s.composition?.length ? compositionLabel(s.composition) : s.flavor}
                   </span>
                   <span className="mt-1 block text-sm text-[color:var(--color-warm-gray)]">
                     {s.boxCount}

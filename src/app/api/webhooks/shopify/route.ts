@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
+import { compositionLabel, shortLabel } from "@/lib/mix";
+import { BOX_COUNT_BY_VARIANT, type FlavorKey, flavorKeyForVariant, FREQUENCY_BY_SELLING_PLAN } from "@/lib/seal-plans";
 import { klaviyo } from "@/lib/klaviyo";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -156,6 +158,27 @@ interface ShopifyFulfillmentPayload {
   order_id?: number;
 }
 
+/**
+ * Boxes per flavor from an order's subscription lines, aggregating several lines of
+ * the same flavor (a mix ships as one line per flavor). Lines outside the variant
+ * registry are ignored: they have no flavor we can name.
+ */
+function compositionFromOrderLines(
+  lines: Array<{ variant_id?: number; quantity: number }>,
+): Array<{ flavor: FlavorKey; boxes: number }> {
+  const byFlavor = new Map<FlavorKey, number>();
+  for (const li of lines) {
+    const vid = String(li.variant_id ?? "");
+    const boxesPerUnit = BOX_COUNT_BY_VARIANT[vid];
+    const flavor = flavorKeyForVariant(vid);
+    if (boxesPerUnit === undefined || !flavor) continue;
+    byFlavor.set(flavor, (byFlavor.get(flavor) ?? 0) + boxesPerUnit * (li.quantity ?? 1));
+  }
+  return [...byFlavor]
+    .map(([flavor, boxes]) => ({ flavor, boxes }))
+    .sort((a, b) => b.boxes - a.boxes);
+}
+
 async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   // 1. Referral attribution
   const refAttr = payload.note_attributes?.find((a) => a.name === "ref" || a.name === "referral_code");
@@ -196,18 +219,42 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   // 2. Confirmation email trigger — fires Klaviyo event with plan details
   const email = payload.customer?.email ?? payload.email;
   if (email && payload.line_items && payload.line_items.length > 0) {
-    // Sum EVERY subscription line (same pattern as handleFulfillmentsCreate):
-    // an order with 2+ selling-plan lines (e.g. two flavors in one checkout)
-    // used to report box_count/sachets of only the first line in the
-    // confirmation email (audit 2026-07-06). `main` still drives the
-    // single-value fields (plan label, flavor).
+    // BOX COUNT — the LIT model puts the box count in the VARIANT (SL90 = 3 boxes),
+    // with quantity almost always 1. Summing `quantity` (audit 2026-07-06, which
+    // fixed the multi-line dimension but summed the wrong axis) therefore reported
+    // **1 box / 30 sachets for every subscriber of more than one box** in the live
+    // confirmation email. Map through the variant registry instead and multiply by
+    // quantity, which is correct for all four shapes that exist in production:
+    // pack × 1, 1-box × N (a mix), pack × N, and a portal-created mix.
     const subLines = payload.line_items.filter((li) => li.selling_plan_allocation);
     const main = subLines[0] ?? payload.line_items[0];
+    const planId = main?.selling_plan_allocation?.selling_plan?.id
+      ? String(main.selling_plan_allocation.selling_plan.id)
+      : null;
+    const knownLines = subLines.filter(
+      (li) => BOX_COUNT_BY_VARIANT[String(li.variant_id)] !== undefined,
+    );
     const boxCount =
-      subLines.length > 0
-        ? subLines.reduce((s, li) => s + (li.quantity ?? 0), 0)
-        : main?.quantity ?? 1;
+      knownLines.length > 0
+        ? knownLines.reduce(
+            (s, li) => s + BOX_COUNT_BY_VARIANT[String(li.variant_id)]! * (li.quantity ?? 1),
+            0,
+          )
+        : subLines.length > 0
+          ? // Non-registry subscription lines (B2B, a retired variant): fall back to
+            // the old quantity sum rather than reporting 0.
+            subLines.reduce((s, li) => s + (li.quantity ?? 0), 0)
+          : main?.quantity ?? 1;
+
+    // Boxes per flavor, so the email can name a mix instead of only the first line.
+    const composition = compositionFromOrderLines(subLines);
+    const isMix = composition.length > 1;
     const planName = main?.selling_plan_allocation?.selling_plan?.name ?? null;
+    // Cadence as our own code ("3mo"), not Seal's plan NAME. The name is raw Spanish
+    // from the Seal admin ("Envío 3 meses") and has been renamed three times, so a
+    // template can't branch on it — and an English email can't print it. With the code,
+    // both language templates use the same mapping the 7-day reminder already uses.
+    const frequency = planId ? FREQUENCY_BY_SELLING_PLAN[planId] ?? null : null;
     // A subscription order has at least one line item with a selling plan.
     // Exposed as a clean boolean so Klaviyo flows can branch on subscription
     // vs one-time purchases without parsing plan_label (e.g. the
@@ -227,7 +274,15 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
         plan_label: planName ?? `${boxCount} box${boxCount > 1 ? "es" : ""}`,
         is_subscription: isSubscription,
         selling_plan_name: planName,
-        flavor: main?.title ?? "Lemon Drop",
+        // A single flavor yields the plain label ("Salty Lemon") byte-for-byte, so
+        // today's template and any Klaviyo segment keyed on it are unaffected. A mix
+        // yields "2× Lemon · 1× Watermelon".
+        flavor: composition.length ? compositionLabel(composition) : main?.title ?? "Lemon Drop",
+        // Structured, so the template can branch and list the flavors.
+        is_mix: isMix,
+        flavor_mix: composition.map((c) => ({ flavor: shortLabel(c.flavor), boxes: c.boxes })),
+        // "15d" | "1mo" | … | "6mo", or null for a legacy/unmapped plan.
+        frequency,
         total: payload.total_price,
         currency: payload.currency,
       })
@@ -250,13 +305,19 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
     .graphql<{
       order: {
         customer: { id: string } | null;
-        lineItems: { nodes: Array<{ quantity: number; sellingPlan: { name: string } | null }> };
+        lineItems: {
+          nodes: Array<{
+            quantity: number;
+            sellingPlan: { name: string } | null;
+            variant: { id: string } | null;
+          }>;
+        };
       } | null;
     }>(
       `query orderForDrops($id: ID!) {
         order(id: $id) {
           customer { id }
-          lineItems(first: 100) { nodes { quantity sellingPlan { name } } }
+          lineItems(first: 100) { nodes { quantity sellingPlan { name } variant { id } } }
         }
       }`,
       { id: `gid://shopify/Order/${f.order_id}` },
@@ -269,13 +330,39 @@ async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Pro
   }
   const customerId = customerGid.replace(/^gid:\/\/shopify\/Customer\//, "");
 
-  // Count ONLY subscription boxes (order line items with a selling plan). This
-  // gates out B2B / one-time orders (0 subscription lines → skip) and excludes
-  // extras / free gifts shipped in the same box. B2B is live, so a wholesale
-  // fulfillment must NOT mint Drops.
-  const subscriptionBoxes = (order?.order?.lineItems?.nodes ?? [])
-    .filter((li) => li.sellingPlan)
-    .reduce((s, li) => s + (li.quantity ?? 0), 0);
+  // Count SHIPMENTS, not quantities.
+  //
+  // Careful: this looks like a box count but it never was one. The LIT model puts the
+  // box count in the VARIANT with quantity 1, so `Σ quantity` has always awarded 100
+  // Drops per SHIPMENT regardless of how many boxes are in it — a 3-box subscriber
+  // gets 100, not 300. `DROPS_AMOUNTS.box_shipped` says "per box" but the economics
+  // in production are per shipment.
+  //
+  // That matters now because a flavor mix ships as several lines (SL30 ×2 + W30 ×1),
+  // and summing quantities would suddenly award 300 Drops for the same shipment — a
+  // 3× inflation that hits TIER_THRESHOLD in one go and breaks the reward ladder.
+  // Switching to a real box count would inflate EVERY subscriber the same way, which
+  // is a deliberate economics change, not something to smuggle in behind a flavor
+  // feature. So: one unit per distinct selling plan (a LIT subscription shipment),
+  // plus the legacy quantity sum for anything outside the registry.
+  //
+  // KNOWN, ACCEPTED REGRESSION: two separate subscriptions on the SAME cadence bought
+  // in one checkout now award 100 instead of 200, because they share a selling plan
+  // name. Rare, and under-awarding by 100 beats 3× inflating every mix.
+  const subLines = (order?.order?.lineItems?.nodes ?? []).filter((li) => li.sellingPlan);
+  const variantNumeric = (gid: string | null | undefined) =>
+    gid ? gid.replace(/^gid:\/\/shopify\/ProductVariant\//, "") : "";
+  const registryLines = subLines.filter(
+    (li) => BOX_COUNT_BY_VARIANT[variantNumeric(li.variant?.id)] !== undefined,
+  );
+  const otherLines = subLines.filter(
+    (li) => BOX_COUNT_BY_VARIANT[variantNumeric(li.variant?.id)] === undefined,
+  );
+  const subscriptionBoxes =
+    new Set(registryLines.map((li) => li.sellingPlan!.name)).size +
+    otherLines.reduce((s, li) => s + (li.quantity ?? 0), 0);
+  // 0 subscription lines → B2B / one-time order, or extras only. B2B is live, so a
+  // wholesale fulfillment must NOT mint Drops.
   if (subscriptionBoxes === 0) return;
 
   // Snapshot tier state before awarding (to detect first-time crossing)

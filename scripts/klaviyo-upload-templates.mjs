@@ -28,8 +28,14 @@ const EN = {
   welcome: 'Welcome, {{ first_name|default:"friend" }}. Your first box lands around {{ event.delivery_date|default:"soon" }}.',
   subLabel: "YOUR SUBSCRIPTION",
   planLabel: "PLAN",
-  planValue: '{{ event.box_count|default:1 }} BOX{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
-  flavorLabel: "FLAVOR",
+  // PLURALISE. box_count used to be wrong (always 1, because the webhook summed
+  // `quantity` and the LIT model keeps quantity at 1 with the boxes in the variant), so
+  // "1 BOX" was right by accident. Now that it's correct, a 3-box subscriber would read
+  // "3 BOX" without this.
+  planValue: '{{ event.box_count|default:1 }} BOX{% if event.box_count > 1 %}ES{% endif %}{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
+  // `is_mix` is undefined until the flavor-mix code ships, and an undefined value is
+  // falsy in Klaviyo, so this renders "FLAVOR" exactly as before until then.
+  flavorLabel: 'FLAVOR{% if event.is_mix %}S{% endif %}',
   flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
   nutriSodium: "SODIUM",
   nutriPotassium: "POTASSIUM",
@@ -56,8 +62,8 @@ const ES = {
   welcome: 'Te damos la bienvenida, {{ first_name|default:"" }}. Tu primera caja llega sobre el {{ event.delivery_date|default:"pronto" }}.',
   subLabel: "TU SUSCRIPCIÓN",
   planLabel: "PLAN",
-  planValue: '{{ event.box_count|default:1 }} CAJA{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
-  flavorLabel: "SABOR",
+  planValue: '{{ event.box_count|default:1 }} CAJA{% if event.box_count > 1 %}S{% endif %}{% if event.plan_label %} · {{ event.plan_label }}{% endif %}',
+  flavorLabel: 'SABOR{% if event.is_mix %}ES{% endif %}',
   flavorValue: '{{ event.flavor|default:"Salty Lemon" }}',
   nutriSodium: "SODIO",
   nutriPotassium: "POTASIO",

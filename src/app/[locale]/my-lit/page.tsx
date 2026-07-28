@@ -450,6 +450,7 @@ export default function HubPage() {
             <NextBoxHero
               shipDate={nextShipDate}
               flavor={sub.flavor}
+              composition={sub.composition}
               variant={variant}
               cutoffEndsAt={cutoffEndsAt}
               onUndoSkip={justSkipped ? handleUndoSkip : undefined}
@@ -494,10 +495,13 @@ export default function HubPage() {
               <QuickActionButton
                 icon={QAIcons.Flavor}
                 label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
-                sub={t({
-                  en: "Salty Lemon or Salty Watermelon",
-                  es: "Salty Lemon o Salty Watermelon",
-                })}
+                sub={
+                  // Pluralised by box count (Juan 2026-07-28). Deliberately does NOT name
+                  // the flavours: that copy goes stale the day a third flavour ships.
+                  sub.boxCount > 1
+                    ? t({ en: "Choose the flavor of your boxes", es: "Elige el sabor de tus cajas" })
+                    : t({ en: "Choose the flavor of your box", es: "Elige el sabor de tu caja" })
+                }
                 onClick={() => setShowFlavor(true)}
                 disabled={sub.withinCutoff}
               />

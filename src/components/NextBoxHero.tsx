@@ -4,6 +4,8 @@ import { T, useLang, useLangValue } from "@/lib/i18n";
 import { frequencyLabel } from "@/lib/frequency-label";
 import { WaxSeal } from "@/components/WaxSeal";
 import { HERO_PHOTO_DATA_URI } from "@/lib/hero-photo";
+import { shortLabel } from "@/lib/mix";
+import type { FlavorKey } from "@/lib/seal-plans";
 import type { Frequency } from "@/lib/types";
 
 export type NextBoxHeroVariant = "default" | "skipped" | "locked" | "new";
@@ -11,6 +13,9 @@ export type NextBoxHeroVariant = "default" | "skipped" | "locked" | "new";
 interface NextBoxHeroProps {
   shipDate: Date | null;
   flavor: string;
+  /** Boxes per flavor. When it has 2+ entries the Flavor cell stacks one line per
+   *  flavor instead of showing a single label. */
+  composition?: Array<{ flavor: string; boxes: number }>;
   variant: NextBoxHeroVariant;
   cutoffEndsAt?: Date | null;
   onUndoSkip?: () => void;
@@ -40,6 +45,7 @@ interface NextBoxHeroProps {
 export function NextBoxHero({
   shipDate,
   flavor,
+  composition,
   variant,
   cutoffEndsAt,
   onUndoSkip,
@@ -189,8 +195,16 @@ export function NextBoxHero({
       {/* Meta row: Sabor | Tu plan, full-width grid below the divider */}
       <div className="mt-7 grid grid-cols-2 gap-4 border-t border-white/15 pt-5 md:mt-10 md:pt-6">
         <MetaCell
-          label={t({ en: "Flavor", es: "Sabor" })}
+          label={t({
+            en: (composition?.length ?? 0) > 1 ? "Flavors" : "Flavor",
+            es: (composition?.length ?? 0) > 1 ? "Sabores" : "Sabor",
+          })}
           value={flavor.toUpperCase()}
+          values={
+            (composition?.length ?? 0) > 1
+              ? composition!.map((c) => `${c.boxes} ${shortLabel(c.flavor as FlavorKey).toUpperCase()}`)
+              : undefined
+          }
           align="left"
         />
         <MetaCell
@@ -243,12 +257,19 @@ export function NextBoxHero({
 function MetaCell({
   label,
   value,
+  values,
   align,
 }: {
   label: string;
   value: string;
+  /** Several lines, stacked. A flavor mix ("2 LEMON" / "1 WATERMELON") would
+   *  truncate as one line in a half-width cell on a 390px phone. When stacking, the
+   *  type steps down so the hero keeps its height. */
+  values?: string[];
   align: "left" | "right";
 }) {
+  const lines = values?.length ? values : [value];
+  const stacked = lines.length > 1;
   return (
     <div className={align === "right" ? "text-right" : "text-left"}>
       <div
@@ -261,10 +282,12 @@ function MetaCell({
         className="mt-2 font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[#F2EEE1]"
         style={{
           fontFamily: "var(--font-display)",
-          fontSize: "clamp(20px, 5vw, 26px)",
+          fontSize: stacked ? "clamp(15px, 3.8vw, 19px)" : "clamp(20px, 5vw, 26px)",
         }}
       >
-        {value}
+        {lines.map((l) => (
+          <div key={l}>{l}</div>
+        ))}
       </div>
     </div>
   );

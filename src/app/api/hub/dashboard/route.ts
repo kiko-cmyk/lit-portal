@@ -164,7 +164,12 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
         seal_subscription_id: String(sub.id),
         box_count: subscription.boxCount,
         frequency: subscription.frequency,
-        flavor: subscription.flavor,
+        // Mix summary, not the dominant label — see the seal webhook for why.
+        flavor: subscription.flavorSummary,
+        composition: subscription.composition,
+        shape: subscription.shape,
+        line_count: subscription.lines.length,
+        charge_total_cents: subscription.chargeTotalCents,
         next_ship_date: subscription.nextShipDate,
         next_box_number: subscription.nextBoxNumber,
         status: subscription.status,

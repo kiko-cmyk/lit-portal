@@ -31,11 +31,27 @@ create table if not exists subscriptions (
                               check (status in ('active','paused','post_cancel','reactivating','expired')),
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
+  -- Flavor mix (2026-07-27). A sub can hold one recurring Seal line PER FLAVOR.
+  -- Cache only: the composition is derived from Seal's own items, so Seal stays the
+  -- single source of truth. See migrations/2026-07-27_subscriptions_mix.sql.
+  composition            jsonb,
+  shape                  text not null default 'packed' check (shape in ('packed','split')),
+  line_count             int  not null default 1 check (line_count between 1 and 12),
+  charge_total_cents     int,
   primary key (customer_id, seal_subscription_id)
 );
 
+-- `create table if not exists` above does NOT add columns to an existing database,
+-- and `npm run migrate` only runs this file — so the mix columns need an explicit
+-- ALTER too (same pattern as drops_events.dedup_key below).
+alter table subscriptions add column if not exists composition jsonb;
+alter table subscriptions add column if not exists shape text not null default 'packed';
+alter table subscriptions add column if not exists line_count int not null default 1;
+alter table subscriptions add column if not exists charge_total_cents int;
+
 create index if not exists idx_subscriptions_status on subscriptions(status);
 create index if not exists idx_subscriptions_next_ship on subscriptions(next_ship_date);
+create index if not exists idx_subscriptions_split on subscriptions (shape) where shape = 'split';
 
 -- Re-anchor intents: preserve the next-ship date across a plan change (Seal
 -- regenerates the whole schedule anchored on "today"; the cron drain finishes
@@ -62,16 +78,48 @@ create index if not exists idx_reanchor_pending
 
 alter table subscription_reanchor_intents enable row level security;
 
+-- Line repairs: when /api/subscription/plan cannot converge a subscription's lines
+-- in-request (a failed remove_items that also couldn't be rolled back), it records
+-- the desired end state here and /api/cron/mix-repair-drain reconciles it. Without
+-- this, that failure leaves BOTH the old and the new line live and the next charge is
+-- too HIGH — which is exactly what overcharged 7 subs in June-July 2026. See
+-- migrations/2026-07-28_subscription_line_repairs.sql.
+create table if not exists subscription_line_repairs (
+  customer_id           text not null,
+  seal_subscription_id  text not null,
+  desired               jsonb not null,               -- TargetLine[] the sub must end up with
+  snapshot              jsonb not null,               -- pre-mutation lines, for manual restore
+  status                text not null default 'pending'
+                          check (status in ('pending', 'done', 'failed')),
+  attempts              int  not null default 0,
+  last_error            text,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  primary key (customer_id, seal_subscription_id)
+);
+
+create index if not exists idx_line_repairs_pending
+  on subscription_line_repairs (updated_at)
+  where status = 'pending';
+
+alter table subscription_line_repairs enable row level security;
+
 create table if not exists subscription_changes (
   id            uuid primary key default uuid_generate_v4(),
   -- No FK: subscriptions now has a composite PK, so a single-column FK to
   -- customer_id isn't valid. App-managed integrity (audit table, no hard deletes).
   customer_id   text not null,
-  change_type   text not null check (change_type in ('plan','flavor','address','skip','skip_undo','extras')),
+  change_type   text not null check (change_type in ('plan','flavor','address','skip','skip_undo','extras','mix')),
   payload       jsonb not null,
   applied_at    timestamptz not null default now(),
   applies_from  date
 );
+
+-- El rollback de la mezcla y soporte buscan por suscripción, que vive en el payload.
+create index if not exists idx_subscription_changes_seal_sub
+  on subscription_changes ((payload->>'sealSubscriptionId'));
+create index if not exists idx_subscription_changes_type_time
+  on subscription_changes (change_type, applied_at desc);
 
 create index if not exists idx_subscription_changes_customer on subscription_changes(customer_id, applied_at desc);
 

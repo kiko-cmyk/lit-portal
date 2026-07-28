@@ -50,18 +50,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const sb = supabaseAdmin();
   // Dedup by a hash of the body (Seal doesn't send a stable event id header).
   const eventId = crypto.createHash("sha256").update(rawBody).digest("hex").slice(0, 32);
-  const dedup = await sb.from("webhook_log").insert({
+  const reservation = {
     provider: "seal",
     event_id: eventId,
     topic: eventType,
-    // Store the body (2026-07-28). Seal's subscription object carries a `log`
-    // array that names the actor verbatim ("Customer paused the subscription."
-    // vs "Merchant … through the API."), which is the only record of WHO did
-    // what. Without this, answering "who paused these four subs" took ~40
-    // minutes of paging the Seal API by hand; now it's a query. Parsed body, not
-    // rawBody, so it lands as queryable jsonb. 90-day retention via purge_after.
-    payload: safeJson(rawBody),
-  });
+  };
+  // Store the body (2026-07-28). Seal's subscription object carries a `log`
+  // array that names the actor verbatim ("Customer paused the subscription."
+  // vs "Merchant … through the API."), which is the only record of WHO did
+  // what. Without this, answering "who paused these four subs" took ~40
+  // minutes of paging the Seal API by hand; now it's a query. Parsed body, not
+  // rawBody, so it lands as queryable jsonb. 90-day retention via purge_after.
+  let dedup = await sb.from("webhook_log").insert({ ...reservation, payload: safeJson(rawBody) });
+
+  // 42703 = undefined_column: this deploy landed BEFORE
+  // database/migrations/2026-07-28_webhook_payload_audit.sql was applied. Retry
+  // without the audit column, because the alternative is catastrophic: the only
+  // error code handled below is 23505, so an unhandled insert error falls through
+  // and the request proceeds with NO dedup reservation at all. Every Seal
+  // redelivery would then reprocess, and applyReanchorIfPending calls
+  // seal.reanchorCadence, a NON-idempotent mutation that would over-shift real
+  // customers' billing schedules. Auditability is worth losing here; dedup is not.
+  if (dedup.error?.code === "42703") {
+    console.error(
+      "[seal-webhook] webhook_log.payload missing — apply migrations/2026-07-28_webhook_payload_audit.sql. Falling back to reservation without audit payload.",
+    );
+    alertSlackError({
+      path: "/api/webhooks/seal",
+      code: "webhook_log_payload_missing",
+      msg: "Falta la columna webhook_log.payload: aplica database/migrations/2026-07-28_webhook_payload_audit.sql. Los webhooks siguen funcionando pero sin auditoría.",
+    });
+    dedup = await sb.from("webhook_log").insert(reservation);
+  }
   if (dedup.error?.code === "23505") {
     return NextResponse.json({ ok: true, dedup: true });
   }
@@ -530,7 +550,14 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
     seal_subscription_id: String(s.id),
     box_count: mapped.boxCount,
     frequency: normalizeFrequency(s.delivery_interval),
-    flavor: mapped.flavor,
+    // Flavor mix: the SUMMARY ("2× Lemon · 1× Watermelon"), not the dominant label.
+    // A single-flavor sub still yields "Salty Lemon" byte-for-byte, so no existing
+    // row churns and nothing reading this column changes behaviour.
+    flavor: mapped.flavorSummary,
+    composition: mapped.composition,
+    shape: mapped.shape,
+    line_count: mapped.lines.length,
+    charge_total_cents: mapped.chargeTotalCents,
     next_ship_date: mapped.nextShipDate,
     next_box_number: mapped.nextBoxNumber,
     status: nextStatus,

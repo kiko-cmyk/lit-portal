@@ -10,7 +10,7 @@ El cliente Klaviyo (`src/lib/klaviyo.ts`) llama a `klaviyo.trackEvent(name, emai
 
 | Event name (metric) | Cuándo se dispara | Properties |
 |---|---|---|
-| `confirmation_sent` | Tras primer order pagado (Shopify webhook `orders/paid`) | `boxCount`, `frequency`, `flavor`, `shipDate` |
+| `confirmation_sent` | Tras primer order pagado (Shopify webhook `orders/paid`) | `box_count`, `sachets`, `plan_label`, `flavor`, `is_subscription`, `selling_plan_name`, `is_mix`, `flavor_mix`, `total`, `currency` |
 | `tier_unlocked` | Primera vez que cliente cruza 300 lifetime Drops | `dropsBalance`, `earnedAt` |
 | `reward_claimed` | Cliente reclama Bottle/Merch/Event | `rewardId`, `merchOption?`, `remainingDrops` |
 | `subscription_skip` | Cliente skipea próximo box | `newNextShipDate` |
@@ -20,6 +20,9 @@ El cliente Klaviyo (`src/lib/klaviyo.ts`) llama a `klaviyo.trackEvent(name, emai
 | `winback_d30` | Cron 30 días post-cancel (TODO: implementar cron) | — |
 | `first_login_completed` | Cliente cierra el welcome takeover | `whatsappOptIn`, `language` |
 | `drops_earned` | Webhook `fulfillments/create` por cada box enviado | `amount`, `action`, `metadata` |
+| `subscription_renewal_reminder` | Los dos crons pre-cobro, 48h y 7 días antes (ver § 2.7) | `hoursBefore`, `sealSubscriptionId`, `nextShipDate`, `nextShipDateLabel`, `boxCount`, `frequency`, `flavor`, `locale`, `shippingAddress` (solo 7 días) |
+
+> Esta tabla NO es el inventario completo: el union `KlaviyoEvent` de `src/lib/klaviyo.ts` es la fuente de verdad. Sin documentar aquí todavía: `skip_flow_started`, `skip_retained`, `subscription_charge_now`, `retention_discount_accepted`, `email_change_requested`.
 
 > Nota: hoy mismo el código tiene los wrappers listos pero **pocos endpoints llaman a `trackEvent`** todavía. Hay que añadir las llamadas en cada endpoint relevante. Lo dejo pendiente como un sweep rápido cuando los flows estén creados.
 
@@ -130,6 +133,41 @@ Trigger: `first_login_completed` con condición `whatsappOptIn = true`
 
 Lo que mande Klaviyo por WhatsApp (no email): bienvenida + confirmación del +50 Drops. Necesita Klaviyo WhatsApp activado.
 
+### 2.7 Avisos antes del cobro (dos buckets, un solo evento)
+
+Los dos crons de `lib/renewal-reminder.ts` disparan la MISMA métrica,
+`subscription_renewal_reminder`, y se distinguen por `hoursBefore`. Cada bucket
+necesita su propio flow con su filtro en el disparador (`hoursBefore == 48` /
+`hoursBefore == 168`): flows separados, no ramas del mismo, para que la re-entrada
+de uno no pueda consumir la del otro ni mezclar su reporting.
+
+| Bucket | Cron (UTC) | `hoursBefore` | `template_id` en `email_logs` | Para qué |
+|---|---|---|---|---|
+| 48h | `/api/cron/renewal-reminder`, 07:00 | 48 | `renewal_reminder_48h` | Último aviso, CTA de saltar entrega |
+| 7 días | `/api/cron/renewal-reminder-7d`, 07:30 | 168 | `renewal_reminder_168h` | Confirmar la dirección antes de picking (plantilla `RT2Kv3`) |
+
+Properties: `sealSubscriptionId`, `nextShipDate`, `nextShipDateLabel`, `boxCount`,
+`frequency`, `flavor`, `locale`, y solo en el de 7 días `shippingAddress`
+(`firstName`, `lastName`, `address1`, `address2`, `postalCode`, `city`, `country`).
+
+Dos cosas que no se pueden tocar:
+
+- **`nextShipDate` va en ISO crudo y así se queda.** El webhook de WhatsApp del
+  flow lo reenvía a Permut como `expected_date`, y es lo que empareja el cobro
+  exacto en Seal cuando un cliente pide saltar su entrega. Formatearlo por el
+  camino rompe el skip en silencio: cae en handoff humano y la entrega que el
+  cliente pidió saltar sale igual. **Para pintar la fecha, usa
+  `nextShipDateLabel`** ("30 de julio"), que existe justo para eso: Klaviyo tipa
+  `nextShipDate` como TEXTO y el filtro Django `|date` sobre un string devuelve
+  `''` sin avisar (así salió el email de 7 días con la fecha en blanco del 15/07
+  al 28/07, 524 destinatarios).
+- **`template_id` distinto por bucket.** Es la partición del dedup (lookback de 5
+  días). Compartirlo haría que un bucket marcase la sub como avisada y el otro se
+  saltase su envío.
+
+Para probar un bucket sin enviar nada: `?__dry_run=1` (solo fuera de producción)
+devuelve los payloads exactos sin disparar a Klaviyo ni escribir `email_logs`.
+
 ---
 
 ## 3. Cadencia que respetar (Master Spec § 8)
@@ -137,9 +175,88 @@ Lo que mande Klaviyo por WhatsApp (no email): bienvenida + confirmación del +50
 - **Active Zone** (Days 1-14 post-purchase): max 5 emails total
 - **Quiet Zone** (Day 15+): max 1 email/mes
 - **No stacking**: no email + WhatsApp el mismo día (excepto delivery alert)
-- **NO renewal reminder emails**: nunca
+- **Avisos antes del cobro: SÍ** (ver § 2.7). La Master Spec original decía
+  "nunca"; se revirtió en junio de 2026 y hoy hay dos buckets en producción, 48h
+  y 7 días. Si te cruzas con la regla vieja en otro documento, está mal.
 
 Para implementar en Klaviyo: usar **smart sending + frequency caps** en cada flow para respetar estos límites.
+
+---
+
+## 3.bis Mezcla de sabores: `is_mix`, `flavor_mix` y la pluralización (2026-07-28)
+
+`confirmation_sent` y `subscription_renewal_reminder` mandan dos props nuevas:
+
+| Prop | Qué es |
+|---|---|
+| `is_mix` | `true` cuando la suscripción reparte sus cajas entre varios sabores |
+| `flavor_mix` | `[{flavor: "Lemon", boxes: 2}, {flavor: "Watermelon", boxes: 1}]` |
+| `frequency` | `15d`, `45d`, `1mo`…`6mo`, o ausente si el plan no está en el registro |
+
+**`flavor` sigue siendo utilizable tal cual**: con un solo sabor devuelve la etiqueta
+exacta de siempre ("Salty Lemon"), y con una mezcla devuelve `"2× Lemon · 1× Watermelon"`.
+Así que una plantilla que solo pinte `{{ event.flavor }}` ya funciona con mezclas. Los
+segmentos que filtren por `flavor` con igualdad exacta sí conviene revisarlos.
+
+**PLURALIZACIÓN, importante.** `box_count` estaba mal: el webhook sumaba `quantity`, y el
+modelo LIT pone las cajas en la variante con `quantity: 1`, así que **siempre valía 1** y el
+email decía "1 CAJA / 30 sobres" a todo suscriptor de más de una caja. Al arreglarlo, una
+plantilla que hardcodee el singular pasa a decir "3 CAJA". Hay que envolverlo:
+
+```
+{{ event.box_count|default:1 }} CAJA{% if event.box_count > 1 %}S{% endif %}
+{{ event.box_count|default:1 }} BOX{% if event.box_count > 1 %}ES{% endif %}
+SABOR{% if event.is_mix %}ES{% endif %}
+FLAVOR{% if event.is_mix %}S{% endif %}
+```
+
+Los dos cambios son **compatibles hacia atrás**: `is_mix` no existe hasta que se despliega
+el código de la mezcla y un valor indefinido es falsy, y `box_count > 1` es falso hoy porque
+siempre vale 1. Se pueden aplicar a las plantillas ANTES de desplegar el código.
+
+### Qué plantillas están realmente vivas
+
+Ojo: `scripts/klaviyo-upload-templates.mjs` sube plantillas llamadas
+"LIT — Confirmation Email EN/ES" que **no son las que se envían**. El flow que dispara
+`confirmation_sent` es **"Email: Suscripción - Bienvenida"** (`UAH3ug`, live), con un split
+por `$locale_language` y estas dos plantillas:
+
+| Idioma | Template id | Nombre en Klaviyo |
+|---|---|---|
+| EN | `Ty5ZeT` | 2026-06-30 11:32 LIT - Bienvenida EN (inline) |
+| ES | `VReESZ` | 2026-06-30 11:33 LIT - Bienvenida ES (inline) |
+
+El id `Utdb9S` que aparecía más abajo en este documento **ya no existe** (verificado
+2026-07-28). Antes de editar una plantilla, resolver el flow y su `template_id` como aquí.
+
+### Una plantilla atada a un flow NO se puede editar por API
+
+`PATCH /api/templates/{id}` sobre `Ty5ZeT` o `VReESZ` devuelve **404**, y tampoco salen en el
+listado de la biblioteca. No es cuestión de permisos: con la misma clave, clonar y hacer PATCH
+sobre el clon funciona. Las plantillas que viven dentro de un mensaje de flow son de solo
+lectura desde la API.
+
+El camino que sí funciona, y que hay que repetir para cualquier cambio futuro:
+
+1. Crear/actualizar una plantilla **de biblioteca** por API (`POST /api/templates/`).
+2. Verificarla con `POST /api/template-render/` pasándole el `context` de cada caso. Es el
+   único render fiable: un intérprete propio de Liquid da falsos positivos.
+3. **Por UI**, asignar esa plantilla al mensaje del flow. Klaviyo genera entonces una copia
+   viva con id nuevo (así nació `SfinKC` desde `RT2Kv3` en el recordatorio de 7 días).
+
+Plantillas de biblioteca de la bienvenida, rehechas 2026-07-28 con el estilo de maquetación
+del resto de emails (480px, Clash Display + Barlow, hero con foto, bloque de datos oscuro):
+
+| Idioma | Template id de biblioteca | Mensaje del flow al que va |
+|---|---|---|
+| ES | `S367L2` | acción `106246515` de `UAH3ug` |
+| EN | `YzLBbj` | acción `105935906` de `UAH3ug` |
+
+Qué arreglan además del estilo: la pluralización de `box_count`, la mezcla de sabores, la
+cadencia (`frequency`, prop nueva) y **la fecha de entrega inventada**. La plantilla vieja
+decía "Tu primera caja llega sobre el {{ event.delivery_date|default:'pronto' }}" y
+`confirmation_sent` **nunca ha mandado `delivery_date`**, así que todos los clientes leían
+"llega sobre el pronto". Las nuevas no prometen fecha: dicen que avisamos al salir del almacén.
 
 ---
 
@@ -177,7 +294,7 @@ Cuando subas a Klaviyo: copia el HTML, reemplaza tokens estáticos por merge tag
 
 ## ✅ Estado actual (lo que YA hace el backend) — actualizado 2026-04-28
 
-- **Plantilla Confirmation Email subida via API** → ID `Utdb9S` (visible en Klaviyo → Email → Templates)
+- ~~**Plantilla Confirmation Email subida via API** → ID `Utdb9S`~~ **OBSOLETO**: ese id ya no existe (verificado 2026-07-28). Las plantillas vivas del flow de bienvenida son `Ty5ZeT` (EN) y `VReESZ` (ES); ver §3.bis.
 - **Llamadas `klaviyo.trackEvent` enchufadas** en:
   - `POST /api/subscription/skip` → `subscription_skip`
   - `POST /api/subscription/cancel` (step 4) → `subscription_cancelled`

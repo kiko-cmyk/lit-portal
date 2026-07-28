@@ -22,6 +22,8 @@ import {
   usePageTitle,
 } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
+import { compositionLabel, shortLabel } from "@/lib/mix";
+import { DEFAULT_FLAVOR } from "@/lib/seal-plans";
 import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import Link from "next/link";
 import { orderDetailHref } from "@/lib/portal-link";
@@ -433,14 +435,25 @@ export default function AccountPage() {
                 showRightBorder
               />
               <SubsummCell
-                label={t({ en: "Flavor", es: "Sabor" })}
+                label={t({
+                  en: (subscription.composition?.length ?? 0) > 1 ? "Flavors" : "Flavor",
+                  es: (subscription.composition?.length ?? 0) > 1 ? "Sabores" : "Sabor",
+                })}
                 value={
-                  // El "tipo" del producto (LEMON, SUN, …) es lo que el
-                  // cliente reconoce. "Salty" es prefijo de gama, se queda
-                  // fuera para que la card respire.
-                  (subscription.flavor.split(" ").slice(1).join(" ") ||
-                    subscription.flavor)
-                    .toUpperCase() || "—"
+                  // Una mezcla no cabe entera en un cuarto de fila, así que se
+                  // resume como "2L · 1W" y el detalle va en la fila de abajo.
+                  // Antes esto hacía flavor.split(" ").slice(1), que con una
+                  // etiqueta de mezcla ("2× Lemon · 1× Watermelon") daba basura.
+                  (subscription.composition?.length ?? 0) > 1
+                    ? subscription.composition!
+                        .map((c) => `${c.boxes}${shortLabel(c.flavor)[0]}`)
+                        .join(" · ")
+                    : // El "tipo" del producto (LEMON, SUN, …) es lo que el
+                      // cliente reconoce. "Salty" es prefijo de gama, se queda
+                      // fuera para que la card respire.
+                      (shortLabel(subscription.composition?.[0]?.flavor ?? DEFAULT_FLAVOR) ||
+                        subscription.flavor)
+                        .toUpperCase() || "—"
                 }
                 showRightBorder
               />
@@ -458,12 +471,27 @@ export default function AccountPage() {
                 }
               />
             </div>
-            {/* Hidden while paused. The summary above is fine to read, but this
-                button opens PlanOverlay, which posts the four fast-path ids to
-                /api/subscription/plan and would mutate a paused subscription.
-                The backend refuses it now, so leaving the button here would just
-                show the customer an error where a resume banner already tells
-                them what to do. */}
+            {/* The abbreviated cell above only fits "2L · 1W", so spell the mix out
+                on its own full-width row. */}
+            {(subscription.composition?.length ?? 0) > 1 && (
+              <div className="mt-3 border-t border-[color:var(--color-lit-grey)]/10 pt-3">
+                <div
+                  className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+                  style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                >
+                  <T en="Your mix" es="Tu mezcla" />
+                </div>
+                <div className="mt-1 font-display text-base font-black uppercase leading-tight text-[color:var(--color-lit-grey)]">
+                  {compositionLabel(subscription.composition!)}
+                </div>
+              </div>
+            )}
+            {/* Hidden while paused. The summary and the mix above are fine to read,
+                but this button opens PlanOverlay, which posts the four fast-path ids
+                to /api/subscription/plan and would try to mutate a paused
+                subscription. The backend refuses that now, so leaving the button
+                here would only show an error where the resume banner already says
+                what to do. */}
             {!subPaused && (
               <div className="mt-4">
                 <button

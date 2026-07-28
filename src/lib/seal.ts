@@ -91,6 +91,16 @@ export interface SealItem {
   /** Discount codes applied to this line (from Seal). The `id` UUID is required
    *  to remove a code via DELETE /subscription-discount-code. */
   discount_codes?: SealDiscountCode[];
+  /** Shopify line-item properties. Seal returns an ARRAY of {key,value} (confirmed
+   *  against a real item 2026-07-27), matching the documented add_items contract —
+   *  NOT the object shape the addItems() param used to imply. Unused so far. */
+  properties?: SealItemProperty[];
+}
+
+/** A Shopify line-item property (== order line `customAttributes`). */
+export interface SealItemProperty {
+  key: string;
+  value: string;
 }
 
 export interface SealSubscription {
@@ -564,20 +574,24 @@ class SealClient {
    * Seal support 2026-05-14: "the only way to swap products in a subscription
    * via the API is to add the new product, and then remove the old product."
    *
+   * VERIFIED 2026-07-27 (scripts/probe-mix.mjs): a SINGLE add_items call with N
+   * items creates all N at once (no partial application), each stays recurring, and
+   * Seal honours a custom per-unit `price` — SL30 went in at 22.64 when its
+   * catalogue price is 28.35. `total_value` comes back as Σ(price × quantity).
+   *
    * GOTCHA: `price` is per-unit, not total. With quantity=2 and price=10,
-   * Seal charges 20. To preserve a desired total, divide first. We omit
-   * `price` here when caller doesn't pass it — Seal then defaults to the
-   * variant's current Shopify price (safer for routine plan changes).
+   * Seal charges 20. To preserve a desired total, divide first. And it is
+   * REQUIRED, not optional: omitting it returns "Item is missing price value."
+   * (contradicting an earlier comment here that claimed Seal would default to
+   * the Shopify price).
    *
    * GOTCHA: any discount_codes active on a REMOVED item carry over to the
    * newly-added item. Caller that wants to drop a discount on swap must
    * call DELETE /subscription-discount-code afterwards.
    *
-   * `selling_plan_id` — undocumented but appears to be accepted per Seal's
-   * own portal mutations. We pass it when caller wants a per-line cadence
-   * (variant + plan combined change). Seal may also need a separate
-   * `edit { delivery_interval }` call to make the subscription-level
-   * cadence match — to be confirmed when this code runs against prod.
+   * `selling_plan_id` — accepted but effectively IGNORED: Seal overwrites it with
+   * the plan matching the subscription's current `delivery_interval`, so change the
+   * interval first and let Seal align every line. Confirmed in prod.
    */
   async addItems(
     subscriptionId: number,
@@ -589,13 +603,16 @@ class SealClient {
       sku: string;
       taxable?: boolean;
       requiresShipping?: boolean;
-      price?: string;       // per-unit; omit to let Seal use Shopify default
+      price?: string;       // per-unit; REQUIRED by Seal in practice
       sellingPlanId?: string;
-      properties?: Record<string, unknown>;
+      /** Shopify line-item properties. Seal's contract is an ARRAY of {key,value}
+       *  (was mistyped as an object here until 2026-07-27). */
+      properties?: SealItemProperty[];
       /** Add-to-next-order only: Seal removes it after the next renewal. */
       oneTime?: boolean;
     }>,
   ): Promise<void> {
+    if (!items.length) return;
     const body = {
       action: "add_items",
       id: subscriptionId,
@@ -623,9 +640,62 @@ class SealClient {
   }
 
   /**
+   * Edit EXISTING lines in place, by Seal item id — quantity, per-unit price,
+   * one_time and/or properties.
+   *
+   * VERIFIED 2026-07-27 (scripts/probe-mix.mjs): Seal answers "Items were edited in
+   * the subscription.", the quantity and price change, and **the item ids do NOT
+   * change**. The billing_attempts schedule is untouched.
+   *
+   * This is the safe primitive and should be preferred over add_items+removeItems
+   * whenever the set of variants isn't changing. Because nothing is removed, it
+   * cannot trigger the invisible discount-code carry-over; because item ids survive,
+   * a client's cached `mainItemId` stays valid; and because there is no window with
+   * both an old and a new line present, it cannot leave a customer paying for two.
+   * That window is exactly what overcharged 7 subscriptions in June-July 2026 (see
+   * scripts/repair-duplicate-lines.mjs).
+   *
+   * `price` is per-unit, same as add_items.
+   */
+  async editItems(
+    subscriptionId: number,
+    edits: Array<{
+      itemId: number;
+      quantity?: number;
+      /** per-unit, 2dp string */
+      price?: string;
+      oneTime?: boolean;
+      properties?: SealItemProperty[];
+    }>,
+  ): Promise<void> {
+    if (!edits.length) return;
+    const res = await this.req<{ success?: boolean; message?: string }>(
+      "/subscription",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          action: "edit_items",
+          id: subscriptionId,
+          edit_items: edits.map((e) => ({
+            id: e.itemId,
+            ...(e.quantity !== undefined ? { quantity: e.quantity } : {}),
+            ...(e.price !== undefined ? { price: e.price } : {}),
+            ...(e.oneTime !== undefined ? { one_time: e.oneTime ? 1 : 0 } : {}),
+            ...(e.properties !== undefined ? { properties: e.properties } : {}),
+          })),
+        }),
+      },
+    );
+    if (res?.success === false) {
+      throw new SealApiError(200, `Seal edit_items rejected: ${res.message ?? JSON.stringify(res)}`);
+    }
+  }
+
+  /**
    * Remove items by their Seal item ID (`SealItem.id`, NOT variant_id).
    */
   async removeItems(subscriptionId: number, itemIds: number[]): Promise<void> {
+    if (!itemIds.length) return;
     const res = await this.req<{ success?: boolean; message?: string }>(
       "/subscription",
       {
@@ -970,13 +1040,24 @@ export function isChargeAlreadyScheduledError(err: unknown): boolean {
 
 import type { Frequency, Subscription, SubscriptionStatus } from "./types";
 import { CUTOFF_HOURS, cutoffEndsAt, isWithinCutoff } from "./cutoff";
+import { mixEnabledForCustomer } from "./flags";
 import {
-  BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
   flavorKeyForProductId,
   flavorKeyForVariant,
   flavorLabel,
 } from "./seal-plans";
+import {
+  boxesForVariantQuantity,
+  chargeTotalCents as sumLineCharges,
+  compositionFromLines,
+  compositionLabel,
+  MAX_BOXES,
+  shapeFor,
+  type FlavorComposition,
+  type SubscriptionLine,
+  type SubscriptionShape,
+} from "./mix";
 
 /**
  * Normalize Seal's free-text interval ("1 month", "15 days", "3 months") to
@@ -1012,27 +1093,92 @@ export function mapStatus(s: SealSubscription): SubscriptionStatus {
   return "active";
 }
 
+/** Every RECURRING line. `is_one_time_item` is the extras/rewards discriminator. */
+export function getRecurringItems(s: SealSubscription): SealItem[] {
+  return (s.items ?? []).filter((it) => !it.is_one_time_item);
+}
+
 /**
- * "Box count" per LIT model = which SL30/SL60/SL90/SL120/SL150/SL180 variant
- * is on the subscription. Quantity stays at 1 — plan changes swap the variant
- * (add_items + remove_items), they don't bump the line quantity. Falls back
- * to `quantity` only if the variant_id isn't in our mapping (legacy/manual
- * subs), which lets the UI keep working while we surface the missing map.
+ * The subscription's recurring lines, normalized.
+ *
+ * Replaces the `items.find(it => !it.is_one_time_item) ?? items[0]` that every
+ * reader used to do. That collapse was wrong for the 11 ACTIVE multi-line subs and
+ * the 90 with `quantity != 1` that already exist in production: a 3-box mix created
+ * at checkout reported "1 box, Salty Lemon".
+ *
+ * Sorted by boxes desc so `lines[0]` is the DOMINANT line — that is what keeps
+ * `mainItemId` / `currentVariantId` / `flavor` meaningful for clients that predate
+ * the mix and for the fast path.
+ */
+export function getLines(s: SealSubscription): SubscriptionLine[] {
+  return getRecurringItems(s)
+    .map((it) => {
+      const quantity = Math.max(1, Number(it.quantity) || 1);
+      return {
+        itemId: it.id,
+        productId: String(it.product_id),
+        variantId: String(it.variant_id),
+        // Legacy/manual/bundle variants aren't in the registry; attribute them to the
+        // product's flavor, then to the default, exactly as extractFlavor always did.
+        flavor:
+          flavorKeyForVariant(String(it.variant_id)) ??
+          flavorKeyForProductId(String(it.product_id)) ??
+          DEFAULT_FLAVOR,
+        boxes: boxesForVariantQuantity(String(it.variant_id), quantity),
+        quantity,
+        unitPrice: String(it.price ?? "0"),
+        sellingPlanId: String(it.selling_plan_id ?? ""),
+      } satisfies SubscriptionLine;
+    })
+    .sort((a, b) => b.boxes - a.boxes || a.itemId - b.itemId);
+}
+
+/** The line that stands in for the whole subscription in back-compat fields. */
+export function dominantLine(s: SealSubscription): SubscriptionLine | null {
+  return getLines(s)[0] ?? null;
+}
+
+/** Boxes per flavor, aggregated across lines. */
+export function getComposition(s: SealSubscription): FlavorComposition[] {
+  return compositionFromLines(getLines(s));
+}
+
+export function getShape(s: SealSubscription): SubscriptionShape {
+  return shapeFor(getComposition(s));
+}
+
+/** Σ quantity × unit price over recurring lines, in cents. NOT Seal's
+ *  `total_value`, which nets out discount codes (verified: a sub on LITSTAY15 has
+ *  items summing 56.70 but total_value 48.20). */
+export function getChargeTotalCents(s: SealSubscription): number {
+  return sumLineCharges(getLines(s));
+}
+
+/**
+ * Total boxes per shipment = Σ over recurring lines of (variant box count × quantity).
+ *
+ * Correct for all four shapes in production: pack + qty 1 (every pure sub), 1-box +
+ * qty N (checkout-created mixes), pack + qty N (`SL90 ×2` = 6 boxes, 90 active subs)
+ * and portal-created mixes.
+ *
+ * Still clamped to 1..6 because `subscriptions.box_count` has that CHECK and an
+ * out-of-range value silently failed the webhook + hub cache upserts. But a raw sum
+ * above 6 is now reported instead of vanishing: it is the signature of a failed swap
+ * that left duplicate lines, which is how 4 ACTIVE subs ended up charging double
+ * without anyone noticing.
  */
 export function getBoxCount(s: SealSubscription): number {
-  const main = s.items.find((it) => !it.is_one_time_item) ?? s.items[0];
-  if (!main) return 1;
-  const fromVariant = BOX_COUNT_BY_VARIANT[String(main.variant_id)];
-  if (fromVariant) return fromVariant;
-  // Legacy/manual/bundle sub whose variant isn't mapped. Clamp to the DB's
-  // allowed range (subscriptions.box_count CHECK is 1..6): an out-of-range
-  // quantity here silently failed the webhook + hub cache upserts (check_violation),
-  // leaving that customer's cache stale/absent.
-  const q = main.quantity ?? 1;
-  if (q < 1 || q > 6) {
-    console.warn(`[getBoxCount] unmapped variant ${main.variant_id} qty ${q} — clamping to 1..6`);
+  const lines = getLines(s);
+  if (!lines.length) return 1;
+  const raw = lines.reduce((sum, l) => sum + l.boxes, 0);
+  if (raw < 1 || raw > MAX_BOXES) {
+    console.warn(
+      `[getBoxCount] sub ${s.id}: raw box sum ${raw} outside 1..${MAX_BOXES} — ` +
+        `clamping. Lines: ${lines.map((l) => `${l.variantId}×${l.quantity}`).join(", ")}. ` +
+        `A sum above ${MAX_BOXES} usually means duplicate lines from a failed swap.`,
+    );
   }
-  return Math.min(6, Math.max(1, q));
+  return Math.min(MAX_BOXES, Math.max(1, raw));
 }
 
 /**
@@ -1131,35 +1277,89 @@ export function getNextBoxNumber(s: SealSubscription): number {
  * the registry. Returns the UI label ("Salty Lemon" / "Salty Watermelon").
  */
 export function extractFlavor(s: SealSubscription): string {
-  const main = s.items?.find((it) => !it.is_one_time_item) ?? s.items?.[0];
-  if (!main) return flavorLabel(DEFAULT_FLAVOR);
-  const key =
-    flavorKeyForProductId(String(main.product_id)) ??
-    flavorKeyForVariant(String(main.variant_id)) ??
-    DEFAULT_FLAVOR;
-  return flavorLabel(key);
+  return flavorLabel(dominantLine(s)?.flavor ?? DEFAULT_FLAVOR);
+}
+
+/**
+ * Customer-facing flavor string INCLUDING the mix: "Salty Lemon" for a single
+ * flavor (byte-identical to extractFlavor, so no cached row churns and no Klaviyo
+ * segment breaks) or "2× Lemon · 1× Watermelon" for a mix.
+ *
+ * `extractFlavor` stays the DOMINANT label because `account/page.tsx` derives its
+ * short name with `flavor.split(" ").slice(1)`, which turns a mix label into
+ * garbage. Display surfaces migrate to this one explicitly.
+ */
+export function extractFlavorSummary(s: SealSubscription): string {
+  const composition = getComposition(s);
+  return composition.length ? compositionLabel(composition) : flavorLabel(DEFAULT_FLAVOR);
+}
+
+/**
+ * ALL UUIDs of an applied discount code, across every line.
+ *
+ * `findAppliedDiscountCodeId` returns only the first. On a multi-line sub the same
+ * code can surface once per line with distinct UUIDs, and removing one would leave a
+ * permanent discount on the others — the money-leak class of incident 2026-07-23,
+ * reintroduced by multi-line. Callers that REMOVE a code must loop over this.
+ */
+export function findAllAppliedDiscountCodeIds(s: SealSubscription, code: string): string[] {
+  const target = code.trim().toLowerCase();
+  const ids = new Set<string>();
+  for (const it of s.items ?? []) {
+    for (const dc of it.discount_codes ?? []) {
+      if (dc.code?.trim().toLowerCase() === target && dc.id) ids.add(dc.id);
+    }
+  }
+  return [...ids];
 }
 
 /**
  * Map a raw Seal subscription to our portal Subscription type.
+ *
+ * PURE and SYNCHRONOUS on purpose: the Seal webhook, 3 crons and 5 routes call it.
+ * The mix needs no DB read because the composition is derived from Seal's own items,
+ * so Seal stays the single source of truth.
  */
 export function mapToSubscription(s: SealSubscription, customerId: string): Subscription {
   const next = getNextBillingAttempt(s);
   const nextShipDate = next?.date ?? null;
   const frequency = normalizeFrequency(s.delivery_interval);
-  const mainItem = s.items.find((it) => !it.is_one_time_item) ?? s.items[0];
+  const lines = getLines(s);
+  // Back-compat fields describe the DOMINANT line. Falling back to a one-time item
+  // (extras / rewards) the way `items[0]` used to would hand the FE an item id that
+  // a plan change then rejects with item_ownership_mismatch, so a sub with no
+  // recurring line reports zeros and the UI treats it as unusable instead.
+  const main = lines[0] ?? null;
+  if (!main) {
+    console.warn(
+      `[mapToSubscription] sub ${s.id} has NO recurring line ` +
+        `(${(s.items ?? []).length} item(s), all one-time) — plan actions will be unavailable`,
+    );
+  }
+  const composition = compositionFromLines(lines);
+  const boxCount = getBoxCount(s);
+  const status = mapStatus(s);
   return {
     customerId,
     sealSubscriptionId: String(s.id),
-    mainItemId: mainItem?.id ?? 0,
-    currentVariantId: mainItem?.variant_id ?? "",
-    boxCount: getBoxCount(s),
+    mainItemId: main?.itemId ?? 0,
+    currentVariantId: main?.variantId ?? "",
+    boxCount,
+    lines,
+    composition,
+    shape: shapeFor(composition),
+    flavorSummary: composition.length ? compositionLabel(composition) : flavorLabel(DEFAULT_FLAVOR),
+    chargeTotalCents: sumLineCharges(lines),
+    // Gate for the mix BUILDER only. Reading an existing mix is never gated: if the
+    // flag flipping off changed how a mixed sub reads, those subscribers would start
+    // seeing a single flavor in the portal and in their emails.
+    canEditMix: boxCount >= 2 && status === "active" && mixEnabledForCustomer(customerId),
     frequency,
     frequencyLabel: s.delivery_interval,
     flavor: extractFlavor(s),
     nextShipDate,
     nextBoxNumber: getNextBoxNumber(s),
-    status: mapStatus(s),
+    status,
     createdAt: s.order_placed,
     withinCutoff: nextShipDate ? isWithinCutoff(nextShipDate) : false,
     cutoffEndsAt: nextShipDate ? cutoffEndsAt(nextShipDate).toISOString() : null,

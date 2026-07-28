@@ -105,6 +105,9 @@ async function fetchSellingPlanIds(productId: string): Promise<Set<string>> {
   return ids;
 }
 
+/** "<flavorKey>:<boxCount>" → variant price, filled while checking each flavor. */
+const priceByFlavorBox = new Map<string, number>();
+
 async function main() {
   console.log(`\nVerifying flavor registry against ${STORE}\n`);
   const products = await fetchPublicProducts();
@@ -119,13 +122,15 @@ async function main() {
     }
     ok(`product found: "${product.title}"`);
 
-    // Variant existence + presence of all 6 box counts.
+    // Variant existence + presence of all 6 box counts. Prices are recorded per box
+    // count so the cross-flavor parity check below can compare them.
     const variantIds = new Set(product.variants.map((v) => String(v.id)));
     for (let box = 1; box <= 6; box++) {
       const vid = flavor.variantByBoxCount[box as 1 | 2 | 3 | 4 | 5 | 6];
       if (variantIds.has(vid)) {
         const v = product.variants.find((x) => String(x.id) === vid)!;
         ok(`box ${box}: variant ${vid} (SKU ${v.sku ?? "?"}, €${v.price})`);
+        priceByFlavorBox.set(`${flavor.key}:${box}`, Number(v.price));
       } else {
         fail(`box ${box}: variant ${vid} NOT found on product ${flavor.productId}`);
       }
@@ -149,6 +154,41 @@ async function main() {
     }
     console.log("");
   }
+
+  // ── Cross-flavor price parity ──
+  //
+  // The flavor MIX prices a split subscription by taking the tier total for the target
+  // box count from the DOMINANT flavor's ladder and distributing it across the lines
+  // (src/lib/mix.ts::planTargetLines, via priceForBoxCount). That is only exact while
+  // every flavor shares one price ladder. If a flavor is ever repriced on its own, a
+  // mix would silently charge the wrong total — so it must fail HERE, in preflight,
+  // rather than in a customer's charge.
+  //
+  // Until 2026-07-28 this script only PRINTED the prices and asserted nothing about
+  // them, for any flavor.
+  console.log("Cross-flavor price parity (the flavor mix depends on this)");
+  const reference = ALL_FLAVORS[0];
+  let parityChecked = 0;
+  for (let box = 1; box <= 6; box++) {
+    const refPrice = priceByFlavorBox.get(`${reference.key}:${box}`);
+    if (refPrice === undefined) continue;
+    const divergent = ALL_FLAVORS.slice(1).flatMap((f) => {
+      const p = priceByFlavorBox.get(`${f.key}:${box}`);
+      if (p === undefined) return [];
+      return Math.abs(p - refPrice) < 0.005 ? [] : [`${f.label} €${p}`];
+    });
+    parityChecked++;
+    if (divergent.length) {
+      fail(
+        `box ${box}: ${reference.label} is €${refPrice} but ${divergent.join(", ")} — ` +
+          `a mix would be mispriced; make the ladders match or teach planTargetLines about per-flavor prices`,
+      );
+    }
+  }
+  if (parityChecked > 0 && failures === 0) {
+    ok(`all flavors share one price ladder across ${parityChecked} box count(s)`);
+  }
+  console.log("");
 
   console.log(failures === 0 ? "ALL CHECKS PASSED\n" : `${failures} CHECK(S) FAILED\n`);
   // Set exitCode (not process.exit) so Node drains cleanly — process.exit while

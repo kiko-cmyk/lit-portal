@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, clearSelectedSubscription, clearSessionToken } from "@/lib/api-client";
 import { addCycle, subCycle } from "@/lib/cadence";
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { compositionLabel } from "@/lib/mix";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
 import { portalHref } from "@/lib/portal-link";
 import {
@@ -76,7 +77,13 @@ function solutionFor(reason: CancellationReason | null): "plan" | "skip" | "flav
 function hasFlavorAlternative(sub: Subscription | null): boolean {
   if (!sub?.currentVariantId) return false;
   if (BOX_COUNT_BY_VARIANT[sub.currentVariantId] == null) return false;
-  const current = flavorKeyForVariant(sub.currentVariantId) ?? DEFAULT_FLAVOR;
+  // A mixed subscriber always has an alternative: adjust the mix. Deriving a single
+  // "current flavor" from the variant here would report a mix as its dominant flavor
+  // and offer "switch to Watermelon", which SILENTLY DESTROYS the mix under a promise
+  // of "same plan, same price, same ship date".
+  const composition = sub.composition ?? [];
+  if (composition.length > 1) return true;
+  const current = composition[0]?.flavor ?? flavorKeyForVariant(sub.currentVariantId) ?? DEFAULT_FLAVOR;
   return ALL_FLAVORS.some((f) => f.key !== current);
 }
 
@@ -528,17 +535,38 @@ function Solucion({
   // ── No me gusta → probar otro sabor ──
   if (reason === "dont_like") {
     const altLabel = ALL_FLAVORS.find((f) => f.key === offerFlavor)?.label ?? "";
+    // With 2+ boxes, "keep the one you like AND try the other" retains better than
+    // asking someone to swap their whole subscription to a flavor they've never tried.
+    const boxes = subscription?.boxCount ?? 1;
+    const halfAndHalf =
+      boxes >= 2 && subscription?.canEditMix && currentFlavorKey !== offerFlavor
+        ? [
+            { flavor: currentFlavorKey, boxes: Math.ceil(boxes / 2) },
+            { flavor: offerFlavor, boxes: Math.floor(boxes / 2) },
+          ]
+        : null;
     return (
       <>
         {eyebrow}
         <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
-          <T en="What if you try another flavor?" es="¿Y si pruebas otro sabor?" />
+          {halfAndHalf ? (
+            <T en="What if you keep both?" es="¿Y si te quedas los dos?" />
+          ) : (
+            <T en="What if you try another flavor?" es="¿Y si pruebas otro sabor?" />
+          )}
         </h1>
         <p className="mt-5 max-w-md text-sm opacity-75">
-          <T
-            en="Same plan, same price, same ship date — just a different flavor in your next box."
-            es="El mismo plan, el mismo precio y la misma fecha. Solo cambia el sabor de tu próxima caja."
-          />
+          {halfAndHalf ? (
+            <T
+              en="Same plan, same price, same ship date. Split your boxes and try the other flavor without giving up the one you have."
+              es="El mismo plan, el mismo precio y la misma fecha. Reparte tus cajas y prueba el otro sabor sin renunciar al que tienes."
+            />
+          ) : (
+            <T
+              en="Same plan, same price, same ship date — just a different flavor in your next box."
+              es="El mismo plan, el mismo precio y la misma fecha. Solo cambia el sabor de tu próxima caja."
+            />
+          )}
         </p>
         <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
           <T en="Try instead" es="Prueba con" />
@@ -566,21 +594,47 @@ function Solucion({
         </div>
         {errorBox}
         <div className="mt-8 space-y-3">
+          {halfAndHalf && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                applyPlan(
+                  { mix: halfAndHalf, expectedLineIds: subscription?.lines?.map((l) => l.itemId) },
+                  { en: "Your mix is set.", es: "Tu mezcla está lista." },
+                )
+              }
+              className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+            >
+              {busy ? (
+                <T en="Saving…" es="Guardando…" />
+              ) : (
+                <T
+                  en={`Split them: ${compositionLabel(halfAndHalf)}`}
+                  es={`Repártelas: ${compositionLabel(halfAndHalf)}`}
+                />
+              )}
+            </button>
+          )}
           <button
             type="button"
             disabled={busy || offerFlavor === currentFlavorKey}
             onClick={() =>
               applyPlan(
-                { flavor: offerFlavor },
+                { flavor: offerFlavor, expectedLineIds: subscription?.lines?.map((l) => l.itemId) },
                 { en: "Your flavor is updated.", es: "Tu sabor está actualizado." },
               )
             }
-            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+            className={`w-full rounded-full py-4 text-xs font-black uppercase tracking-[0.2em] disabled:opacity-40 ${
+              halfAndHalf
+                ? "border border-[#F2EEE1]/25 text-[#F2EEE1]"
+                : "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
+            }`}
           >
             {busy ? (
               <T en="Saving…" es="Guardando…" />
             ) : (
-              <T en={`Switch to ${altLabel}`} es={`Cambiar a ${altLabel}`} />
+              <T en={`Switch all to ${altLabel}`} es={`Cambiar todo a ${altLabel}`} />
             )}
           </button>
           {secondary}
@@ -642,7 +696,13 @@ function Solucion({
           <button
             type="button"
             disabled={busy || offerBoxes === boxCount}
-            onClick={() => applyPlan({ boxCount: offerBoxes, frequency: freq })}
+            onClick={() =>
+              applyPlan({
+                boxCount: offerBoxes,
+                frequency: freq,
+                expectedLineIds: subscription?.lines?.map((l) => l.itemId),
+              })
+            }
             className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
           >
             {busy ? (
