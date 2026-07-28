@@ -109,11 +109,17 @@ create table if not exists subscription_changes (
   -- No FK: subscriptions now has a composite PK, so a single-column FK to
   -- customer_id isn't valid. App-managed integrity (audit table, no hard deletes).
   customer_id   text not null,
-  change_type   text not null check (change_type in ('plan','flavor','address','skip','skip_undo','extras')),
+  change_type   text not null check (change_type in ('plan','flavor','address','skip','skip_undo','extras','mix')),
   payload       jsonb not null,
   applied_at    timestamptz not null default now(),
   applies_from  date
 );
+
+-- El rollback de la mezcla y soporte buscan por suscripción, que vive en el payload.
+create index if not exists idx_subscription_changes_seal_sub
+  on subscription_changes ((payload->>'sealSubscriptionId'));
+create index if not exists idx_subscription_changes_type_time
+  on subscription_changes (change_type, applied_at desc);
 
 create index if not exists idx_subscription_changes_customer on subscription_changes(customer_id, applied_at desc);
 

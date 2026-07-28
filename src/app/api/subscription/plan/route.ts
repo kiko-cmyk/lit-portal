@@ -751,6 +751,37 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   };
 
+  /**
+   * Audit breadcrumb. `subscription_changes` has existed since day one with ZERO
+   * writers, and its absence is exactly what hurt when investigating the duplicate-line
+   * incident: there was no record of what each customer asked for or when, and it had to
+   * be reconstructed from Seal's own `log` field.
+   *
+   * It also lets a rollback tell a mix the PORTAL created from one the customer bought
+   * at checkout — the latter must not be undone, it's what they chose.
+   *
+   * Best effort, never fatal: an audit row must not fail a plan change.
+   */
+  const writeAudit = async (outcome: string) => {
+    const { error } = await supabaseAdmin().from("subscription_changes").insert({
+      customer_id: ctx.customerId,
+      change_type: targetPlan.shape === "split" || currentShape === "split" ? "mix" : "plan",
+      payload: {
+        sealSubscriptionId: String(sealSubscriptionId),
+        outcome,
+        from: { composition: currentComposition, shape: currentShape, frequency: currentFrequency },
+        to: { composition: targetComposition, shape: targetPlan.shape, frequency: targetFrequency },
+        tierTotalCents,
+        chargedCents: targetPlan.totalCents,
+        residualCents: targetPlan.residualCents,
+        diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
+        source: "portal",
+      },
+      applies_from: effectivePreserveYYYYMMDD,
+    });
+    if (error) log("audit-write-failed", { msg: error.message });
+  };
+
   // ───── Step 2: converge the lines on the target (edits → adds → removes) ─────
   //
   // Runs AFTER the interval edit so every line Seal creates or realigns is already on
@@ -929,6 +960,10 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       );
     }
   }
+
+  // Lines converged. Record it before the verification step, so the audit trail exists
+  // even if verification then times out or reports a mismatch.
+  await writeAudit("applied");
 
   // Happy path: swap done (or no swap needed) — put the 15% back on the sub.
   // The reattach revives the tracking row to pending_charge; the seal webhook /
