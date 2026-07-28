@@ -213,7 +213,7 @@ export function FlavorOverlay({
         {done ? (
           <>
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
-              <T en="Flavors updated" es="Sabores actualizados" />
+              <T en="Flavor updated" es="Sabor actualizado" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
               <T en="All set" es="Listo" />
@@ -238,7 +238,7 @@ export function FlavorOverlay({
               <T en="Change subscription" es="Cambiar suscripción" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              {canMix ? <T en="My flavors" es="Mis sabores" /> : <T en="My flavor" es="Mi sabor" />}
+              <T en="My flavor" es="Mi sabor" />
             </h1>
             <p className="mt-3 text-sm opacity-70">
               {canMix ? (
