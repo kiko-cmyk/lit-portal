@@ -78,6 +78,41 @@ Trigger: `first_login_completed` con condición `whatsappOptIn = true`
 
 Lo que mande Klaviyo por WhatsApp (no email): bienvenida + confirmación del +50 Drops. Necesita Klaviyo WhatsApp activado.
 
+### 2.7 Avisos antes del cobro (dos buckets, un solo evento)
+
+Los dos crons de `lib/renewal-reminder.ts` disparan la MISMA métrica,
+`subscription_renewal_reminder`, y se distinguen por `hoursBefore`. Cada bucket
+necesita su propio flow con su filtro en el disparador (`hoursBefore == 48` /
+`hoursBefore == 168`): flows separados, no ramas del mismo, para que la re-entrada
+de uno no pueda consumir la del otro ni mezclar su reporting.
+
+| Bucket | Cron (UTC) | `hoursBefore` | `template_id` en `email_logs` | Para qué |
+|---|---|---|---|---|
+| 48h | `/api/cron/renewal-reminder`, 07:00 | 48 | `renewal_reminder_48h` | Último aviso, CTA de saltar entrega |
+| 7 días | `/api/cron/renewal-reminder-7d`, 07:30 | 168 | `renewal_reminder_168h` | Confirmar la dirección antes de picking (plantilla `RT2Kv3`) |
+
+Properties: `sealSubscriptionId`, `nextShipDate`, `nextShipDateLabel`, `boxCount`,
+`frequency`, `flavor`, `locale`, y solo en el de 7 días `shippingAddress`
+(`firstName`, `lastName`, `address1`, `address2`, `postalCode`, `city`, `country`).
+
+Dos cosas que no se pueden tocar:
+
+- **`nextShipDate` va en ISO crudo y así se queda.** El webhook de WhatsApp del
+  flow lo reenvía a Permut como `expected_date`, y es lo que empareja el cobro
+  exacto en Seal cuando un cliente pide saltar su entrega. Formatearlo por el
+  camino rompe el skip en silencio: cae en handoff humano y la entrega que el
+  cliente pidió saltar sale igual. **Para pintar la fecha, usa
+  `nextShipDateLabel`** ("30 de julio"), que existe justo para eso: Klaviyo tipa
+  `nextShipDate` como TEXTO y el filtro Django `|date` sobre un string devuelve
+  `''` sin avisar (así salió el email de 7 días con la fecha en blanco del 15/07
+  al 28/07, 524 destinatarios).
+- **`template_id` distinto por bucket.** Es la partición del dedup (lookback de 5
+  días). Compartirlo haría que un bucket marcase la sub como avisada y el otro se
+  saltase su envío.
+
+Para probar un bucket sin enviar nada: `?__dry_run=1` (solo fuera de producción)
+devuelve los payloads exactos sin disparar a Klaviyo ni escribir `email_logs`.
+
 ---
 
 ## 3. Cadencia que respetar (Master Spec § 8)
@@ -85,7 +120,9 @@ Lo que mande Klaviyo por WhatsApp (no email): bienvenida + confirmación del +50
 - **Active Zone** (Days 1-14 post-purchase): max 5 emails total
 - **Quiet Zone** (Day 15+): max 1 email/mes
 - **No stacking**: no email + WhatsApp el mismo día (excepto delivery alert)
-- **NO renewal reminder emails**: nunca
+- **Avisos antes del cobro: SÍ** (ver § 2.7). La Master Spec original decía
+  "nunca"; se revirtió en junio de 2026 y hoy hay dos buckets en producción, 48h
+  y 7 días. Si te cruzas con la regla vieja en otro documento, está mal.
 
 Para implementar en Klaviyo: usar **smart sending + frequency caps** en cada flow para respetar estos límites.
 
