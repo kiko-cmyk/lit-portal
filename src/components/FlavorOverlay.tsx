@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang } from "@/lib/i18n";
+import { compositionLabel, type FlavorComposition, resplitOnBoxChange } from "@/lib/mix";
 import {
   ALL_FLAVORS,
   DEFAULT_FLAVOR,
@@ -10,57 +11,89 @@ import {
   flavorKeyForVariant,
 } from "@/lib/seal-plans";
 import type { Subscription } from "@/lib/types";
+import { isMixSavable, MixBuilder } from "./MixBuilder";
+
+/** Seed for a fresh mix: one box to the first flavor, the rest to the second, so the
+ *  builder opens on a valid 2-flavor split the customer can nudge. */
+function evenStart(boxCount: number): FlavorComposition[] {
+  const [a, b] = ALL_FLAVORS;
+  if (!b) return [{ flavor: a.key, boxes: boxCount }];
+  const first = Math.ceil(boxCount / 2);
+  return [
+    { flavor: a.key, boxes: first },
+    { flavor: b.key, boxes: boxCount - first },
+  ];
+}
 
 /**
- * Flavor overlay — switch the subscription to another flavor (product).
+ * Flavor overlay — one flavor, or a MIX of flavors across the plan's boxes.
  *
- * A flavor change is a variant swap to another product's variant for the SAME
- * box count, so it goes through PATCH /api/subscription/plan with `flavor`
- * (reusing all its safety: ownership, retention-discount carry-over,
- * verification, rollback). Plan, frequency, price and next-ship date stay put —
- * only the product on the next (and future) boxes changes.
+ * Both go through PATCH /api/subscription/plan (single flavor via `flavor`, a mix via
+ * `mix`), reusing all its safety: ownership, optimistic concurrency, the
+ * retention-discount guard, the money assertion and the idempotent line diff. The
+ * plan, frequency, price and ship date stay put — only what's in the boxes changes.
  */
 export function FlavorOverlay({
   subscription,
   onClose,
   onUpdated,
+  /** Opens the plan overlay — offered when the customer has 1 box and mixing needs 2. */
+  onRequestPlanChange,
 }: {
   subscription: Subscription;
   onClose: () => void;
   onUpdated: (updated: Subscription) => void;
+  onRequestPlanChange?: () => void;
 }) {
   const currentFlavor: FlavorKey =
     flavorKeyForVariant(subscription.currentVariantId) ?? DEFAULT_FLAVOR;
+  const boxCount = subscription.boxCount;
+  const currentComposition = subscription.composition ?? [];
+  const currentlyMixed = currentComposition.length > 1;
+  // Mixing needs the flag, 2+ boxes and 2+ flavors in the catalogue. Reading a mix is
+  // never gated, so an existing mix still opens in mix mode even if the flag is off.
+  const canMix = (subscription.canEditMix || currentlyMixed) && boxCount >= 2 && ALL_FLAVORS.length >= 2;
+
+  const [mode, setMode] = useState<"single" | "mix">(currentlyMixed ? "mix" : "single");
   const [selected, setSelected] = useState<FlavorKey>(currentFlavor);
+  const [draft, setDraft] = useState<FlavorComposition[]>(() =>
+    currentlyMixed ? currentComposition : resplitOnBoxChange(evenStart(boxCount), boxCount),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const t = useLang();
 
-  const hasChange = selected !== currentFlavor;
-  const selectedLabel = ALL_FLAVORS.find((f) => f.key === selected)?.label ?? "";
+  const target: FlavorComposition[] =
+    mode === "mix" ? draft : [{ flavor: selected, boxes: boxCount }];
+  const key = (c: FlavorComposition[]) =>
+    [...c].sort((a, b) => a.flavor.localeCompare(b.flavor)).map((x) => `${x.flavor}:${x.boxes}`).join("|");
+  const hasChange = key(target) !== key(currentComposition.length ? currentComposition : [{ flavor: currentFlavor, boxes: boxCount }]);
+  const valid = mode === "mix" ? isMixSavable(draft, boxCount) : true;
+  const resultLabel = compositionLabel(target);
 
   const handleConfirm = async () => {
-    if (!hasChange) return;
+    if (!hasChange || !valid) return;
     setBusy(true);
     setError(null);
     try {
       const updated = await api<Subscription>("/api/subscription/plan", {
         method: "PATCH",
         body: JSON.stringify({
-          flavor: selected,
-          // Deliberately DO NOT send boxCount. The backend derives the current
-          // box count from the variant map so the swap lands on the same box
-          // count, and correctly refuses (409 box_count_unknown) for a legacy
-          // sub whose variant isn't mapped — instead of silently downgrading it
-          // to 1 box. (The fast-path key is sealSubscriptionId + mainItemId +
-          // currentVariantId + currentFrequency; boxCount was never part of it.)
+          // A mix carries its own box count (the sum), so `boxCount` is never sent.
+          // For a single flavor the backend derives the current box count from the
+          // variant map and correctly refuses (409 box_count_unknown) on a legacy
+          // sub whose variant isn't mapped, instead of downgrading it to 1 box.
+          ...(mode === "mix" ? { mix: draft } : { flavor: selected }),
           sealSubscriptionId: subscription.sealSubscriptionId,
           mainItemId: subscription.mainItemId,
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
-          // A flavor-only swap doesn't regenerate billing_attempts, but we send
-          // the date anyway so any combined path keeps the current ship date.
+          // Optimistic concurrency: refuse if the lines moved since this screen
+          // loaded, rather than diffing against a state the customer never saw.
+          expectedLineIds: subscription.lines?.map((l) => l.itemId) ?? undefined,
+          // Neither path regenerates billing_attempts, but send the date anyway so a
+          // combined path keeps the current ship date.
           preserveNextShipDate: subscription.nextShipDate,
         }),
       });
@@ -83,6 +116,20 @@ export function FlavorOverlay({
           t({
             en: "We couldn't switch this subscription's flavor automatically. Please contact us and we'll do it for you.",
             es: "No pudimos cambiar el sabor de esta suscripción automáticamente. Escríbenos y lo hacemos por ti.",
+          }),
+        );
+      } else if (err.code === "mix_not_enabled") {
+        setError(
+          t({
+            en: "Mixing flavors isn't available on your account yet.",
+            es: "Mezclar sabores todavía no está disponible en tu cuenta.",
+          }),
+        );
+      } else if (err.code === "invalid_mix" || err.code === "mix_box_count_mismatch") {
+        setError(
+          t({
+            en: `Check the split: the boxes have to add up to ${boxCount}.`,
+            es: `Revisa el reparto: las cajas tienen que sumar ${boxCount}.`,
           }),
         );
       } else if (err.code === "subscription_changed" || err.code === "mix_requires_explicit_intent") {
@@ -166,15 +213,15 @@ export function FlavorOverlay({
         {done ? (
           <>
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
-              <T en="Flavor updated" es="Sabor actualizado" />
+              <T en="Flavors updated" es="Sabores actualizados" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
               <T en="All set" es="Listo" />
             </h1>
             <p className="mt-3 text-sm opacity-70">
               <T
-                en={`Your next box will be ${selectedLabel}.`}
-                es={`Tu próxima caja será ${selectedLabel}.`}
+                en={`Your next boxes: ${resultLabel}.`}
+                es={`Tus próximas cajas: ${resultLabel}.`}
               />
             </p>
             <button
@@ -191,51 +238,116 @@ export function FlavorOverlay({
               <T en="Change subscription" es="Cambiar suscripción" />
             </div>
             <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              <T en="My flavor" es="Mi sabor" />
+              {canMix ? <T en="My flavors" es="Mis sabores" /> : <T en="My flavor" es="Mi sabor" />}
             </h1>
             <p className="mt-3 text-sm opacity-70">
-              <T
-                en="Choose the flavor for your next boxes. Your plan, frequency, price and ship date stay the same."
-                es="Elige el sabor de tus próximas cajas. Tu plan, frecuencia, precio y fecha de envío no cambian."
-              />
+              {canMix ? (
+                <T
+                  en={`Choose what goes in your ${boxCount} boxes. Your plan, frequency, price and ship date stay the same.`}
+                  es={`Elige qué llevan tus ${boxCount} cajas. Tu plan, frecuencia, precio y fecha de envío no cambian.`}
+                />
+              ) : (
+                <T
+                  en="Choose the flavor for your next boxes. Your plan, frequency, price and ship date stay the same."
+                  es="Elige el sabor de tus próximas cajas. Tu plan, frecuencia, precio y fecha de envío no cambian."
+                />
+              )}
             </p>
 
-            {/* Flavor picker */}
-            <div className="mt-6 space-y-2.5">
-              {ALL_FLAVORS.map((f) => {
-                const isSelected = selected === f.key;
-                const isCurrent = currentFlavor === f.key;
-                return (
+            {/* One box: mixing is impossible, so offer the way out instead of a dead end. */}
+            {boxCount === 1 && ALL_FLAVORS.length >= 2 && onRequestPlanChange && (
+              <div className="mt-5 rounded-2xl border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4">
+                <p className="text-xs opacity-70">
+                  <T
+                    en="With 1 box per shipment you get one flavor. Add a second box to mix them."
+                    es="Con 1 caja por envío recibes un solo sabor. Añade una segunda caja para mezclarlos."
+                  />
+                </p>
+                <button
+                  type="button"
+                  onClick={onRequestPlanChange}
+                  className="mt-2 text-[11px] font-bold uppercase tracking-[0.18em] underline"
+                >
+                  <T en="Change my plan" es="Cambiar mi plan" />
+                </button>
+              </div>
+            )}
+
+            {/* Mode switch. Not rendered when mixing isn't possible, so the flag's
+                off-state is pixel-identical to what production shows today. */}
+            {canMix && (
+              <div className="mt-6 flex rounded-sm bg-[color:var(--color-lit-grey)]/8 p-1">
+                {(["single", "mix"] as const).map((m) => (
                   <button
-                    key={f.key}
+                    key={m}
                     type="button"
-                    onClick={() => setSelected(f.key)}
-                    aria-pressed={isSelected}
-                    className={`flex w-full items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                      isSelected
-                        ? "border-[color:var(--color-lit-grey)] bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                        : "border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] hover:border-[color:var(--color-lit-grey)]/40"
+                    onClick={() => setMode(m)}
+                    aria-pressed={mode === m}
+                    className={`flex-1 rounded-sm py-2.5 text-[10px] font-black uppercase tracking-[0.18em] transition ${
+                      mode === m
+                        ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
+                        : "text-[color:var(--color-lit-grey)]/60"
                     }`}
                   >
-                    <span className="font-display text-lg font-black uppercase leading-tight">
-                      {f.label}
-                    </span>
-                    {isCurrent && (
-                      <span
-                        className={`rounded-sm px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] ${
-                          isSelected
-                            ? "bg-[color:var(--color-bold-yellow)]/25 text-[color:var(--color-bold-yellow)]"
-                            : "bg-[color:var(--color-lit-grey)]/10 text-[color:var(--color-warm-gray)]"
-                        }`}
-                        style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
-                      >
-                        <T en="Current" es="Actual" />
-                      </span>
+                    {m === "single" ? (
+                      <T en="One flavor" es="Un solo sabor" />
+                    ) : (
+                      <T en="Mix" es="Mezcla" />
                     )}
                   </button>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
+
+            {mode === "mix" && canMix ? (
+              <MixBuilder boxCount={boxCount} value={draft} onChange={setDraft} disabled={busy} />
+            ) : (
+              <div className="mt-6 space-y-2.5">
+                {ALL_FLAVORS.map((f) => {
+                  const isSelected = selected === f.key;
+                  const isCurrent = !currentlyMixed && currentFlavor === f.key;
+                  return (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => setSelected(f.key)}
+                      aria-pressed={isSelected}
+                      className={`flex w-full items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
+                        isSelected
+                          ? "border-[color:var(--color-lit-grey)] bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
+                          : "border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] hover:border-[color:var(--color-lit-grey)]/40"
+                      }`}
+                    >
+                      <span className="font-display text-lg font-black uppercase leading-tight">
+                        {f.label}
+                      </span>
+                      {isCurrent && (
+                        <span
+                          className={`rounded-sm px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] ${
+                            isSelected
+                              ? "bg-[color:var(--color-bold-yellow)]/25 text-[color:var(--color-bold-yellow)]"
+                              : "bg-[color:var(--color-lit-grey)]/10 text-[color:var(--color-warm-gray)]"
+                          }`}
+                          style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
+                        >
+                          <T en="Current" es="Actual" />
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* The obvious question a customer has about mixing: does it cost more? */}
+            {canMix && (
+              <p className="mt-4 text-center text-[11px] opacity-55">
+                <T
+                  en={`${boxCount} boxes, same price however you mix them.`}
+                  es={`${boxCount} cajas, el mismo precio los mezcles como quieras.`}
+                />
+              </p>
+            )}
 
             {error && (
               <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">
@@ -246,11 +358,13 @@ export function FlavorOverlay({
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={!hasChange || busy}
+              disabled={!hasChange || !valid || busy}
               className="mt-6 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
+              ) : mode === "mix" ? (
+                <T en="Save my mix" es="Guardar mi mezcla" />
               ) : (
                 <T en="Save flavor" es="Guardar sabor" />
               )}

@@ -1004,6 +1004,7 @@ export function isChargeAlreadyScheduledError(err: unknown): boolean {
 
 import type { Frequency, Subscription, SubscriptionStatus } from "./types";
 import { CUTOFF_HOURS, cutoffEndsAt, isWithinCutoff } from "./cutoff";
+import { mixEnabledForCustomer } from "./flags";
 import {
   DEFAULT_FLAVOR,
   flavorKeyForProductId,
@@ -1300,23 +1301,29 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
     );
   }
   const composition = compositionFromLines(lines);
+  const boxCount = getBoxCount(s);
+  const status = mapStatus(s);
   return {
     customerId,
     sealSubscriptionId: String(s.id),
     mainItemId: main?.itemId ?? 0,
     currentVariantId: main?.variantId ?? "",
-    boxCount: getBoxCount(s),
+    boxCount,
     lines,
     composition,
     shape: shapeFor(composition),
     flavorSummary: composition.length ? compositionLabel(composition) : flavorLabel(DEFAULT_FLAVOR),
     chargeTotalCents: sumLineCharges(lines),
+    // Gate for the mix BUILDER only. Reading an existing mix is never gated: if the
+    // flag flipping off changed how a mixed sub reads, those subscribers would start
+    // seeing a single flavor in the portal and in their emails.
+    canEditMix: boxCount >= 2 && status === "active" && mixEnabledForCustomer(customerId),
     frequency,
     frequencyLabel: s.delivery_interval,
     flavor: extractFlavor(s),
     nextShipDate,
     nextBoxNumber: getNextBoxNumber(s),
-    status: mapStatus(s),
+    status,
     createdAt: s.order_placed,
     withinCutoff: nextShipDate ? isWithinCutoff(nextShipDate) : false,
     cutoffEndsAt: nextShipDate ? cutoffEndsAt(nextShipDate).toISOString() : null,

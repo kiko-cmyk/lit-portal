@@ -1,6 +1,7 @@
 import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
 import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { mixEnabledForCustomer } from "@/lib/flags";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { alertSlackError } from "@/lib/alert";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
@@ -163,7 +164,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   };
   log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
 
-  const dryRun = isDryRunRequest(req, body);
+  const dryRun = isDryRunRequest(req, body, ctx.customerId);
   const reanchorMode: "preserve" | "natural" = body.reanchorMode === "natural" ? "natural" : "preserve";
   // Pre-mutation subscription, captured during resolution below. Needed to read
   // the last completed charge date when computing the natural re-anchor target.
@@ -196,6 +197,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       throw new ApiHttpError(400, "invalid_mix", `Invalid mix (${v.code})`);
     }
     requestedMix = v.mix;
+    // Gate CREATION of a mix, not a single-flavor composition: a one-entry `mix` is
+    // the `flavor` path in new clothes, so the whole refactor ships with mixing off.
+    if (requestedMix.length > 1 && !mixEnabledForCustomer(ctx.customerId)) {
+      throw new ApiHttpError(403, "mix_not_enabled", "Flavor mix is not available for this account");
+    }
     const sum = mixBoxCount(requestedMix);
     if (body.boxCount !== undefined && body.boxCount !== sum) {
       throw new ApiHttpError(
@@ -1214,6 +1220,9 @@ function synthesizePostMutationSub(
     currentVariantId: dom?.variantId ?? "",
     boxCount: plan.boxCount,
     ...mix,
+    // Same rule as mapToSubscription, so a synthetic response never disagrees with a
+    // real read about whether the builder is available.
+    canEditMix: plan.boxCount >= 2 && mixEnabledForCustomer(customerId),
     frequency,
     frequencyLabel: expectedInterval,
     flavor: flavorLabel(dom?.flavor ?? DEFAULT_FLAVOR),
@@ -1254,6 +1263,7 @@ function synthesizeNoOpSub(
     currentVariantId: dom?.variantId ?? "",
     boxCount: plan.boxCount,
     ...mix,
+    canEditMix: plan.boxCount >= 2 && mixEnabledForCustomer(customerId),
     frequency,
     frequencyLabel: frequency,
     flavor: flavorLabel(dom?.flavor ?? DEFAULT_FLAVOR),

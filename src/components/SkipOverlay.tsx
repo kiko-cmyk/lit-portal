@@ -189,6 +189,7 @@ export function SkipOverlay({
           mainItemId: subscription.mainItemId,
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
+          expectedLineIds: subscription.lines?.map((l) => l.itemId),
           // Skip retention: move the next order to (last charge + new interval)
           // so spacing actually pushes the imminent order later, rather than
           // preserving the current date the way a normal plan change does.

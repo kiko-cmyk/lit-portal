@@ -101,6 +101,12 @@ export interface Subscription {
   /** Σ quantity × unit price over recurring lines, in cents. Compared against the
    *  tier price to detect Seal dropping a custom price. */
   chargeTotalCents: number;
+  /**
+   * Server-computed gate for the mix builder: feature flag AND boxCount >= 2 AND the
+   * subscription is active. One field so the FE needs no NEXT_PUBLIC flag and the
+   * cohort can change with an env edit. Reading an existing mix is NOT gated by this.
+   */
+  canEditMix: boolean;
   frequency: Frequency;
   frequencyLabel: string;
   /** DOMINANT flavor label. Unchanged for a single-flavor sub. */

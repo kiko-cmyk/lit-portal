@@ -31,6 +31,7 @@ const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").t
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { compositionLabel } from "@/lib/mix";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref } from "@/lib/portal-link";
 import type {
@@ -378,6 +379,7 @@ export default function HubPage() {
             <NextBoxHero
               shipDate={nextShipDate}
               flavor={sub.flavor}
+              composition={sub.composition}
               variant={variant}
               cutoffEndsAt={cutoffEndsAt}
               onUndoSkip={justSkipped ? handleUndoSkip : undefined}
@@ -421,11 +423,20 @@ export default function HubPage() {
               />
               <QuickActionButton
                 icon={QAIcons.Flavor}
-                label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
-                sub={t({
-                  en: "Salty Lemon or Salty Watermelon",
-                  es: "Salty Lemon o Salty Watermelon",
-                })}
+                label={
+                  (sub.composition?.length ?? 0) > 1
+                    ? t({ en: "My flavors", es: "Mis sabores" })
+                    : t({ en: "Switch flavor", es: "Cambiar sabor" })
+                }
+                sub={
+                  // Never hardcode the flavour names: that copy goes stale the day a
+                  // third flavour ships.
+                  (sub.composition?.length ?? 0) > 1
+                    ? compositionLabel(sub.composition!)
+                    : sub.canEditMix
+                      ? t({ en: "One flavor or a mix", es: "Un sabor o una mezcla" })
+                      : t({ en: "Choose your flavor", es: "Elige tu sabor" })
+                }
                 onClick={() => setShowFlavor(true)}
                 disabled={sub.withinCutoff}
               />
