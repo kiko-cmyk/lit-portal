@@ -38,9 +38,17 @@
  * NOTE: the 5-day lookback is shared by every bucket. Two buckets whose windows
  * sit closer than the lookback are still safe (dedup filters by template_id), but
  * if the lookback ever grows, re-check it against every bucket's cadence.
+ *
+ * FAILURE IS INVISIBLE WITHOUT THE ALERTS. A cron has no customer to complain and
+ * no `withCustomer` wrapper (that is where the rest of the app's Slack alerting
+ * lives), so a Seal 5xx that survives the retries, a dedup query error, or Klaviyo
+ * rejecting every single fire all end as a 500 that only exists in the Vercel logs.
+ * Hence the three alerts below: the run died, the run sent nothing, or it sent but
+ * could not record it (risk of re-sending). They are AWAITED — see alert.ts.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { alertSlackErrorAwaited } from "./alert";
 import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
 import { klaviyo } from "./klaviyo";
@@ -78,6 +86,8 @@ export type RenewalReminderConfig = {
   toH: number;
   /** Log prefix, e.g. "renewal-reminder 48h". */
   label: string;
+  /** Route path, for the Slack alerts. */
+  path: string;
   /**
    * Send the saved shipping address in the event. Only the 7d email prints it
    * (its whole point is "confirm your address before we ship"); the 48h email
@@ -147,6 +157,25 @@ export async function runRenewalReminder(
   // against the real book without emailing anyone or burning its dedup rows.
   const dryRun = isDryRunRequest(req);
 
+  try {
+    return await runBucket(cfg, dryRun);
+  } catch (err) {
+    // Still re-thrown after alerting, so Vercel marks the run as failed.
+    await alertSlackErrorAwaited({
+      path: cfg.path,
+      code: "renewal_reminder_failed",
+      msg:
+        `${cfg.label} murió: ${err instanceof Error ? err.message : String(err)}. ` +
+        `Nadie recibió aviso en esta tirada; la cola de la ventana lo reintenta mañana.`,
+    });
+    throw err;
+  }
+}
+
+async function runBucket(
+  cfg: RenewalReminderConfig,
+  dryRun: boolean,
+): Promise<NextResponse> {
   const sb = supabaseAdmin();
   const now = Date.now();
   const lower = now + cfg.fromH * H;
@@ -302,6 +331,27 @@ export async function runRenewalReminder(
       }
     });
     await Promise.all(wave);
+  }
+
+  // A run that scanned fine and emailed nobody looks identical to a quiet day in
+  // the logs, so say it out loud.
+  if (pending.length > 0 && fired === 0) {
+    await alertSlackErrorAwaited({
+      path: cfg.path,
+      code: "renewal_reminder_no_fires",
+      msg:
+        `${cfg.label}: ${pending.length} suscripción(es) tocaban aviso y Klaviyo rechazó TODAS. ` +
+        `Nadie recibió email en esta tirada.`,
+    });
+  }
+  if (logFailures > 0) {
+    await alertSlackErrorAwaited({
+      path: cfg.path,
+      code: "renewal_reminder_dedup_write_failed",
+      msg:
+        `${cfg.label}: disparados ${fired}, pero ${logFailures} insert(s) en email_logs fallaron. ` +
+        `Esas subs pueden recibir el aviso OTRA VEZ en la siguiente tirada.`,
+    });
   }
 
   return NextResponse.json({

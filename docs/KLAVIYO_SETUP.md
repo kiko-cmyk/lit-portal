@@ -20,6 +20,9 @@ El cliente Klaviyo (`src/lib/klaviyo.ts`) llama a `klaviyo.trackEvent(name, emai
 | `winback_d30` | Cron 30 días post-cancel (TODO: implementar cron) | — |
 | `first_login_completed` | Cliente cierra el welcome takeover | `whatsappOptIn`, `language` |
 | `drops_earned` | Webhook `fulfillments/create` por cada box enviado | `amount`, `action`, `metadata` |
+| `subscription_renewal_reminder` | Los dos crons pre-cobro, 48h y 7 días antes (ver § 2.7) | `hoursBefore`, `sealSubscriptionId`, `nextShipDate`, `nextShipDateLabel`, `boxCount`, `frequency`, `flavor`, `locale`, `shippingAddress` (solo 7 días) |
+
+> Esta tabla NO es el inventario completo: el union `KlaviyoEvent` de `src/lib/klaviyo.ts` es la fuente de verdad. Sin documentar aquí todavía: `skip_flow_started`, `skip_retained`, `subscription_charge_now`, `retention_discount_accepted`, `email_change_requested`.
 
 > Nota: hoy mismo el código tiene los wrappers listos pero **pocos endpoints llaman a `trackEvent`** todavía. Hay que añadir las llamadas en cada endpoint relevante. Lo dejo pendiente como un sweep rápido cuando los flows estén creados.
 

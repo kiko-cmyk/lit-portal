@@ -34,6 +34,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     fromH: 132,
     toH: 180,
     label: "renewal-reminder 7d",
+    path: "/api/cron/renewal-reminder-7d",
     withShippingAddress: true,
   });
 }
