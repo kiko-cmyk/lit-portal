@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
 import { compositionLabel, shortLabel } from "@/lib/mix";
-import { BOX_COUNT_BY_VARIANT, type FlavorKey, flavorKeyForVariant } from "@/lib/seal-plans";
+import { BOX_COUNT_BY_VARIANT, type FlavorKey, flavorKeyForVariant, FREQUENCY_BY_SELLING_PLAN } from "@/lib/seal-plans";
 import { klaviyo } from "@/lib/klaviyo";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -228,6 +228,9 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     // pack × 1, 1-box × N (a mix), pack × N, and a portal-created mix.
     const subLines = payload.line_items.filter((li) => li.selling_plan_allocation);
     const main = subLines[0] ?? payload.line_items[0];
+    const planId = main?.selling_plan_allocation?.selling_plan?.id
+      ? String(main.selling_plan_allocation.selling_plan.id)
+      : null;
     const knownLines = subLines.filter(
       (li) => BOX_COUNT_BY_VARIANT[String(li.variant_id)] !== undefined,
     );
@@ -247,6 +250,11 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     const composition = compositionFromOrderLines(subLines);
     const isMix = composition.length > 1;
     const planName = main?.selling_plan_allocation?.selling_plan?.name ?? null;
+    // Cadence as our own code ("3mo"), not Seal's plan NAME. The name is raw Spanish
+    // from the Seal admin ("Envío 3 meses") and has been renamed three times, so a
+    // template can't branch on it — and an English email can't print it. With the code,
+    // both language templates use the same mapping the 7-day reminder already uses.
+    const frequency = planId ? FREQUENCY_BY_SELLING_PLAN[planId] ?? null : null;
     // A subscription order has at least one line item with a selling plan.
     // Exposed as a clean boolean so Klaviyo flows can branch on subscription
     // vs one-time purchases without parsing plan_label (e.g. the
@@ -273,6 +281,8 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
         // Structured, so the template can branch and list the flavors.
         is_mix: isMix,
         flavor_mix: composition.map((c) => ({ flavor: shortLabel(c.flavor), boxes: c.boxes })),
+        // "15d" | "1mo" | … | "6mo", or null for a legacy/unmapped plan.
+        frequency,
         total: payload.total_price,
         currency: payload.currency,
       })
