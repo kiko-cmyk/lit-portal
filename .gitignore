@@ -44,3 +44,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Snapshots de scripts/probe-mix.mjs (contienen datos de cliente)
+.probe-mix/

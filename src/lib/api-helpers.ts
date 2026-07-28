@@ -8,6 +8,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackError } from "./alert";
+import { dryRunAllowedInProdFor } from "./flags";
 import { UpstreamTimeoutError } from "./http-timeout";
 import { hashSessionId } from "./session";
 import { AppProxyAuthError, parseAuthRequest, type AppProxyContext } from "./shopify-app-proxy";
@@ -236,9 +237,23 @@ export function dryRunAllowed(): boolean {
  * Accepts it either in the JSON body (`{ dryRun: true }`) or as the `__dry_run`
  * query param (forwarded by the FE api-client alongside `__dev_customer`).
  */
-export function isDryRunRequest(req: NextRequest, body?: { dryRun?: boolean }): boolean {
-  if (!dryRunAllowed()) return false;
-  if (body?.dryRun === true) return true;
-  const v = new URL(req.url).searchParams.get("__dry_run");
-  return v === "1" || v === "true";
+export function isDryRunRequest(
+  req: NextRequest,
+  body?: { dryRun?: boolean },
+  /**
+   * Customer id, to allow dry-run in PRODUCTION for an allowlisted cohort.
+   *
+   * The portal has no staging (changes go straight to production and are tested in
+   * the real portal), so this is the only way to walk the real UI end to end without
+   * writing to Seal. Restricted to the mix allowlist — never to everyone — so it can
+   * never become a switch that silently turns every customer's change into a no-op.
+   */
+  customerId?: string,
+): boolean {
+  const requested =
+    body?.dryRun === true ||
+    ["1", "true"].includes(new URL(req.url).searchParams.get("__dry_run") ?? "");
+  if (!requested) return false;
+  if (dryRunAllowed()) return true;
+  return customerId ? dryRunAllowedInProdFor(customerId) : false;
 }

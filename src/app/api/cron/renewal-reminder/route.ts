@@ -18,6 +18,9 @@ import { runRenewalReminder } from "@/lib/renewal-reminder";
  * the window when its charge is 36-60h out, so the primary reminder lands ~48h
  * before. The window extends down to +12h as a self-healing catch-up tail:
  *   next charge in [now+12h, now+60h)  → fire once (dedup handles the overlap).
+ *
+ * This bucket also carries the mix price-drift assertion: it is the last full
+ * scan of the Seal book before the card is hit.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   return runRenewalReminder(req, {
@@ -27,5 +30,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     toH: 60,
     label: "renewal-reminder 48h",
     path: "/api/cron/renewal-reminder",
+    checkMixPrice: true,
   });
 }

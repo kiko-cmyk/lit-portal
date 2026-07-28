@@ -10,7 +10,7 @@ El cliente Klaviyo (`src/lib/klaviyo.ts`) llama a `klaviyo.trackEvent(name, emai
 
 | Event name (metric) | Cuándo se dispara | Properties |
 |---|---|---|
-| `confirmation_sent` | Tras primer order pagado (Shopify webhook `orders/paid`) | `boxCount`, `frequency`, `flavor`, `shipDate` |
+| `confirmation_sent` | Tras primer order pagado (Shopify webhook `orders/paid`) | `box_count`, `sachets`, `plan_label`, `flavor`, `is_subscription`, `selling_plan_name`, `is_mix`, `flavor_mix`, `total`, `currency` |
 | `tier_unlocked` | Primera vez que cliente cruza 300 lifetime Drops | `dropsBalance`, `earnedAt` |
 | `reward_claimed` | Cliente reclama Bottle/Merch/Event | `rewardId`, `merchOption?`, `remainingDrops` |
 | `subscription_skip` | Cliente skipea próximo box | `newNextShipDate` |
@@ -131,6 +131,53 @@ Para implementar en Klaviyo: usar **smart sending + frequency caps** en cada flo
 
 ---
 
+## 3.bis Mezcla de sabores: `is_mix`, `flavor_mix` y la pluralización (2026-07-28)
+
+`confirmation_sent` y `subscription_renewal_reminder` mandan dos props nuevas:
+
+| Prop | Qué es |
+|---|---|
+| `is_mix` | `true` cuando la suscripción reparte sus cajas entre varios sabores |
+| `flavor_mix` | `[{flavor: "Lemon", boxes: 2}, {flavor: "Watermelon", boxes: 1}]` |
+
+**`flavor` sigue siendo utilizable tal cual**: con un solo sabor devuelve la etiqueta
+exacta de siempre ("Salty Lemon"), y con una mezcla devuelve `"2× Lemon · 1× Watermelon"`.
+Así que una plantilla que solo pinte `{{ event.flavor }}` ya funciona con mezclas. Los
+segmentos que filtren por `flavor` con igualdad exacta sí conviene revisarlos.
+
+**PLURALIZACIÓN, importante.** `box_count` estaba mal: el webhook sumaba `quantity`, y el
+modelo LIT pone las cajas en la variante con `quantity: 1`, así que **siempre valía 1** y el
+email decía "1 CAJA / 30 sobres" a todo suscriptor de más de una caja. Al arreglarlo, una
+plantilla que hardcodee el singular pasa a decir "3 CAJA". Hay que envolverlo:
+
+```
+{{ event.box_count|default:1 }} CAJA{% if event.box_count > 1 %}S{% endif %}
+{{ event.box_count|default:1 }} BOX{% if event.box_count > 1 %}ES{% endif %}
+SABOR{% if event.is_mix %}ES{% endif %}
+FLAVOR{% if event.is_mix %}S{% endif %}
+```
+
+Los dos cambios son **compatibles hacia atrás**: `is_mix` no existe hasta que se despliega
+el código de la mezcla y un valor indefinido es falsy, y `box_count > 1` es falso hoy porque
+siempre vale 1. Se pueden aplicar a las plantillas ANTES de desplegar el código.
+
+### Qué plantillas están realmente vivas
+
+Ojo: `scripts/klaviyo-upload-templates.mjs` sube plantillas llamadas
+"LIT — Confirmation Email EN/ES" que **no son las que se envían**. El flow que dispara
+`confirmation_sent` es **"Email: Suscripción - Bienvenida"** (`UAH3ug`, live), con un split
+por `$locale_language` y estas dos plantillas:
+
+| Idioma | Template id | Nombre en Klaviyo |
+|---|---|---|
+| EN | `Ty5ZeT` | 2026-06-30 11:32 LIT - Bienvenida EN (inline) |
+| ES | `VReESZ` | 2026-06-30 11:33 LIT - Bienvenida ES (inline) |
+
+El id `Utdb9S` que aparecía más abajo en este documento **ya no existe** (verificado
+2026-07-28). Antes de editar una plantilla, resolver el flow y su `template_id` como aquí.
+
+---
+
 ## 4. Plantillas HTML
 
 El email de confirmación tiene su HTML hi-fi en:
@@ -165,7 +212,7 @@ Cuando subas a Klaviyo: copia el HTML, reemplaza tokens estáticos por merge tag
 
 ## ✅ Estado actual (lo que YA hace el backend) — actualizado 2026-04-28
 
-- **Plantilla Confirmation Email subida via API** → ID `Utdb9S` (visible en Klaviyo → Email → Templates)
+- ~~**Plantilla Confirmation Email subida via API** → ID `Utdb9S`~~ **OBSOLETO**: ese id ya no existe (verificado 2026-07-28). Las plantillas vivas del flow de bienvenida son `Ty5ZeT` (EN) y `VReESZ` (ES); ver §3.bis.
 - **Llamadas `klaviyo.trackEvent` enchufadas** en:
   - `POST /api/subscription/skip` → `subscription_skip`
   - `POST /api/subscription/cancel` (step 4) → `subscription_cancelled`

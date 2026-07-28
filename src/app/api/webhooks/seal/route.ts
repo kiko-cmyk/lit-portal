@@ -290,7 +290,14 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
     seal_subscription_id: String(s.id),
     box_count: mapped.boxCount,
     frequency: normalizeFrequency(s.delivery_interval),
-    flavor: mapped.flavor,
+    // Flavor mix: the SUMMARY ("2× Lemon · 1× Watermelon"), not the dominant label.
+    // A single-flavor sub still yields "Salty Lemon" byte-for-byte, so no existing
+    // row churns and nothing reading this column changes behaviour.
+    flavor: mapped.flavorSummary,
+    composition: mapped.composition,
+    shape: mapped.shape,
+    line_count: mapped.lines.length,
+    charge_total_cents: mapped.chargeTotalCents,
     next_ship_date: mapped.nextShipDate,
     next_box_number: mapped.nextBoxNumber,
     status: mapStatus(s),

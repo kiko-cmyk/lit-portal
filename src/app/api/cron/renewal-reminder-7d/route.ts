@@ -26,6 +26,9 @@ import { runRenewalReminder } from "@/lib/renewal-reminder";
  *    and the email lands ~7 days out as the copy says; the tail only ever fires
  *    when the previous day's run (or its Klaviyo call) failed, in which case a
  *    reminder at 5.5-6.5 days beats no reminder at all.
+ *
+ * No mix price assertion here on purpose: the 48h bucket already runs it, closer
+ * to the charge. Running it twice would just double the Slack alerts.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   return runRenewalReminder(req, {

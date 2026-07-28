@@ -52,10 +52,16 @@ import { alertSlackErrorAwaited } from "./alert";
 import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
 import { klaviyo } from "./klaviyo";
+import { type FlavorComposition, shortLabel } from "./mix";
+import { priceForBoxCount } from "./pricing";
 import {
-  extractFlavor,
+  extractFlavorSummary,
   getBoxCount,
+  getChargeTotalCents,
+  getComposition,
+  getLines,
   getNextBillingAttempt,
+  getShape,
   mapStatus,
   normalizeFrequency,
   seal,
@@ -95,6 +101,8 @@ export type RenewalReminderConfig = {
    * many Klaviyo event payloads for nothing.
    */
   withShippingAddress?: boolean;
+  /** Run the mix price-drift assertion. 48h only — see the check itself. */
+  checkMixPrice?: boolean;
 };
 
 /** Shipping address exactly as the 7d template reads it (`event.shippingAddress.*`). */
@@ -116,7 +124,10 @@ type Candidate = {
   nextShipDateLabel: string; // "30 de julio"
   boxCount: number;
   frequency: string;
+  /** Mix summary when split; the plain flavor label otherwise. */
   flavor: string;
+  /** Boxes per flavor, so the email can list a mix. */
+  composition: FlavorComposition[];
   shippingAddress: ReminderAddress;
 };
 
@@ -137,6 +148,51 @@ function addressOf(s: SealSubscription): ReminderAddress {
     city: (s.s_city ?? "").trim(),
     country: code === "ES" ? "España" : (s.s_country ?? "").trim(),
   };
+}
+
+/**
+ * THE MONEY ASSERTION (flavor mix, 2026-07-28).
+ *
+ * A split subscription carries a CUSTOM per-unit price so a mix costs the same as
+ * the equivalent pure plan. If Seal ever refreshes item prices from Shopify (the
+ * merchant "propagate product price changes" action, an app update, a price edit),
+ * that override is silently replaced by the catalogue price and the customer is
+ * over-charged by ~25% with no signal anywhere in the portal.
+ *
+ * The 48h cron is the last scan of the WHOLE Seal book before every charge, so it
+ * is the cheapest possible early-warning: check the split subs and alert while
+ * there is still time to fix it before the card is hit. Deliberately NOT run by
+ * the 7d bucket — it would only double the Slack alerts for the same drift.
+ */
+async function assertMixPrice(
+  s: SealSubscription,
+  cfg: RenewalReminderConfig,
+  boxCount: number,
+  composition: FlavorComposition[],
+  chargeDate: string,
+): Promise<void> {
+  try {
+    const expected = Math.round((await priceForBoxCount(boxCount, composition[0].flavor)) * 100);
+    const actual = getChargeTotalCents(s);
+    // Tolerance = one cent per line: the tier split can legitimately land a cent
+    // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
+    if (Math.abs(actual - expected) > getLines(s).length) {
+      console.error(`[${cfg.label}] mix price drift`, {
+        sealId: s.id, actual, expected, boxCount, charge: chargeDate,
+      });
+      await alertSlackErrorAwaited({
+        path: cfg.path,
+        code: "mix_price_drift",
+        msg:
+          `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
+          `Seal may have refreshed the item prices and dropped our per-unit price. ` +
+          `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
+      });
+    }
+  } catch (e) {
+    // Never let the price check stop the reminder from going out.
+    console.warn(`[${cfg.label}] price check failed for sub ${s.id}:`, e);
+  }
 }
 
 export async function runRenewalReminder(
@@ -195,15 +251,25 @@ async function runBucket(
     if (Number.isNaN(t) || t < lower || t >= upper) continue;
     const email = s.email?.trim();
     if (!email) continue;
+    const boxCount = getBoxCount(s);
+    const composition = getComposition(s);
+
+    if (cfg.checkMixPrice && getShape(s) === "split") {
+      await assertMixPrice(s, cfg, boxCount, composition, next.date);
+    }
+
     candidates.push({
       sealId: String(s.id),
       email,
       shipDate: next.date.slice(0, 10),
       nextShipDate: next.date,
       nextShipDateLabel: formatShipDateEs(next.date),
-      boxCount: getBoxCount(s),
+      boxCount,
       frequency: normalizeFrequency(s.delivery_interval),
-      flavor: extractFlavor(s),
+      // The mix summary, so the email names both flavors. A single flavor yields
+      // the same string extractFlavor always returned.
+      flavor: extractFlavorSummary(s),
+      composition,
       shippingAddress: addressOf(s),
     });
   }
@@ -279,6 +345,8 @@ async function runBucket(
     boxCount: c.boxCount,
     frequency: c.frequency,
     flavor: c.flavor,
+    is_mix: c.composition.length > 1,
+    flavor_mix: c.composition.map((x) => ({ flavor: shortLabel(x.flavor), boxes: x.boxes })),
     locale,
     ...(cfg.withShippingAddress ? { shippingAddress: c.shippingAddress } : {}),
   });
