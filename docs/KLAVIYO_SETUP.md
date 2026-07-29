@@ -192,19 +192,57 @@ El camino que sí funciona, y que hay que repetir para cualquier cambio futuro:
 3. **Por UI**, asignar esa plantilla al mensaje del flow. Klaviyo genera entonces una copia
    viva con id nuevo (así nació `SfinKC` desde `RT2Kv3` en el recordatorio de 7 días).
 
-Plantillas de biblioteca de la bienvenida, rehechas 2026-07-28 con el estilo de maquetación
-del resto de emails (480px, Clash Display + Barlow, hero con foto, bloque de datos oscuro):
+Plantillas de biblioteca de la bienvenida, rehechas 2026-07-29. Conservan la **estructura de
+bloques** de la original (logo + nº de pedido, hero de tipografía sin foto, tarjeta
+TU SUSCRIPCIÓN con la rejilla PLAN | SABOR, tarjeta nutricional en tan, tarjeta de área
+personal, CTA de ancho completo, pie JOIN THE LIT MOVEMENT) con los tokens del resto de
+emails: 480px, Clash Display + Barlow, hueso `#F8F9F2`, tinta `#323743`, coral `#eb586b`
+como acento, tan `#CFBFAD`, amarillo `#ebee62`.
 
 | Idioma | Template id de biblioteca | Mensaje del flow al que va |
 |---|---|---|
-| ES | `S367L2` | acción `106246515` de `UAH3ug` |
-| EN | `YzLBbj` | acción `105935906` de `UAH3ug` |
+| ES | `S367L2` | mensaje `RzQWTf`, acción `106246515` de `UAH3ug` |
+| EN | `YzLBbj` | mensaje `WjGaJ5`, acción `105935906` de `UAH3ug` |
 
 Qué arreglan además del estilo: la pluralización de `box_count`, la mezcla de sabores, la
 cadencia (`frequency`, prop nueva) y **la fecha de entrega inventada**. La plantilla vieja
 decía "Tu primera caja llega sobre el {{ event.delivery_date|default:'pronto' }}" y
 `confirmation_sent` **nunca ha mandado `delivery_date`**, así que todos los clientes leían
 "llega sobre el pronto". Las nuevas no prometen fecha: dicen que avisamos al salir del almacén.
+También condicionan el saludo: la original imprimía "Te damos la bienvenida, ." cuando el
+perfil no tenía nombre, y leía `first_name` del perfil en vez de `event.first_name`, que es
+el que manda el webhook.
+
+### Tres cosas que se aprendieron maquetando estas, y valen para cualquier email de LIT
+
+**1. El botón va en amarillo, no en coral.** `#F8F9F2` sobre `#eb586b` da **3,23:1**, por
+debajo del 4,5:1 que pide WCAG AA para 14px semibold (el umbral de "texto grande" empieza en
+18,66px bold). Y no es solo accesibilidad: `brand/identity.md` marca el Bold Yellow `#ebee62`
+como **el** color de CTA, y es lo que usan la plantilla original y el recordatorio de 7 días.
+Tinta sobre amarillo da **9,61:1**. El coral se queda para los eyebrows, donde sobre tinta da
+3,48:1 y le basta con 3:1 por ser texto pequeño de refuerzo.
+
+**2. El color de los enlaces del pie tiene que ir inline.** `{% unsubscribe %}` genera
+`<a class="unsubscribe-link">` **sin estilo inline**, así que el color solo se puede poner por
+CSS en el `<head>`, y hay clientes que eliminan el `<style>`: entonces el enlace sale en el
+azul por defecto del cliente, ilegible sobre el pie oscuro. Verificado contra el renderizador
+de Klaviyo que estas dos formas devuelven el **mismo** placeholder que la etiqueta oficial, y
+sí admiten estilo propio:
+
+```html
+<a href="{% unsubscribe_link %}" style="color:#A2A7B2;text-decoration:underline;">Cancelar suscripción</a>
+<a href="{% manage_preferences_link %}" style="color:#A2A7B2;text-decoration:underline;">Preferencias</a>
+```
+
+Ojo: `{{ unsubscribe_link }}` con llaves dobles devuelve `href=""`. No usarla.
+
+**3. Clash Display necesita `word-spacing` explícito.** Su espacio entre palabras es muy
+estrecho y en mayúsculas se lee "1BOX" en vez de "1 BOX", o "SALTYLEMON". Todo texto en Clash
+con más de una palabra lleva `word-spacing:0.14em`.
+
+Y una de maquetación en tabla: dos columnas al 50% sin canal se tocan en cuanto una de las dos
+parte de línea. Con celdas al 46% más un `<td width="18">` separador aguanta de 320 a 414px,
+que es donde se lee este email.
 
 ---
 
