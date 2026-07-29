@@ -49,6 +49,7 @@ function useSwitchAccount(): { busy: boolean; go: () => void } {
         clearSelectedSubscription();
         try {
           window.localStorage.removeItem("lit_sub_count_hint");
+          window.localStorage.removeItem("lit_account_only_hint");
         } catch {
           // ignore
         }

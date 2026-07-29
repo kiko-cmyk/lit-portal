@@ -257,6 +257,27 @@ class ShopifyAdminClient {
     return data.customer?.email ?? null;
   }
 
+  /**
+   * Email + tags in one query. Sibling of `getCustomerEmail` (which has 26 call
+   * sites and stays untouched): only the callers that need to know whether this
+   * is a wholesale customer pay for the extra field. `tags` is where the B2B
+   * cohort lives — LIT's store is non-Plus, so there are no Shopify Companies
+   * and the whole B2B experience is gated on the customer tag `B2B`.
+   */
+  async getCustomerEmailAndTags(
+    customerId: string,
+  ): Promise<{ email: string | null; tags: string[] }> {
+    const gid = customerId.startsWith("gid://")
+      ? customerId
+      : `gid://shopify/Customer/${customerId}`;
+    const data = await this.graphql<{
+      customer: { email: string; tags: string[] } | null;
+    }>(`query getEmailTags($id: ID!) { customer(id: $id) { email tags } }`, {
+      id: gid,
+    });
+    return { email: data.customer?.email ?? null, tags: data.customer?.tags ?? [] };
+  }
+
   async getCustomer(customerId: string): Promise<{
     id: string;
     email: string;
@@ -265,6 +286,21 @@ class ShopifyAdminClient {
     phone: string | null;
     createdAt: string;
     numberOfOrders: string;
+    tags: string[];
+    defaultAddress: {
+      company: string | null;
+      address1: string | null;
+      address2: string | null;
+      city: string | null;
+      zip: string | null;
+      province: string | null;
+      provinceCode: string | null;
+      country: string | null;
+      countryCode: string | null;
+      phone: string | null;
+    } | null;
+    /** `lit_b2b.tax_id` — NIF/CIF. Only ever written from the B2B account form. */
+    taxId: string | null;
   } | null> {
     const gid = customerId.startsWith("gid://")
       ? customerId
@@ -278,16 +314,39 @@ class ShopifyAdminClient {
         phone: string | null;
         createdAt: string;
         numberOfOrders: string;
+        tags: string[];
+        defaultAddress: {
+          company: string | null;
+          address1: string | null;
+          address2: string | null;
+          city: string | null;
+          zip: string | null;
+          province: string | null;
+          provinceCode: string | null;
+          country: string | null;
+          countryCode: string | null;
+          phone: string | null;
+        } | null;
+        metafield: { value: string } | null;
       } | null;
     }>(
+      // `tags`, `defaultAddress` and the fiscal metafield ride along in the query
+      // this route already makes (no extra round trip) so the Account page can
+      // tell a wholesale customer apart and show their billing details.
       `query getCustomer($id: ID!) {
          customer(id: $id) {
-           id email firstName lastName phone createdAt numberOfOrders
+           id email firstName lastName phone createdAt numberOfOrders tags
+           defaultAddress {
+             company address1 address2 city zip province provinceCode country countryCode phone
+           }
+           metafield(namespace: "lit_b2b", key: "tax_id") { value }
          }
        }`,
       { id: gid },
     );
-    return data.customer ?? null;
+    if (!data.customer) return null;
+    const { metafield, ...rest } = data.customer;
+    return { ...rest, taxId: metafield?.value ?? null };
   }
 
   /**
@@ -823,6 +882,13 @@ class ShopifyAdminClient {
       firstName?: string;
       lastName?: string;
       phone?: string;
+      /**
+       * Trading name. Only the B2B account form sends it (a wholesale customer's
+       * address is the company's); left undefined by the subscription address
+       * sync, and `undefined` fields are omitted from the mutation input, so an
+       * existing company is never blanked by a subscriber saving their address.
+       */
+      company?: string;
     },
   ): Promise<void> {
     const gid = customerId.startsWith("gid://") ? customerId : `gid://shopify/Customer/${customerId}`;
@@ -836,6 +902,7 @@ class ShopifyAdminClient {
       firstName: address.firstName,
       lastName: address.lastName,
       phone: address.phone,
+      company: address.company,
     };
 
     // Edit the existing default in place when there is one. Creating a fresh

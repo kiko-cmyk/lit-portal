@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { provinceFromEsPostalCode } from "@/lib/es-provinces";
+import { isB2BCustomer } from "@/lib/flags";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { shopifyAdmin, ShopifyUserError } from "@/lib/shopify-admin";
@@ -24,6 +26,9 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
 
   const lang: "en" | "es" = languagePref === "es" || languagePref === "en" ? languagePref : "en";
 
+  const isB2B = isB2BCustomer(c.tags);
+  const addr = c.defaultAddress;
+
   return {
     name: [c.firstName, c.lastName].filter(Boolean).join(" ").trim() || c.email,
     email: c.email,
@@ -32,6 +37,29 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
     boxesReceived: parseInt(c.numberOfOrders, 10) || 0,
     languagePref: lang,
     tierEarned: false, // TODO when Supabase: read drops_balances.tier_earned_at
+    isB2B,
+    // Only shipped for wholesale accounts: for a subscriber the address that
+    // matters is the Seal one, and sending a second address would invite the
+    // Account page to edit the wrong record.
+    business: isB2B
+      ? {
+          company: addr?.company || null,
+          taxId: c.taxId,
+          address1: addr?.address1 ?? null,
+          address2: addr?.address2 ?? null,
+          city: addr?.city ?? null,
+          postalCode: addr?.zip ?? null,
+          // Prefer what Shopify canonicalised; fall back to deriving it from the
+          // postal code so the field is never blank on an address typed at
+          // checkout without one.
+          province:
+            addr?.province ??
+            (addr?.zip ? provinceFromEsPostalCode(addr.zip)?.name ?? null : null),
+          country: addr?.country ?? null,
+          countryCode: addr?.countryCode ?? null,
+          phone: addr?.phone ?? null,
+        }
+      : null,
   };
 });
 

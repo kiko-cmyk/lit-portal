@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import {
   api,
@@ -10,15 +10,29 @@ import {
   setSelectedSubscription,
 } from "@/lib/api-client";
 import { SubscriptionChooser } from "@/components/SubscriptionChooser";
-import { activeRoute } from "@/lib/portal-link";
+import { useLangValue } from "@/lib/i18n";
+import { activeRoute, portalHref } from "@/lib/portal-link";
 import type { Subscription } from "@/lib/types";
 
 /**
  * Lets any page (e.g. Account) offer a "switch subscription" control that
  * re-opens the chooser, and know whether the customer even has >1 sub.
+ *
+ * `accountOnly` is the wholesale mode: a B2B customer with no subscription has
+ * nothing to manage under Suscripción or Colección, so the nav collapses to
+ * Cuenta and those routes bounce. Kept in this context because the gate already
+ * owns the one fetch every entry makes.
  */
-type SubscriptionSwitch = { canSwitch: boolean; openChooser: () => void };
-const SwitchContext = createContext<SubscriptionSwitch>({ canSwitch: false, openChooser: () => {} });
+type SubscriptionSwitch = {
+  canSwitch: boolean;
+  openChooser: () => void;
+  accountOnly: boolean;
+};
+const SwitchContext = createContext<SubscriptionSwitch>({
+  canSwitch: false,
+  openChooser: () => {},
+  accountOnly: false,
+});
 export function useSubscriptionSwitch(): SubscriptionSwitch {
   return useContext(SwitchContext);
 }
@@ -31,6 +45,10 @@ export function useSubscriptionSwitch(): SubscriptionSwitch {
 // below): a known multi-sub customer keeps the switch instead of being silently
 // collapsed to single.
 const COUNT_HINT_KEY = "lit_sub_count_hint";
+// Same trick for wholesale mode: without it a returning B2B customer would see
+// one frame of the full three-tab nav (and of Mi LIT, if they open a bookmark)
+// before the fetch resolves.
+const B2B_HINT_KEY = "lit_account_only_hint";
 
 function readHint(): "single" | "multi" | null {
   try {
@@ -44,6 +62,23 @@ function readHint(): "single" | "multi" | null {
 function writeHint(multi: boolean) {
   try {
     window.localStorage.setItem(COUNT_HINT_KEY, multi ? "multi" : "single");
+  } catch {
+    // ignore
+  }
+}
+
+function readAccountOnlyHint(): boolean {
+  try {
+    return window.localStorage.getItem(B2B_HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeAccountOnlyHint(accountOnly: boolean) {
+  try {
+    if (accountOnly) window.localStorage.setItem(B2B_HINT_KEY, "1");
+    else window.localStorage.removeItem(B2B_HINT_KEY);
   } catch {
     // ignore
   }
@@ -78,7 +113,7 @@ function isTransient(err: unknown): boolean {
 const GATE_ATTEMPT_TIMEOUT_MS = 8_000;
 const GATE_TOTAL_BUDGET_MS = 25_000;
 
-async function loadSubs(): Promise<Subscription[]> {
+async function loadSubs(): Promise<{ subs: Subscription[]; isB2B: boolean }> {
   const delays = [600, 1200, 2000, 3000];
   const startedAt = Date.now();
   let lastErr: unknown;
@@ -86,10 +121,11 @@ async function loadSubs(): Promise<Subscription[]> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), GATE_ATTEMPT_TIMEOUT_MS);
     try {
-      const d = await api<{ subscriptions: Subscription[] }>("/api/subscriptions", {
-        signal: ctrl.signal,
-      });
-      return d.subscriptions ?? [];
+      const d = await api<{ subscriptions: Subscription[]; isB2B?: boolean }>(
+        "/api/subscriptions",
+        { signal: ctrl.signal },
+      );
+      return { subs: d.subscriptions ?? [], isB2B: d.isB2B === true };
     } catch (err) {
       lastErr = err;
       if (
@@ -147,18 +183,34 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   // (2026-07-29)
   const pathname = usePathname();
   const bypass = activeRoute(pathname) === "signedOut";
+  const router = useRouter();
+  // The gate renders INSIDE LangProvider (locale layout), so the locale is known
+  // here and the B2B redirect keeps the customer in their language.
+  const lang = useLangValue();
 
   const [phase, setPhase] = useState<"loading" | "children" | "chooser">("loading");
   const [subs, setSubs] = useState<Subscription[]>([]);
   // Fallback flag: when the list couldn't be fetched, keep the switch alive for a
   // customer the hint says is multi-sub. Cleared/confirmed on a successful load.
   const [hintMulti, setHintMulti] = useState(false);
+  // Wholesale mode. Starts false and is set from the per-device hint in the same
+  // effect (and batch) as `phase`, so the first painted portal frame already has
+  // the right nav — NOT from a useState initialiser, which would read
+  // localStorage during render and hydrate differently from the server HTML.
+  const [accountOnly, setAccountOnly] = useState(false);
 
   const refresh = useCallback(async (): Promise<Subscription[]> => {
-    const list = await loadSubs();
+    const { subs: list, isB2B } = await loadSubs();
     setSubs(list);
     writeHint(list.length > 1);
     setHintMulti(list.length > 1);
+    // Only a B2B customer with NOTHING to manage gets the account-only portal.
+    // A partner who also happens to hold a personal subscription keeps the full
+    // portal: hiding it would take away the only place they can pause, skip or
+    // cancel something they are being charged for.
+    const only = isB2B && list.length === 0;
+    setAccountOnly(only);
+    writeAccountOnlyHint(only);
     // Stale-selection cleanup (audit 2026-07-06): if the stored pick is no
     // longer in the manageable list (customer cancelled that sub, or a previous
     // user of this browser left theirs), drop it. Without this, api-client keeps
@@ -178,6 +230,10 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
     // Instant decision for returning customers (avoids both a loading wait for
     // single-sub AND a portal flash for multi-sub).
     const hint = readHint();
+    // Batched with the setPhase below: a returning wholesale customer goes from
+    // the splash straight to the single-tab Cuenta, never through the retail nav.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (readAccountOnlyHint()) setAccountOnly(true);
     if (hint === "single") setPhase("children");
     else if (hint === "multi") {
       setHintMulti(true);
@@ -201,6 +257,15 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
     };
   }, [refresh, bypass]);
 
+  // Routes a wholesale customer may reach: Cuenta, the order detail that hangs
+  // off it, and the post-logout dead end. Anything else redirects to Cuenta.
+  const route = activeRoute(pathname);
+  const b2bBlocked =
+    accountOnly && !bypass && !(route === "account" || route === "orders" || route === "signedOut");
+  useEffect(() => {
+    if (b2bBlocked) router.replace(portalHref(lang, "account"));
+  }, [b2bBlocked, lang, router]);
+
   const openChooser = useCallback(() => {
     if (subs.length > 1) {
       setPhase("chooser");
@@ -215,6 +280,14 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   }, [subs.length, refresh]);
 
   if (bypass) return <>{children}</>;
+
+  // Wholesale customers have no Suscripción and no Colección: send them to
+  // Cuenta instead of rendering a surface whose every panel would be empty.
+  // This is UX, not authorisation — those pages are inert without a Seal sub
+  // (the Hub already answers `subscription_not_found` with its welcome state) —
+  // so a race or a failed fetch can only ever show the old behaviour, never
+  // leak anything.
+  if (b2bBlocked) return <GateSplash />;
 
   if (phase === "loading") return <GateSplash />;
 
@@ -239,7 +312,7 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   // and the mobile header pill on Hub/Account) so it never floats over the user
   // chip. The gate just provides the context; it renders no button of its own.
   return (
-    <SwitchContext.Provider value={{ canSwitch, openChooser }}>
+    <SwitchContext.Provider value={{ canSwitch, openChooser, accountOnly }}>
       {children}
     </SwitchContext.Provider>
   );
