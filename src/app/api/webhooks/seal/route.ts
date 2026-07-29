@@ -86,23 +86,42 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, dedup: true });
   }
 
-  let payload: { subscription?: SealSubscription } | unknown;
+  let payload: unknown;
   try {
     payload = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
+  // The subscription this event is about. See subFromPayload: Seal sends it FLAT,
+  // not wrapped in { subscription: … }, which is what every handler here assumed
+  // until 2026-07-29.
+  const sub = subFromPayload(payload);
+  if (!sub) {
+    // Nothing actionable. Loud, because until today this was the silent failure
+    // that made the entire webhook a no-op.
+    console.error("[seal-webhook] payload carries no resolvable subscription", {
+      topic: eventType,
+      keys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : typeof payload,
+    });
+    alertSlackError({
+      path: "/api/webhooks/seal",
+      code: "payload_shape_unrecognised",
+      msg: `El payload de "${eventType}" no trae una suscripción reconocible. Revisa webhook_log.payload: si Seal ha cambiado la forma, TODOS los handlers dejan de hacer nada en silencio.`,
+    });
+    return NextResponse.json({ ok: true, ignored: "no_subscription" });
+  }
+
   const topic = eventType.replace("/", ".");
   try {
     switch (topic) {
       case "subscription.created":
-        await syncSubscription(payload as { subscription: SealSubscription });
-        await applyReanchorIfPending((payload as { subscription?: SealSubscription }).subscription);
+        await syncSubscription(sub);
+        await applyReanchorIfPending(sub);
         break;
       case "subscription.updated":
-        await syncSubscription(payload as { subscription: SealSubscription });
-        await applyReanchorIfPending((payload as { subscription?: SealSubscription }).subscription);
+        await syncSubscription(sub);
+        await applyReanchorIfPending(sub);
         // A successful charge advances the schedule and fires subscription/updated,
         // so this is where we retire the cancel-flow 15%. This used to be the ONLY
         // place it could happen, because billing_attempt/succeeded wasn't
@@ -112,11 +131,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // charge has landed), so doing it twice is a no-op. Best-effort here: the
         // daily cron sweep is the guaranteed backstop, so a transient failure must
         // never fail the whole webhook.
-        await consumeRetentionDiscountSafe((payload as { subscription?: SealSubscription }).subscription);
+        await consumeRetentionDiscountSafe(sub);
         break;
       case "subscription.cancelled":
       case "subscription.expired":
-        await syncSubscription(payload as { subscription: SealSubscription });
+        await syncSubscription(sub);
+        // Tell the humans when Seal, not a customer and not us, killed the
+        // subscription because the card kept failing. 35 went this way in July
+        // 2026 (~987 €/month) and not one of them produced a signal anywhere:
+        // Seal's own admin notification for failed payments turns out not to
+        // reach us either (zero in 90 days of inbox).
+        //
+        // Detected from the `log` array, which is the only field that names the
+        // actor. `cancellation_reason` is empty on every cancellation we've
+        // stored, so it cannot be used for this.
+        notifyDunningCancelSafe(sub);
         break;
       // Four documented Seal topics that fell through to `default` until
       // 2026-07-28, i.e. a console.warn and nothing else. Seal's topic list is
@@ -135,9 +164,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // signal that the customer fixed the card we just emailed them about.
       case "subscription.resumed":
       case "subscription.reactivated":
-      case "subscription.payment_method_updated":
       case "subscription.shipping_address_updated":
-        await syncSubscription(payload as { subscription: SealSubscription });
+        await syncSubscription(sub);
+        break;
+      case "subscription.payment_method_updated":
+        await syncSubscription(sub);
+        // Closes the dunning loop. The flow triggered by `payment_failed` sends a
+        // last-chance email 48 h later, and this is the only signal that says
+        // "they already fixed it, stop". Filter the flow on it.
+        await trackPaymentFixedSafe(sub);
         break;
       // READ THIS BEFORE TRUSTING THIS CASE. Subscribed in Seal since 2026-07-23
       // (webhook id 129549), and it fires for an API pause but NOT for a customer
@@ -160,17 +195,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // than off this case. The transition guard means one pause produces exactly
       // one alert whichever topic (or both) happens to arrive.
       case "subscription.paused":
-        await syncSubscription(payload as { subscription: SealSubscription });
+        await syncSubscription(sub);
         break;
       case "billing_attempt.succeeded": {
         // Charge succeeded → next ship moved. Refresh the cache.
         // (The comment that used to sit here said this topic "isn't subscribed
         // today". It is now: 74 delivered between 2026-07-22 and 2026-07-27.)
-        const sub = await subFromBillingAttemptPayload(payload);
-        if (sub) {
-          await syncSubscription({ subscription: sub });
-          await consumeRetentionDiscountSafe(sub);
-        }
+        await syncSubscription(sub);
+        await consumeRetentionDiscountSafe(sub);
         break;
       }
       case "billing_attempt.failed": {
@@ -183,13 +215,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Order matters: refresh the cache BEFORE the trigger so a customer who
         // clicks through immediately sees current state, and keep the trigger
         // last so a Klaviyo problem can't cost us the cache update.
-        const sub = await subFromBillingAttemptPayload(payload);
-        if (sub) await syncSubscription({ subscription: sub });
-        const outcome = await fireDunningTrigger(
-          sub ?? undefined,
-          (payload as { billing_attempt?: { date?: string; error_message?: string | null } })
-            .billing_attempt,
-        );
+        await syncSubscription(sub);
+        // Seal calls the attempt `failed_billing_attempt` on this topic (and
+        // `processed_billing_attempt` on the succeeded one). Verified against a
+        // real payload 2026-07-29: { id, date, status: "error", completed_at,
+        // number_of_tries }. `number_of_tries` is the dunning counter, 1-4, which
+        // is what lets the email say how many chances are left before Seal
+        // cancels. There is no `error_message` on this object, so the copy has to
+        // stay generic about the cause.
+        const attempt = (payload as { failed_billing_attempt?: SealFailedAttempt })
+          .failed_billing_attempt;
+        // The gateway's own words are NOT on failed_billing_attempt. They are on
+        // the matching entry of the sub's `billing_attempts` array, which the same
+        // payload carries. Pull it across so Klaviyo can segment "expired card"
+        // from "gateway declined", which need different copy.
+        const gatewayMessage =
+          (sub.billing_attempts ?? []).find((a) => Number(a.id) === Number(attempt?.id))
+            ?.error_message || null;
+        const outcome = await fireDunningTrigger(sub, { ...attempt, error_message: gatewayMessage });
         // Do NOT discard the outcome. fireDunningTrigger never throws by design,
         // so without this a broken dunning path would return 200 and say nothing,
         // which is the exact failure mode this whole change exists to remove: the
@@ -204,6 +247,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               `Cobro fallido recibido y NO se avisó al cliente (${outcome.reason}). ` +
               `Seal cancela la suscripción al cuarto intento, quedan ~3 días. ` +
               `Sub ${sub?.id ?? "?"}.`,
+          });
+        }
+
+        // LAST-CHANCE ALERT to the humans (Juan, 2026-07-29). Not on every failed
+        // charge: there were 41 in a single morning, and an alert that fires 41
+        // times a day is an alert nobody reads. Only from the third try, because
+        // Seal cancels after the FOURTH, so this lands with roughly one day of
+        // margin to do something about it.
+        //
+        // `number_of_tries` is the whole reason this is possible, and we only know
+        // it exists because of the payload audit column.
+        const tries = attempt?.number_of_tries ?? 0;
+        if (tries >= 3) {
+          alertSlackNotice({
+            channel: "incidents",
+            icon: ":warning:",
+            title:
+              tries >= 4
+                ? "Suscripción a punto de cancelarse: CUARTO cobro fallido, Seal la cancela ya"
+                : "Suscripción en riesgo: tercer cobro fallido, Seal la cancela al cuarto (mañana)",
+            fields: {
+              seal_subscription_id: String(sub.id),
+              intento: `${tries} de 4`,
+              importe: `${sub.total_value ?? "?"} ${sub.currency ?? ""}`.trim(),
+              cadencia: sub.delivery_interval,
+              tarjeta: [sub.card_expiry_month, sub.card_expiry_year].filter(Boolean).join("/"),
+              aviso_al_cliente: outcome.fired
+                ? "enviado en este ciclo"
+                : `NO enviado (${outcome.reason})`,
+              siguiente_intento: attempt?.date ?? "?",
+            },
           });
         }
         break;
@@ -337,8 +411,8 @@ function safeEqual(a: string, b: string): boolean {
  * intent and stop. Re-reads live Seal state (the webhook payload may be a
  * mid-regeneration snapshot).
  */
-async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promise<void> {
-  const sealSubId = subFromPayload?.id;
+async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): Promise<void> {
+  const sealSubId = subFromEvent?.id;
   if (!sealSubId) return;
 
   const sb = supabaseAdmin();
@@ -397,47 +471,111 @@ async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promis
   console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved, from: firstDay });
 }
 
-/**
- * Get the subscription a `billing_attempt/*` event refers to.
- *
- * Seal's documented payload for the subscription topics is `{ subscription: … }`
- * and the billing_attempt topics were written here on the assumption that they
- * look the same. That assumption was never verified: the topic wasn't even
- * subscribed until 2026-07-22, and if the payload turned out to carry only the
- * attempt, `syncSubscription` would return early on `!s` and the whole handler
- * would be a silent no-op — the exact failure mode we're here to remove, just
- * one layer down.
- *
- * So: use the embedded subscription when it's there, otherwise take whatever id
- * the payload does carry and read the subscription from Seal. One extra GET on a
- * path that fires a handful of times a day, in exchange for the feature not
- * depending on an unverified payload shape.
- */
-async function subFromBillingAttemptPayload(payload: unknown): Promise<SealSubscription | null> {
-  const p = payload as {
-    subscription?: SealSubscription;
-    subscription_id?: number | string;
-    billing_attempt?: { subscription_id?: number | string };
-  };
-  if (p?.subscription?.id) return p.subscription;
+/** Seal's attempt object on billing_attempt/* payloads. Verified 2026-07-29. */
+interface SealFailedAttempt {
+  id?: number;
+  date?: string;
+  status?: string;
+  completed_at?: string;
+  /** 1-4. Seal cancels the subscription after the fourth failure. */
+  number_of_tries?: number;
+}
 
-  const rawId = p?.billing_attempt?.subscription_id ?? p?.subscription_id;
-  const id = Number(rawId);
-  if (!rawId || Number.isNaN(id)) {
-    console.warn("[seal-webhook] billing_attempt payload has no resolvable subscription", {
-      keys: p && typeof p === "object" ? Object.keys(p) : typeof p,
+/**
+ * The subscription an incoming Seal webhook is about.
+ *
+ * THE BUG THIS FIXES (2026-07-29). Every handler in this file used to read
+ * `payload.subscription`. Seal does not send that. It sends the subscription
+ * object FLAT at the top level: { id, email, status, items, billing_attempts,
+ * log, failed_billing_attempt, customer_id, … }. So `payload.subscription` was
+ * `undefined` on every event, `syncSubscription` returned on its `if (!s)` guard,
+ * and the ENTIRE webhook was a silent no-op for its whole life, for every topic.
+ *
+ * How we know, from webhook_log.payload (the audit column added the day before,
+ * which is the only reason this was findable):
+ *  - 59 of 59 stored payloads are flat. Zero have a nested `subscription` key.
+ *  - Mean handler time was 7-16 ms across every topic. A handler that really did
+ *    a Shopify GraphQL lookup plus a Supabase upsert cannot run in 9 ms.
+ *
+ * What silently never happened: the subscriptions cache was only ever written by
+ * Hub visits, the re-anchor only ever landed via the Hub drain and the cron, and
+ * the retention-discount retirement only ever via the daily sweep. Those all had
+ * independent backstops, which is exactly why nobody noticed for months.
+ *
+ * The nested shape is still accepted first, in case Seal ever ships what its docs
+ * imply, or a future payload wraps it.
+ */
+function subFromPayload(payload: unknown): SealSubscription | null {
+  const p = payload as { subscription?: SealSubscription } & Partial<SealSubscription>;
+  if (p?.subscription?.id) return p.subscription;
+  // Flat shape: require BOTH id and email so a stray object can't be mistaken for
+  // a subscription. Every real payload has both.
+  if (p?.id && p?.email) return p as SealSubscription;
+  return null;
+}
+
+/**
+ * The customer updated their payment method. Fire it into Klaviyo so the dunning
+ * flow can filter out anyone who has already solved the problem.
+ *
+ * Best-effort: a Klaviyo hiccup must not fail the cache refresh that already
+ * happened, and the worst case is one unnecessary last-chance email.
+ */
+async function trackPaymentFixedSafe(sub: SealSubscription): Promise<void> {
+  const email = (sub.email ?? "").trim().toLowerCase();
+  if (!email) return;
+  try {
+    await klaviyo.trackEvent("payment_method_updated", email, {
+      sealSubscriptionId: String(sub.id),
+      cardExpiryMonth: sub.card_expiry_month || null,
+      cardExpiryYear: sub.card_expiry_year || null,
     });
-    return null;
+  } catch (err) {
+    console.warn("[seal-webhook] payment_method_updated klaviyo event failed", {
+      sealId: sub.id,
+      msg: err instanceof Error ? err.message : String(err),
+    });
   }
-  const sub = await seal.getSubscriptionById(id);
-  if (!sub) {
-    // Transient Seal failure. Throwing here is deliberate: billing_attempt.* is
-    // in REPLAY_SAFE, so the reservation is released and Seal's redelivery gets
-    // another shot at the dunning trigger.
-    throw new Error(`billing_attempt: subscription ${id} not readable from Seal`);
+}
+
+/**
+ * Seal auto-cancelled a subscription because the card kept failing. Tell the
+ * humans, in the incidents channel, once.
+ *
+ * Detection is by Seal's own `log` array (the field that names the actor), whose
+ * entry reads "Subscription was cancelled because the payment couldn't be
+ * processed within the allowed number of…". `cancellation_reason` is empty on
+ * every cancellation payload we have stored, so it is useless here.
+ *
+ * Synchronous and non-async on purpose: alertSlackNotice is fire-and-forget and
+ * never throws, so this cannot affect the webhook response.
+ */
+function notifyDunningCancelSafe(sub: SealSubscription): void {
+  try {
+    const log = (sub as SealSubscription & { log?: Array<{ content?: string }> }).log ?? [];
+    const entry = log
+      .map((e) => e?.content ?? "")
+      .find((t) => /payment could(n.t| not) be processed/i.test(t));
+    if (!entry) return;
+
+    alertSlackNotice({
+      channel: "incidents",
+      icon: ":x:",
+      title: "Suscripción CANCELADA por Seal tras agotar los reintentos de cobro",
+      fields: {
+        seal_subscription_id: String(sub.id),
+        importe_perdido: `${sub.total_value ?? "?"} ${sub.currency ?? ""}`.trim(),
+        cadencia: sub.delivery_interval,
+        cancelada_el: sub.cancelled_on,
+        motivo_seal: entry.slice(0, 140),
+      },
+    });
+  } catch (err) {
+    console.warn("[seal-webhook] dunning-cancel notice failed (non-fatal)", {
+      sealId: sub?.id,
+      msg: err instanceof Error ? err.message : String(err),
+    });
   }
-  console.log("[seal-webhook] billing_attempt payload had no embedded subscription, fetched by id", { id });
-  return sub;
 }
 
 /**
@@ -493,8 +631,8 @@ async function notifyPausedSafe(sub?: SealSubscription): Promise<void> {
  * (/api/cron/retention-discount-sweep) is the guaranteed backstop. The real
  * logic + guards live in lib/retention-discount.
  */
-async function consumeRetentionDiscountSafe(subFromPayload?: SealSubscription): Promise<void> {
-  const sealSubId = subFromPayload?.id;
+async function consumeRetentionDiscountSafe(subFromEvent?: SealSubscription | null): Promise<void> {
+  const sealSubId = subFromEvent?.id;
   if (!sealSubId) return;
   try {
     await consumeRetentionDiscountIfCharged(sealSubId);
@@ -509,10 +647,54 @@ async function consumeRetentionDiscountSafe(subFromPayload?: SealSubscription): 
 /**
  * Mirror Seal subscription state into Supabase for fast portal queries.
  */
-async function syncSubscription(payload: { subscription: SealSubscription }): Promise<void> {
-  const s = payload?.subscription;
+async function syncSubscription(s: SealSubscription | null): Promise<void> {
   if (!s) return;
 
+  // Fast path: Seal's payload carries `customer_id`, and it IS the Shopify
+  // customer id. Verified 2026-07-29 against six live events, all six matching the
+  // customer_id already in our cache. Using it skips a Shopify GraphQL round trip
+  // per event (~4k Seal events a month) and removes the failure mode where a
+  // Shopify blip made the webhook 500 and lose the event.
+  //
+  // BUT it is only a SHORTCUT, never an authority. `subscriptions.customer_id` is
+  // the portal's authorization key: verifyOwnershipFast grants the mutation fast
+  // path on the mere existence of a (customer_id, seal_subscription_id) row, so an
+  // unverified id must not be able to decide who owns a subscription. Concretely,
+  // if Seal's customer_id ever disagreed with the row we already have (support
+  // fixing a checkout email typo is the documented way that happens, see the 23505
+  // re-home below), trusting the payload would move the row AWAY from the real
+  // owner, and the re-home branch written to repair that reassignment would be the
+  // thing performing it.
+  //
+  // So: take the shortcut only when it agrees with what we already know, or when
+  // we know nothing yet. On any disagreement, fall through to the email lookup,
+  // which is the path that follows the corrected email and is allowed to re-home.
+  // Raised by review; the 6/6 sample could not have caught it, because a cached row
+  // only exists for subs whose owner reached the Hub, i.e. the already-agreeing ones.
+  const idFromPayload = String(
+    (s as SealSubscription & { customer_id?: string }).customer_id ?? "",
+  );
+  // `/^\d+$/` alone would accept "0" (a sub with no Shopify customer linked) and
+  // pile every such sub into one bogus bucket under customer_id "0".
+  if (/^\d+$/.test(idFromPayload) && idFromPayload !== "0") {
+    const { data: existing } = await supabaseAdmin()
+      .from("subscriptions")
+      .select("customer_id")
+      .eq("seal_subscription_id", String(s.id))
+      .maybeSingle();
+    const known = existing?.customer_id ? String(existing.customer_id) : null;
+    if (!known || known === idFromPayload) {
+      await writeSubscriptionCache(s, idFromPayload);
+      return;
+    }
+    console.warn(
+      "[seal-webhook] payload customer_id disagrees with cached owner, using the email lookup",
+      { sealId: s.id, fromPayload: idFromPayload, cached: known },
+    );
+  }
+
+  // Slow path: no usable customer_id in the payload, or it contradicts the cache →
+  // resolve by email, as before.
   const { shopifyAdmin } = await import("@/lib/shopify-admin");
   const customer = await shopifyAdmin
     .graphql<{ customers: { edges: Array<{ node: { id: string } }> } }>(
@@ -531,17 +713,25 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
     return;
   }
   const customerId = customerGid.replace(/^gid:\/\/shopify\/Customer\//, "");
+  await writeSubscriptionCache(s, customerId);
+}
 
+/**
+ * Upsert the Supabase cache row for one subscription, and fire the pause
+ * notification on the active -> paused transition. Split out of syncSubscription
+ * so both the customer_id fast path and the email slow path share it.
+ */
+async function writeSubscriptionCache(s: SealSubscription, customerId: string): Promise<void> {
   const sb = supabaseAdmin();
   const mapped = mapToSubscription(s, customerId);
   const nextStatus = mapStatus(s);
 
   // Previous cached status, read BEFORE the upsert overwrites it, so we can spot
-  // the active -> paused transition. This is the only way we ever find out about
-  // a pause: Seal has the subscription/paused topic subscribed since 2026-07-23
-  // and has never delivered a single one, while a subscription/updated lands one
-  // second after every pause. Best-effort read: a miss just means no alert, never
-  // a failed webhook.
+  // the active -> paused transition. This is the only way we find out about the
+  // pauses that matter: Seal delivers subscription/paused for an API pause but NOT
+  // for a customer pause in its own portal (see that case above), and a customer
+  // pause only ever shows up as subscription/updated. Best-effort read: a miss
+  // just means no alert, never a failed webhook.
   let prevStatus: string | null = null;
   if (nextStatus === "paused") {
     const { data: prevRow } = await sb

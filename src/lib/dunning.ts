@@ -39,6 +39,24 @@ import { klaviyo } from "@/lib/klaviyo";
 import type { SealSubscription } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
 
+/**
+ * Seal's attempt object on a billing_attempt/failed payload. Verified against a
+ * real payload 2026-07-29. There is NO `error_message` here (the gateway text
+ * lives in the sub's `billing_attempts` array), and `number_of_tries` is the
+ * dunning counter: Seal cancels the subscription after the fourth failure.
+ */
+export interface DunningAttempt {
+  id?: number;
+  date?: string;
+  status?: string;
+  number_of_tries?: number;
+  /** Not sent by Seal on this object; filled in by the caller when known. */
+  error_message?: string | null;
+}
+
+/** Seal gives up and cancels after this many consecutive failed charges. */
+const SEAL_MAX_TRIES = 4;
+
 /** `email_logs.template_id` for the dunning trigger. Also the dedup key. */
 export const DUNNING_TEMPLATE_ID = "payment_failed";
 
@@ -67,7 +85,7 @@ export interface DunningOutcome {
  */
 export async function fireDunningTrigger(
   sub: SealSubscription | undefined,
-  attempt?: { date?: string; error_message?: string | null },
+  attempt?: DunningAttempt,
 ): Promise<DunningOutcome> {
   try {
     return await fireDunningTriggerInner(sub, attempt);
@@ -84,7 +102,7 @@ export async function fireDunningTrigger(
 
 async function fireDunningTriggerInner(
   sub: SealSubscription | undefined,
-  attempt?: { date?: string; error_message?: string | null },
+  attempt?: DunningAttempt,
 ): Promise<DunningOutcome> {
   if (!sub?.id) return { fired: false, reason: "no_subscription" };
   const sealId = String(sub.id);
@@ -160,6 +178,10 @@ async function fireDunningTriggerInner(
   }
 
   // ---- Fire ---------------------------------------------------------------
+  // Default to 1 when Seal omits it: assuming the FIRST attempt is the safe
+  // direction, because it produces the longest deadline and so the least alarming
+  // copy. Over-promising urgency to someone who is fine is worse than the reverse.
+  const tries = attempt?.number_of_tries ?? 1;
   try {
     await klaviyo.trackEvent("payment_failed", email, {
       sealSubscriptionId: sealId,
@@ -174,10 +196,17 @@ async function fireDunningTriggerInner(
       amount: sub.total_value ?? null,
       currency: sub.currency ?? "EUR",
       locale,
-      // How many days the customer has before Seal auto-cancels. Measured on
-      // live data: 4 daily retries then cancel, so ~3 days from the first
-      // failure. Drives the urgency copy in the flow.
-      daysUntilCancel: 3,
+      // Which retry this is, 1..4. Seal retries daily and cancels after the
+      // fourth, so this is the only honest basis for urgency copy.
+      attemptNumber: tries,
+      // Days left before Seal cancels. This used to be hardcoded to 3, which is
+      // only true when we catch the FIRST failure. We do not always: the dedup
+      // window means the first event we see can be try 2 or 3 (exactly what
+      // happened the day this shipped, when live failures were already on try 2),
+      // and a flow that promises three days and then cancels tomorrow is worse
+      // than saying nothing. Also lets the flow decide whether a 48 h follow-up
+      // would even arrive before the cancellation.
+      daysUntilCancel: Math.max(0, SEAL_MAX_TRIES - tries),
     });
   } catch (err) {
     // No email_logs row → the next Seal retry (tomorrow) re-fires.
@@ -191,6 +220,7 @@ async function fireDunningTriggerInner(
     metadata: {
       sealSubscriptionId: sealId,
       attemptDate: attempt?.date ?? null,
+      attemptNumber: tries,
       paymentType,
       locale,
     },
@@ -203,6 +233,6 @@ async function fireDunningTriggerInner(
     );
   }
 
-  console.log("[dunning] payment_failed fired", { sealId, paymentType, locale });
+  console.log("[dunning] payment_failed fired", { sealId, paymentType, locale, tries });
   return { fired: true, reason: "fired" };
 }

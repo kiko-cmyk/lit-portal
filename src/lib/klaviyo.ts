@@ -47,7 +47,13 @@ export type KlaviyoEvent =
   // the event exists so the 86 already-paused customers can be walked back into
   // the portal to resume.
   | "subscription_paused"
-  | "subscription_resumed";
+  | "subscription_resumed"
+  // Fired from the Seal webhook on subscription/payment_method_updated. Exists so
+  // the dunning flow can stop chasing a customer who already fixed their card:
+  // without it, the "last chance" email 48 h later goes to people who solved the
+  // problem the same day, which is the fastest way to make a rescued customer
+  // regret coming back.
+  | "payment_method_updated";
 
 // Transient-failure retry budget. Klaviyo throttles /events/ (429) and can 5xx
 // under load; without a retry a single hiccup on a high-volume day (e.g. the
