@@ -46,6 +46,9 @@ const FlavorOverlay = dynamic(() => import("@/components/FlavorOverlay").then((m
 const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
+const BusinessAddressOverlay = dynamic(() =>
+  import("@/components/BusinessAddressOverlay").then((m) => m.BusinessAddressOverlay),
+);
 
 export default function AccountPage() {
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
@@ -77,8 +80,8 @@ export default function AccountPage() {
   // Business (wholesale) details: the customer's own Shopify address + fiscal
   // fields. Seeded from /api/customer and replaced by the PATCH read-back.
   const [business, setBusiness] = useState<BusinessDetails | null>(null);
-  // Opens the fiscal-address form for a partner who has none yet (the common
-  // case: invoice = delivery, nothing stored).
+  // Which wholesale address popup is open, if any.
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [billingOpen, setBillingOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
@@ -661,15 +664,14 @@ export default function AccountPage() {
             this is the only address they can fix themselves. */}
         {accountOnly && (
           <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
-            <p className="pb-3 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">
-              <T
-                en="Where your orders ship. It also prefills your checkout."
-                es="Donde te llegan los pedidos. También es la que se rellena sola en el checkout."
-              />
-            </p>
-            <AddressRows
+            <BusinessAddressBlock
               value={business?.delivery ?? null}
-              onSaveField={(patch) => saveBusiness({ delivery: patch })}
+              onEdit={() => setDeliveryOpen(true)}
+              editLabel={t({ en: "Change delivery address", es: "Cambiar dirección de entrega" })}
+              note={t({
+                en: "Where your orders ship. It also prefills your checkout.",
+                es: "Donde te llegan los pedidos. También se rellena sola en el checkout.",
+              })}
             />
           </Section>
         )}
@@ -681,61 +683,44 @@ export default function AccountPage() {
               value={business?.billing.taxId ?? ""}
               onSave={(v) => saveBusiness({ billing: { taxId: v } })}
             />
-            {/* Most partners invoice to the same place the boxes go, so that is
-                the default and they type nothing. "Same as delivery" is the
-                ABSENCE of a second address, not a copy of the first: copying
-                would freeze a stale duplicate the day they move. */}
-            {business?.billing.sameAsDelivery !== false ? (
-              <div className="border-t border-[color:var(--color-lit-grey)]/8 pt-4">
-                <p className="text-[12px] leading-[1.5] text-[color:var(--color-lit-grey)]">
-                  <T
-                    en="We invoice to the delivery address above."
-                    es="Facturamos a la dirección de entrega de arriba."
-                  />
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setBillingOpen(true)}
-                  className="mt-3 rounded-full border border-[color:var(--color-lit-grey)]/40 px-5 py-2.5 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
-                >
-                  <T
-                    en="Use a different billing address"
-                    es="Usar otra dirección de facturación"
-                  />
-                </button>
-              </div>
-            ) : null}
-            {(billingOpen || business?.billing.sameAsDelivery === false) && (
-              <div className="border-t border-[color:var(--color-lit-grey)]/8 pt-2">
-                <AddressRows
-                  value={business?.billing ?? null}
-                  onSaveField={(patch) => saveBusiness({ billing: patch })}
-                  companyLabel={t({ en: "Registered name", es: "Razón social" })}
-                />
-                {business?.billing.sameAsDelivery === false && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await saveBusiness({ billing: { sameAsDelivery: true } });
-                      setBillingOpen(false);
-                    }}
-                    className="mt-4 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
-                    style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-                  >
-                    <T
-                      en="Invoice to the delivery address instead"
-                      es="Facturar a la dirección de entrega"
-                    />
-                  </button>
-                )}
-              </div>
-            )}
-            <p className="pt-4 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">
-              <T
-                en="We invoice with this data. Keep it up to date and your invoices come out right with no back and forth."
-                es="Facturamos con estos datos. Mantenlos al día y tus facturas salen bien sin tener que pedírtelos."
-              />
-            </p>
+            {/* By default the billing address SHOWS the delivery one (Juan
+                2026-07-29): most partners invoice where the boxes land, and a
+                block that just said "same as delivery" made them go up to read
+                their own address. Underneath, it is still the absence of a
+                separate fiscal address, so the day they move there is no stale
+                duplicate to forget about. */}
+            <BusinessAddressBlock
+              value={
+                business?.billing.sameAsDelivery === false
+                  ? business.billing
+                  : business?.delivery ?? null
+              }
+              onEdit={() => setBillingOpen(true)}
+              editLabel={t({
+                en: "Change billing address",
+                es: "Cambiar dirección de facturación",
+              })}
+              note={
+                business?.billing.sameAsDelivery === false
+                  ? t({
+                      en: "We invoice to this address.",
+                      es: "Facturamos a esta dirección.",
+                    })
+                  : t({
+                      en: "Same as your delivery address. We invoice with this data.",
+                      es: "La misma que la de entrega. Facturamos con estos datos.",
+                    })
+              }
+              onReset={
+                business?.billing.sameAsDelivery === false
+                  ? () => saveBusiness({ billing: { sameAsDelivery: true } })
+                  : undefined
+              }
+              resetLabel={t({
+                en: "Use the delivery address again",
+                es: "Volver a usar la de entrega",
+              })}
+            />
           </Section>
         )}
 
@@ -877,6 +862,30 @@ export default function AccountPage() {
           }}
         />
       )}
+      {/* Wholesale address popups. The billing one opens PREFILLED with the
+          delivery address when there is no separate fiscal one yet, so the
+          customer edits what they already gave us instead of an empty sheet. */}
+      {deliveryOpen && (
+        <BusinessAddressOverlay
+          scope="delivery"
+          value={business?.delivery ?? null}
+          onClose={() => setDeliveryOpen(false)}
+          onSaved={setBusiness}
+        />
+      )}
+      {billingOpen && (
+        <BusinessAddressOverlay
+          scope="billing"
+          value={
+            business?.billing.sameAsDelivery === false
+              ? business.billing
+              : business?.delivery ?? null
+          }
+          onClose={() => setBillingOpen(false)}
+          onSaved={setBusiness}
+        />
+      )}
+
       {addressOpen && subscription && (
         <AddressOverlay
           subscription={subscription}
@@ -1047,70 +1056,79 @@ function SubsummCell({
 }
 
 /**
- * The address block used by both wholesale addresses. One EditableRow per field
- * (the same control as Mis datos) instead of an overlay: there is no cutoff and
- * no Seal write behind these, so a field can just be saved on its own.
+ * A wholesale address, read-only, with the button that opens the popup BELOW the
+ * data (Juan 2026-07-29) — the same read-block-then-edit shape the subscription
+ * address uses, so both addresses on this page behave like the rest of the
+ * portal instead of being seven inline rows.
  */
-function AddressRows({
+function BusinessAddressBlock({
   value,
-  onSaveField,
-  companyLabel,
+  onEdit,
+  editLabel,
+  note,
+  onReset,
+  resetLabel,
 }: {
   value: PortalAddress | null;
-  onSaveField: (patch: Record<string, string>) => Promise<void>;
-  companyLabel?: string;
+  onEdit: () => void;
+  editLabel: string;
+  note?: string;
+  /** Only for the billing block, once a separate fiscal address exists. */
+  onReset?: () => Promise<void>;
+  resetLabel?: string;
 }) {
-  const t = useLang();
+  const [resetting, setResetting] = useState(false);
+  const hasAddress = !!value?.address1;
   return (
-    <>
-      <EditableRow
-        label={companyLabel ?? t({ en: "Company", es: "Empresa" })}
-        value={value?.company ?? ""}
-        onSave={(v) => onSaveField({ company: v })}
-      />
-      <EditableRow
-        label={t({ en: "Street", es: "Dirección" })}
-        value={value?.address1 ?? ""}
-        onSave={(v) => onSaveField({ address1: v })}
-      />
-      <EditableRow
-        label={t({ en: "Apt, floor", es: "Piso, puerta" })}
-        value={value?.address2 ?? ""}
-        onSave={(v) => onSaveField({ address2: v })}
-      />
-      <EditableRow
-        label={t({ en: "Postcode", es: "Código postal" })}
-        value={value?.postalCode ?? ""}
-        onSave={(v) => onSaveField({ postalCode: v })}
-      />
-      <EditableRow
-        label={t({ en: "City", es: "Ciudad" })}
-        value={value?.city ?? ""}
-        onSave={(v) => onSaveField({ city: v })}
-      />
-      {/* Derived from the postcode, same rule as the subscription address: in
-          Spain the province IS the first two digits, so asking for it only
-          creates labels that contradict themselves. */}
-      <ReadOnlyRow label={t({ en: "Province", es: "Provincia" })} value={value?.province ?? ""} />
-      <ReadOnlyRow
-        label={t({ en: "Country", es: "País" })}
-        value={value?.country ?? "España"}
-      />
-    </>
-  );
-}
+    <div className="pt-1">
+      {hasAddress ? (
+        <div className="text-[13px] leading-[1.6] text-[color:var(--color-lit-grey)]">
+          {value!.company && <div className="font-semibold">{value!.company}</div>}
+          <div>{value!.address1}</div>
+          {value!.address2 && <div>{value!.address2}</div>}
+          <div>
+            {value!.postalCode} {value!.city}
+            {value!.province ? `, ${value!.province}` : ""}
+          </div>
+          <div>{value!.country ?? "España"}</div>
+        </div>
+      ) : (
+        <p className="text-[13px] text-[color:var(--color-warm-gray)]">
+          <T en="No address yet." es="Todavía no hay dirección." />
+        </p>
+      )}
 
-/** Same row as EditableRow, without the edit affordance (derived values). */
-function ReadOnlyRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex gap-3 border-b border-[color:var(--color-lit-grey)]/6 py-3 last:border-b-0">
-      <div
-        className="min-w-[88px] pt-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        {label}
+      {note && (
+        <p className="mt-3 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">{note}</p>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-4">
+        <button
+          type="button"
+          onClick={onEdit}
+          className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-5 py-2.5 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
+        >
+          {hasAddress ? editLabel : <T en="Add address" es="Añadir dirección" />}
+        </button>
+        {onReset && (
+          <button
+            type="button"
+            disabled={resetting}
+            onClick={async () => {
+              setResetting(true);
+              try {
+                await onReset();
+              } finally {
+                setResetting(false);
+              }
+            }}
+            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline disabled:opacity-50"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          >
+            {resetting ? <T en="Saving…" es="Guardando…" /> : resetLabel}
+          </button>
+        )}
       </div>
-      <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">{value || "—"}</div>
     </div>
   );
 }
