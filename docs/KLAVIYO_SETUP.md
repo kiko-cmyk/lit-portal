@@ -221,13 +221,33 @@ Verificado sobre 30 de las 465 altas de julio: **9 (30%) ya habían disparado
 `confirmation_sent` antes de suscribirse**, así que estaban excluidas de nacimiento. Y el hueco
 real es mayor, porque el flow llevaba desde mayo consumiendo entradas.
 
-**La configuración correcta es filtro de activador `is_subscription es igual a true` +
-"Sin reincorporación"**, y con eso basta: las compras puntuales ya no entran ni gastan la
-entrada, la primera suscripción recibe la bienvenida, y las renovaciones (que también traen
-`is_subscription: true`) no la repiten porque no hay reincorporación. La división condicional
-se puede borrar: el filtro de activador hace su trabajo bien, y sus cadenas de `flavor` ya no
-existen desde el PR #85, así que solo excluiría por error a suscriptores legítimos que hubieran
-comprado suelto dos veces.
+**Configuración final, aplicada el 2026-07-29 y verificada:**
+
+| | |
+|---|---|
+| Activador | `confirmation_sent` |
+| Filtro de activador | `is_subscription es igual a true` |
+| Criterios de reincorporación | Sin reincorporación |
+| Filtros de perfil | ninguno |
+| Camino | espera 15 min → `Área personal - Bienvenida ES` (plantilla `XcbbmT`, transaccional) |
+
+Con eso basta: las compras puntuales ya no entran ni gastan la entrada, la primera suscripción
+recibe la bienvenida, y las renovaciones (que también traen `is_subscription: true`) no la
+repiten porque no hay reincorporación.
+
+Se borraron las dos divisiones condicionales. La del `flavor` porque el filtro de activador hace
+su trabajo bien y sus cadenas ya no existen desde el PR #85, así que solo habría excluido por
+error a suscriptores legítimos que hubieran comprado suelto dos veces. La del idioma porque el
+email EN había enviado 0 en 30 días y todos los perfiles muestreados son `es-ES`; la
+consecuencia asumida es que un cliente anglófono recibe el español, con su CTA a
+`/apps/portal/es/mi-lit`.
+
+**El filtro de activador NO se puede verificar por API.** `GET /api/flows/{id}` devuelve
+`trigger_filter: null` incluso cuando la UI lo muestra puesto, en todas las revisiones. Y ahora
+es lo único que separa a un comprador puntual de recibir "activa tu cuenta", porque ya no hay
+división condicional de red. Para comprobarlo hay que hacerlo empíricamente: buscar compras
+puntuales (`is_subscription: false`) de hace más de 20 minutos y confirmar que no aparecen en
+`Received Email` con `$flow = UAH3ug`.
 
 **Ojo con el pasado.** Eso arregla de aquí en adelante. Quien ya entró al flow como comprador
 puntual sigue bloqueado para siempre por "Sin reincorporación", y recuperarlo pide una campaña
