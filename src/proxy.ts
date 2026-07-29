@@ -7,6 +7,7 @@ import { NextResponse, type NextRequest } from "next/server";
  *   /apps/portal/en/my-lit, /apps/portal/es/mi-lit
  *   /apps/portal/en/collection, /apps/portal/es/coleccion
  *   /apps/portal/en/account, /apps/portal/es/cuenta
+ *   /apps/portal/en/signed-out, /apps/portal/es/sesion-cerrada
  *
  * Legacy URLs still in customer emails (Klaviyo confirmation flows) that we
  * need to keep redirecting:
@@ -37,6 +38,7 @@ const ES_TO_CANONICAL: Record<string, string> = {
   coleccion: "collection",
   cuenta: "account",
   pedidos: "orders",
+  "sesion-cerrada": "signed-out",
 };
 
 // Bare canonical slug (no locale) → translated slug for the default locale
@@ -45,6 +47,7 @@ const CANONICAL_TO_DEFAULT_LOCALE_SLUG: Record<string, string> = {
   collection: "coleccion",
   account: "cuenta",
   orders: "pedidos",
+  "signed-out": "sesion-cerrada",
 };
 
 // Legacy → current slug, applied with a 308 so old links in emails still land.

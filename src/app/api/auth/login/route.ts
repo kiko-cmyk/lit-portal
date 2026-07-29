@@ -1,8 +1,7 @@
-import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { buildAuthorizeUrl } from "@/lib/customer-oauth";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { isSafeRelativePath } from "@/lib/safe-path";
-import { getOAuthStateKey } from "@/lib/secrets";
 
 /**
  * GET /apps/portal/api/auth/login
@@ -22,25 +21,22 @@ import { getOAuthStateKey } from "@/lib/secrets";
  *      /login y el /callback.
  *   3. Redirigir a Shopify authorize.
  *
+ * Los pasos 1 y 2 viven en `lib/customer-oauth.buildAuthorizeUrl`, que
+ * comparte con /api/auth/logout (que construye la misma URL con
+ * `prompt=none` para poder cerrar la sesión de Shopify).
+ *
  * Query params soportados:
  *   - return_to (opcional): path relativo del portal al que volver tras
  *     el login. Default: /es/cuenta (Mi LIT es subscriber-only, Cuenta
  *     funciona para todos los clientes incluidos los one-shot).
  */
 
-const SHOPIFY_AUTHORIZE_URL =
-  "https://tracking.litsalt.com/authentication/oauth/authorize";
-
 const CLIENT_ID = process.env.SHOPIFY_CUSTOMER_ACCOUNT_CLIENT_ID;
-
-const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
 
 // Fallback con prefijo /apps/portal porque return_to viaja con la ruta
 // completa (LoginScreen pasa window.location.pathname, que ya incluye
 // el App Proxy mount prefix).
 const DEFAULT_RETURN_TO = "/apps/portal/es/cuenta";
-
-const STATE_TTL_SECONDS = 600; // 10 min
 
 export async function GET(req: NextRequest) {
   if (!CLIENT_ID || !process.env.SHOPIFY_API_SECRET) {
@@ -77,77 +73,7 @@ export async function GET(req: NextRequest) {
     ? requestedReturn
     : DEFAULT_RETURN_TO;
 
-  const codeVerifier = base64UrlEncode(crypto.randomBytes(48));
-  const codeChallenge = base64UrlEncode(
-    crypto.createHash("sha256").update(codeVerifier).digest(),
+  return NextResponse.redirect(
+    buildAuthorizeUrl({ clientId: CLIENT_ID, returnTo }),
   );
-
-  // OIDC nonce (audit 2026-05-21 finding #4). Sent to /authorize and
-  // bound into the id_token by Shopify; the callback verifies the
-  // claim matches `state.nce`. Defends against id_token replay /
-  // confused-deputy where a stolen token from one flow is presented
-  // to another.
-  const nonce = crypto.randomBytes(16).toString("hex");
-
-  // Pack everything into a signed JWT so the callback can recover it
-  // without needing cookies (App Proxy strips Set-Cookie headers).
-  // Key is HKDF-derived from SHOPIFY_API_SECRET (different label from
-  // App Proxy HMAC) so a signing oracle in one context can't be used
-  // to forge the other.
-  const now = Math.floor(Date.now() / 1000);
-  const stateKey = getOAuthStateKey();
-  const state = signState(stateKey, {
-    v: codeVerifier,
-    r: returnTo,
-    nce: nonce,
-    iat: now,
-    exp: now + STATE_TTL_SECONDS,
-  });
-
-  const authorizeUrl = new URL(SHOPIFY_AUTHORIZE_URL);
-  authorizeUrl.searchParams.set("client_id", CLIENT_ID);
-  authorizeUrl.searchParams.set("redirect_uri", REDIRECT_URI);
-  authorizeUrl.searchParams.set("response_type", "code");
-  authorizeUrl.searchParams.set("scope", "openid email");
-  authorizeUrl.searchParams.set("state", state);
-  authorizeUrl.searchParams.set("code_challenge", codeChallenge);
-  authorizeUrl.searchParams.set("code_challenge_method", "S256");
-  authorizeUrl.searchParams.set("nonce", nonce);
-
-  return NextResponse.redirect(authorizeUrl.toString());
 }
-
-// ─────────────────────────── JWT-lite ───────────────────────────
-//
-// Tiny HS256 JWT impl. We avoid pulling in jose/jsonwebtoken just to
-// sign/verify a state blob — keeps the bundle small and there are no
-// edge-runtime surprises with crypto.subtle on Vercel.
-
-interface StatePayload {
-  v: string;   // PKCE code_verifier (caller stores, callback re-uses for token exchange)
-  r: string;   // return_to (relative path)
-  nce: string; // OIDC nonce — also sent to Shopify /authorize; callback verifies id_token.nonce matches
-  iat: number;
-  exp: number;
-}
-
-function signState(key: Buffer, payload: StatePayload): string {
-  const header = base64UrlEncode(
-    Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })),
-  );
-  const body = base64UrlEncode(Buffer.from(JSON.stringify(payload)));
-  const data = `${header}.${body}`;
-  const sig = base64UrlEncode(
-    crypto.createHmac("sha256", key).update(data).digest(),
-  );
-  return `${data}.${sig}`;
-}
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-

@@ -11,6 +11,7 @@ import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
+import { SwitchAccountRow } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -595,6 +596,11 @@ export default function AccountPage() {
               setCustomer({ ...customer, phone: v });
             }}
           />
+          {/* Sits right under the email row on purpose: this is where people
+              who are in the WRONG account try to fix it, by retyping their
+              email. That never works when the other address already has a
+              Shopify customer, so give them the door that does. 2026-07-29. */}
+          <SwitchAccountRow />
         </Section>
 
         {subActive && (
@@ -654,10 +660,7 @@ export default function AccountPage() {
             Not a dark pattern, the paused banner above says in plain words to
             email us to cancel, and a paused sub isn't being charged meanwhile. */}
         {subActive && !subPaused && (
-          <DangerZone
-            onCancel={() => setCancelOpen(true)}
-            signoutUrl="https://litsalt.com/account/logout"
-          />
+          <DangerZone onCancel={() => setCancelOpen(true)} />
         )}
       </main>
 

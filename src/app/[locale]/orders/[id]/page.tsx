@@ -7,6 +7,7 @@ import { CustomerChip } from "@/components/CustomerChip";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { SubSwitchPill } from "@/components/SubSwitchPill";
+import { SwitchAccountLink } from "@/components/SwitchAccount";
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
@@ -61,6 +62,14 @@ export default function OrderDetailPage({
           >
             <T en="Back to account" es="Volver a cuenta" />
           </Link>
+          {/* The copy above has been naming the real cause since day one ("it may
+              belong to a different account") while offering no way to act on it.
+              This is the documented "Login with Shop" case: the order link in
+              Shopify's own emails is correct, the customer is just signed into
+              their other identity. 2026-07-29. */}
+          <div className="mt-5">
+            <SwitchAccountLink />
+          </div>
         </div>
       </Frame>
     );

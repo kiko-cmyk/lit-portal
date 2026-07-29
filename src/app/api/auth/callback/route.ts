@@ -1,8 +1,14 @@
 import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  endSessionUrl,
+  exchangeCodeForTokens,
+  SIGNED_OUT_PATH,
+  verifyState,
+  type TokenResponse,
+} from "@/lib/customer-oauth";
 import { IdTokenVerificationError, verifyShopifyIdToken } from "@/lib/oidc";
 import { isSafeRelativePath } from "@/lib/safe-path";
-import { getOAuthStateKey } from "@/lib/secrets";
 import { hashSessionId } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -30,11 +36,15 @@ import { supabaseAdmin } from "@/lib/supabase";
  * Por qué no usamos cookies: Shopify App Proxy strippea Set-Cookie.
  * localStorage es la única forma fiable de persistir el token cliente-
  * side a través del round-trip por Shopify.
+ *
+ * SEGUNDO USO, desde 2026-07-29 — cerrar sesión. /api/auth/logout manda al
+ * cliente por `prompt=none` (sin UI) con el claim `lo` en el state. Ese caso
+ * NO crea sesión: gasta el id_token recién emitido como `id_token_hint` del
+ * end_session de Shopify, que es la única forma de matar la sesión de
+ * Customer Accounts. Cada rama que sigue tiene que distinguir los dos flujos,
+ * porque terminar un logout creando una sesión volvería a meter al cliente en
+ * la cuenta de la que acaba de salir.
  */
-
-const TOKEN_ENDPOINT =
-  "https://tracking.litsalt.com/authentication/oauth/token";
-const REDIRECT_URI = "https://litsalt.com/apps/portal/api/auth/callback";
 
 const PORTAL_BASE = "https://litsalt.com";
 const FALLBACK_RETURN = "/apps/portal/es/cuenta";
@@ -60,7 +70,28 @@ export async function GET(req: NextRequest) {
   const error = url.searchParams.get("error");
   const errorDescription = url.searchParams.get("error_description");
 
+  // Verify the state BEFORE handling `error`, because the state is what tells
+  // us which flow this is. A logout that Shopify answers with an error must
+  // land on the signed-out page, not on the login-error path — and the most
+  // common answer to a logout round trip IS an error: `login_required` is
+  // exactly what `prompt=none` returns when there is no Shopify session left,
+  // which is a successful outcome for us, not a failure.
+  const payload = state ? verifyState(state) : null;
+  const isLogout = payload?.lo === 1;
+  const logoutLanding = () => {
+    const path =
+      payload && isSafeRelativePath(payload.r) ? payload.r : SIGNED_OUT_PATH.es;
+    return NextResponse.redirect(`${PORTAL_BASE}${path}`);
+  };
+
   if (error) {
+    if (isLogout) {
+      // Nothing to end (no Customer Account session) or Shopify refused the
+      // silent round trip. Our own session is already deleted by the logout
+      // route, so the customer IS signed out of the portal either way.
+      console.log("[oauth-callback] logout round trip returned", { error });
+      return logoutLanding();
+    }
     console.warn("[oauth-callback] Shopify returned error", {
       error,
       description: errorDescription,
@@ -76,7 +107,6 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const payload = verifyState(getOAuthStateKey(), state);
   if (!payload) {
     console.error("[oauth-callback] state JWT verification failed");
     return new NextResponse(
@@ -87,6 +117,7 @@ export async function GET(req: NextRequest) {
 
   const now = Math.floor(Date.now() / 1000);
   if (payload.exp < now) {
+    if (isLogout) return logoutLanding();
     return new NextResponse(
       "OAuth state expired. Please try logging in again.",
       { status: 400 },
@@ -96,36 +127,18 @@ export async function GET(req: NextRequest) {
   // ─────── 1) Token exchange ───────
   let tokens: TokenResponse;
   try {
-    const tokenBody = new URLSearchParams({
-      grant_type: "authorization_code",
-      client_id: clientId,
+    tokens = await exchangeCodeForTokens({
+      clientId,
       code,
-      redirect_uri: REDIRECT_URI,
-      code_verifier: payload.v,
+      codeVerifier: payload.v,
     });
-    const tokenRes = await fetch(TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: tokenBody.toString(),
-    });
-    if (!tokenRes.ok) {
-      const body = await tokenRes.text().catch(() => "");
-      console.error("[oauth-callback] token exchange failed", {
-        status: tokenRes.status,
-        body: body.slice(0, 500),
-      });
-      return new NextResponse(
-        `Token exchange failed (HTTP ${tokenRes.status})`,
-        { status: 502 },
-      );
-    }
-    tokens = (await tokenRes.json()) as TokenResponse;
   } catch (e) {
-    console.error("[oauth-callback] token exchange exception", e);
-    return new NextResponse("Token exchange network error", { status: 502 });
+    console.error("[oauth-callback] token exchange failed", e);
+    // On a logout there is nothing to retry and nothing to show: our session
+    // is gone, so land them on the signed-out page. Shopify's own session may
+    // survive, which is exactly the pre-2026-07-29 behaviour, never worse.
+    if (isLogout) return logoutLanding();
+    return new NextResponse("Token exchange failed", { status: 502 });
   }
 
   // ─────── 2) Verify id_token against Shopify's JWKS ───────
@@ -180,10 +193,23 @@ export async function GET(req: NextRequest) {
           }
         : "could_not_decode",
     });
+    if (isLogout) return logoutLanding();
     return new NextResponse(
       "Login verification failed. Please try logging in again.",
       { status: 401 },
     );
+  }
+
+  // ─────── 2b) Logout round trip ends here ───────
+  // The whole point of this detour was to hold a NON-EXPIRED id_token, the
+  // one thing Shopify's end_session refuses to work without. Spend it now and
+  // stop: creating a session would sign the customer straight back into the
+  // account they asked to leave. The 302 matters as much as the URL — Shopify
+  // answers a non-text/html Accept with 406 and leaves the session alive, so
+  // this must stay a browser navigation and never become a fetch.
+  if (isLogout) {
+    console.log("[oauth-callback] logout: ending Shopify session", { customerId });
+    return NextResponse.redirect(endSessionUrl(tokens.id_token));
   }
 
   // ─────── 3) Create our own session in Supabase ───────
@@ -242,60 +268,5 @@ export async function GET(req: NextRequest) {
   });
 
   return NextResponse.redirect(handoff.toString());
-}
-
-interface TokenResponse {
-  access_token: string;
-  id_token: string;
-  refresh_token?: string;
-  expires_in: number;
-  token_type: string;
-}
-
-interface StatePayload {
-  v: string;
-  r: string;
-  nce: string;
-  iat: number;
-  exp: number;
-}
-
-function verifyState(key: Buffer, token: string): StatePayload | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [header, body, sig] = parts;
-  const data = `${header}.${body}`;
-  const expectedSig = base64UrlEncode(
-    crypto.createHmac("sha256", key).update(data).digest(),
-  );
-  const a = Buffer.from(sig, "utf8");
-  const b = Buffer.from(expectedSig, "utf8");
-  if (a.length !== b.length) return null;
-  if (!crypto.timingSafeEqual(a, b)) return null;
-  try {
-    const payload = JSON.parse(
-      Buffer.from(body, "base64").toString("utf8"),
-    ) as StatePayload;
-    if (
-      typeof payload.v !== "string" ||
-      typeof payload.r !== "string" ||
-      typeof payload.nce !== "string" ||
-      typeof payload.iat !== "number" ||
-      typeof payload.exp !== "number"
-    ) {
-      return null;
-    }
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
 }
 
