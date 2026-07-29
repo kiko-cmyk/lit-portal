@@ -536,6 +536,11 @@ class SealClient {
   /**
    * Bring a PAUSED subscription back to ACTIVE.
    *
+   * VERIFIED against Seal 2026-07-29 on sub 14692586: pause -> PAUSED (paused_on
+   * set) -> resume -> ACTIVE with paused_on CLEARED. Response payload is
+   * "Subscription was reactivated." for both verbs, but Seal's own log
+   * distinguishes them: "Merchant resumed the subscription through API."
+   *
    * Uses `resume`, not `reactivate`. Seal's docs say the two are interchangeable:
    * "There is almost no difference in the resume and reactivate actions, except
    * that you generally resume paused subscriptions and reactivate the cancelled

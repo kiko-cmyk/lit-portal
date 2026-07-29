@@ -62,10 +62,11 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     // No eligibility gate: a pause is not a cancel, there is no hold window and
     // nothing to restore, so a paused sub is always resumable.
     if (!sub) {
-      // Status ONLY, not `paused_on`: Seal never clears that timestamp, so a
-      // paused-then-cancelled sub still carries it (two exist today) and would
-      // shadow the reactivation branch below, showing a cancelled customer a
-      // resume button that bypasses the cancel policy.
+      // Status ONLY, not `paused_on`. A resume does clear that timestamp (probed
+      // 2026-07-29), but a sub that goes PAUSED -> CANCELLED keeps it forever, and
+      // two such subs exist today. Filtering on it would shadow the reactivation
+      // branch below and show a cancelled customer a resume button that bypasses
+      // the cancel policy.
       sub =
         subsRes
           .filter((s) => s.status === "PAUSED")

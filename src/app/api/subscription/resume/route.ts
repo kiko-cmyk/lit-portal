@@ -57,12 +57,13 @@ export const POST = withCustomer<ResumeResponse>(async (req, ctx) => {
   // can never resolve the very sub we're here to fix. Resuming is a
   // once-per-customer action, so the slow path is the right trade.
   const subs = await seal.getSubscriptionsByEmail(email);
-  // Status ONLY. `paused_on` is a historical timestamp that Seal never clears, so
-  // a sub that was paused and then cancelled still carries it: there are two such
-  // subs today (6851511 and 5978121, both paused and cancelled within two
-  // minutes back in 2025). Treating those as resumable would let a CANCELLED
-  // customer come back through here and skip everything /reactivate enforces:
-  // cancel_count, the 90-day window, and the Drops restore.
+  // Status ONLY, never `paused_on`. Probed against Seal 2026-07-29 on sub
+  // 14692586: `resume` DOES clear paused_on, but a sub that goes PAUSED ->
+  // CANCELLED keeps it forever. Two such subs exist today (6851511 and 5978121,
+  // both paused and then cancelled within two minutes back in 2025), and treating
+  // them as resumable would let a CANCELLED customer come back through here and
+  // skip everything /reactivate enforces: cancel_count, the 90-day window, and
+  // the Drops restore.
   const isPaused = (s: SealSubscription) => s.status === "PAUSED";
 
   let sub: SealSubscription | null = null;
