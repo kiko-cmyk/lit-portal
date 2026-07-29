@@ -19,6 +19,7 @@ import {
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { SectionDivider } from "@/components/SectionDivider";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
+import { SwitchAccountLink } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 
 // Overlays are modal-only (rendered behind a click), so we code-split them out
@@ -754,6 +755,13 @@ function EmptyState() {
           >
             {lang === "es" ? "Ver mis pedidos" : "View my orders"}
           </Link>
+          {/* The wrong-account exit. This screen is where a customer signed
+              into an empty Shopify account (typo at checkout, "Login with
+              Shop" identity, a work address) always ends up, and it used to
+              be a dead end: the copy invites them to subscribe when they
+              already have a subscription sitting in their other account.
+              2026-07-29. */}
+          <SwitchAccountLink />
         </div>
       </main>
       <BottomNav />

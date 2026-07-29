@@ -4,21 +4,24 @@ import { useLangValue } from "@/lib/i18n";
 
 interface DangerZoneProps {
   onCancel: () => void;
-  /** Legacy prop, no longer used. Kept so callers don't break. */
-  signoutUrl?: string;
 }
 
 /**
  * Dark "Zona oscura" footer block. Single CTA: cancel subscription.
  *
- * Sign-out removed 2026-05-22 (Juan): for a personal post-purchase
- * portal, an explicit logout button is friction with no real benefit
- * — customers either stay logged in on their own device or close the
- * tab. Implementing the proper OIDC end_session flow (which would
- * require refresh_token + offline_access scope) wasn't worth it for a
- * feature nobody clicks. The /api/auth/logout endpoint still exists
- * because the cancel done-state uses it to land the customer back on
- * litsalt.com after they've cancelled.
+ * Sign-out was removed from here on 2026-05-22 on the reasoning that nobody
+ * clicks logout on a personal post-purchase portal. That held for the
+ * shared-device case and missed the one that actually happens: customers
+ * stuck in the WRONG Shopify account, 25 of them in the two months that
+ * followed. It came back on 2026-07-29 as <SwitchAccountRow/> under "Mis
+ * datos", framed as "entrar con otro correo" rather than as a logout, and
+ * deliberately NOT here: leaving an account is not in the same family as
+ * cancelling a subscription, and this block is styled to make you hesitate.
+ *
+ * The note from 2026-05-22 about needing `refresh_token + offline_access` was
+ * also wrong on the facts. Shopify's refresh grant never returns a new
+ * id_token and `offline_access` does not exist on this platform; the real
+ * mechanism is a `prompt=none` round trip. See docs/AUTH_LOGOUT.md.
  */
 export function DangerZone({ onCancel }: DangerZoneProps) {
   const lang = useLangValue();

@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import {
   api,
@@ -9,6 +10,7 @@ import {
   setSelectedSubscription,
 } from "@/lib/api-client";
 import { SubscriptionChooser } from "@/components/SubscriptionChooser";
+import { activeRoute } from "@/lib/portal-link";
 import type { Subscription } from "@/lib/types";
 
 /**
@@ -137,6 +139,15 @@ function GateSplash() {
  * than being stranded on a single-sub view with no way back.
  */
 export function SubscriptionGate({ children }: { children: ReactNode }) {
+  // The signed-out page opts out entirely. It is the one page reached WITHOUT a
+  // session, so gating it means: a splash while /api/subscriptions 401s, and —
+  // if App Proxy still injects logged_in_customer_id from a storefront cookie
+  // we have not killed yet — a multi-sub customer gets the subscription chooser
+  // rendered on top of the page that just told them they were signed out.
+  // (2026-07-29)
+  const pathname = usePathname();
+  const bypass = activeRoute(pathname) === "signedOut";
+
   const [phase, setPhase] = useState<"loading" | "children" | "chooser">("loading");
   const [subs, setSubs] = useState<Subscription[]>([]);
   // Fallback flag: when the list couldn't be fetched, keep the switch alive for a
@@ -162,6 +173,7 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (bypass) return;
     let cancelled = false;
     // Instant decision for returning customers (avoids both a loading wait for
     // single-sub AND a portal flash for multi-sub).
@@ -187,7 +199,7 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [refresh, bypass]);
 
   const openChooser = useCallback(() => {
     if (subs.length > 1) {
@@ -201,6 +213,8 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
       .then((list) => setPhase(list.length > 1 ? "chooser" : "children"))
       .catch(() => setPhase("children"));
   }, [subs.length, refresh]);
+
+  if (bypass) return <>{children}</>;
 
   if (phase === "loading") return <GateSplash />;
 

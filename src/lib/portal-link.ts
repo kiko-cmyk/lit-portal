@@ -9,11 +9,32 @@
 
 export type Lang = "en" | "es";
 
-export type PortalRoute = "home" | "collection" | "account" | "orders";
+// `signedOut` is not a nav destination — it is the dead end you land on after
+// logging out. It lives here anyway so the slug pair exists in exactly one
+// place (proxy.ts mirrors it for the ES → canonical rewrite) instead of being
+// retyped in every component that needs to send someone there.
+export type PortalRoute =
+  | "home"
+  | "collection"
+  | "account"
+  | "orders"
+  | "signedOut";
 
 const SLUGS: Record<Lang, Record<PortalRoute, string>> = {
-  en: { home: "my-lit", collection: "collection", account: "account", orders: "orders" },
-  es: { home: "mi-lit", collection: "coleccion", account: "cuenta", orders: "pedidos" },
+  en: {
+    home: "my-lit",
+    collection: "collection",
+    account: "account",
+    orders: "orders",
+    signedOut: "signed-out",
+  },
+  es: {
+    home: "mi-lit",
+    collection: "coleccion",
+    account: "cuenta",
+    orders: "pedidos",
+    signedOut: "sesion-cerrada",
+  },
 };
 
 const BASE = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH ?? "";
