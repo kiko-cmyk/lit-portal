@@ -116,12 +116,6 @@ export function SwitchAccountRow() {
           />
         )}
       </button>
-      <p className="mt-3 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
-        <T
-          en="Your subscription is not affected."
-          es="Tu suscripción no se ve afectada."
-        />
-      </p>
     </div>
   );
 }
