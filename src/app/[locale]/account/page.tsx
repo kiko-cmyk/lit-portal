@@ -67,6 +67,8 @@ export default function AccountPage() {
   // the link in the new inbox. UI feedback in the meantime.
   const [emailChangePending, setEmailChangePending] = useState<string | null>(null);
   const [emailChangeConfirmed, setEmailChangeConfirmed] = useState(false);
+  /** null = no banner. A formatted date, or `true` when we have no date. */
+  const [addressSaved, setAddressSaved] = useState<string | true | null>(null);
   const t = useLang();
   const lang = useLangValue();
   const { canSwitch, openChooser } = useSubscriptionSwitch();
@@ -502,9 +504,32 @@ export default function AccountPage() {
 
         {subActive && (
           <Section title={t({ en: "Where boxes land", es: "Dónde llegan las cajas" })}>
+            {/* The overlay used to just vanish on success, with no word that
+                anything had been saved (Juan, 2026-07-29). After the
+                gateway_timeout incident, silence on success is the worst
+                possible ending: it reads exactly like the failure did. */}
+            {addressSaved && (
+              <div className="mx-6 mb-3 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
+                <T
+                  en={
+                    addressSaved === true
+                      ? "Address updated. It applies from your next shipment."
+                      : `Address updated. It applies from your shipment on ${addressSaved}.`
+                  }
+                  es={
+                    addressSaved === true
+                      ? "Dirección actualizada. Aplica desde tu próximo envío."
+                      : `Dirección actualizada. Aplica desde tu envío del ${addressSaved}.`
+                  }
+                />
+              </div>
+            )}
             <AddressBlock
               address={subscription.shippingAddress}
-              onEdit={() => setAddressOpen(true)}
+              onEdit={() => {
+                setAddressSaved(null);
+                setAddressOpen(true);
+              }}
             />
           </Section>
         )}
@@ -612,7 +637,20 @@ export default function AccountPage() {
         <AddressOverlay
           subscription={subscription}
           onClose={() => setAddressOpen(false)}
-          onUpdated={(updated) => setSubscription(updated)}
+          onUpdated={(updated) => {
+            if (updated) setSubscription(updated);
+            // The overlay closes itself right after this, so the confirmation
+            // has to live on the page behind it.
+            const shipDate = (updated ?? subscription).nextShipDate;
+            setAddressSaved(
+              shipDate
+                ? new Date(shipDate).toLocaleDateString(dateLocale, {
+                    day: "numeric",
+                    month: "long",
+                  })
+                : true,
+            );
+          }}
         />
       )}
       {chargeNowOpen && subscription && (
