@@ -90,15 +90,30 @@ export function alertSlackNotice(opts: {
   title: string;
   /** `key: value` context lines. PII discipline: ids, never emails. */
   fields?: Record<string, string | number | null | undefined>;
+  /**
+   * Which Slack channel. `alerts` (default) is the engineering firehose
+   * (#server-errors). `incidents` is for things a HUMAN must act on within the
+   * day, which is a different audience and must not drown in 5xx noise: today
+   * that means a subscription one failed charge away from being auto-cancelled.
+   * Falls back to the alerts webhook when the incidents one isn't configured, so
+   * the alert is never silently dropped just because an env var is missing.
+   */
+  channel?: "alerts" | "incidents";
+  /** Slack emoji prefix. Defaults to the pause icon for historical reasons. */
+  icon?: string;
 }): void {
-  const url =
+  const alerts =
     process.env.SLACK_ALERTS_WEBHOOK_URL || process.env.SLACK_SECURITY_WEBHOOK_URL;
+  const url =
+    opts.channel === "incidents"
+      ? process.env.SLACK_INCIDENTS_WEBHOOK_URL || alerts
+      : alerts;
   if (!url) return;
 
   const lines = Object.entries(opts.fields ?? {})
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
     .map(([k, v]) => `• ${k}: \`${String(v)}\``);
-  const text = [`:pause_button: *lit-portal* ${opts.title}`, ...lines].join("\n");
+  const text = [`${opts.icon ?? ":pause_button:"} *lit-portal* ${opts.title}`, ...lines].join("\n");
 
   void fetch(url, {
     method: "POST",
