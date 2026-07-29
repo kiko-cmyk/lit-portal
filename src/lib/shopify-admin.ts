@@ -791,6 +791,21 @@ class ShopifyAdminClient {
   /**
    * Update the customer's default shipping address. Used in sync with
    * Seal subscription address update so future orders ship to the new place.
+   *
+   * Written against Admin API 2026-04 (`ADMIN_API_VERSION`). The previous shape
+   * was written for an older version and had been failing on EVERY call since
+   * the bump on 2026-04-28, silently until PR #73 turned the sync into an
+   * alerting `after()` (found the same day the alert first fired, 2026-07-29):
+   *   - `CustomerAddressCreatePayload.customerAddress` no longer exists, the
+   *     created address comes back as `address`.
+   *   - `customerDefaultAddressUpdate` was removed from the schema entirely.
+   *     `customerAddressCreate` now takes `setAsDefault`, which also collapses
+   *     the old create-then-default pair into one round trip: no window where a
+   *     new address exists without being the default.
+   *   - `MailingAddressInput` only accepts `countryCode`/`provinceCode`, not the
+   *     free-text `country`/`province`. Shopify canonicalises the display names.
+   * Any change here must be re-validated against the live schema, the old shape
+   * type-checked and linted fine while being rejected at runtime.
    */
   async updateCustomerDefaultAddress(
     customerId: string,
@@ -799,9 +814,7 @@ class ShopifyAdminClient {
       address2?: string;
       city: string;
       zip: string;
-      country: string;
       countryCode: string;
-      province?: string;
       provinceCode?: string;
       firstName?: string;
       lastName?: string;
@@ -809,18 +822,18 @@ class ShopifyAdminClient {
     },
   ): Promise<void> {
     const gid = customerId.startsWith("gid://") ? customerId : `gid://shopify/Customer/${customerId}`;
-    // Strategy: create a new address (Shopify defaults it via setDefault) — simpler than
-    // tracking the existing address ID. Old addresses live on the account; portal only
-    // surfaces the default.
+    // Strategy: create a new address and let Shopify default it — simpler than
+    // tracking the existing address ID. Old addresses live on the account; portal
+    // only surfaces the default.
     const data = await this.graphql<{
       customerAddressCreate: {
-        customerAddress: { id: string } | null;
+        address: { id: string } | null;
         userErrors: Array<{ field: string[]; message: string }>;
       };
     }>(
       `mutation createAddr($customerId: ID!, $address: MailingAddressInput!) {
-         customerAddressCreate(customerId: $customerId, address: $address) {
-           customerAddress { id }
+         customerAddressCreate(customerId: $customerId, address: $address, setAsDefault: true) {
+           address { id }
            userErrors { field message }
          }
        }`,
@@ -831,9 +844,7 @@ class ShopifyAdminClient {
           address2: address.address2,
           city: address.city,
           zip: address.zip,
-          country: address.country,
           countryCode: address.countryCode,
-          province: address.province,
           provinceCode: address.provinceCode,
           firstName: address.firstName,
           lastName: address.lastName,
@@ -846,19 +857,12 @@ class ShopifyAdminClient {
         `Shopify addressCreate errors: ${JSON.stringify(data.customerAddressCreate.userErrors)}`,
       );
     }
-    const newAddrId = data.customerAddressCreate.customerAddress?.id;
-    if (!newAddrId) return;
-    // Set the new address as default
-    await this.graphql<{
-      customerDefaultAddressUpdate: { userErrors: Array<{ message: string }> };
-    }>(
-      `mutation setDefault($customerId: ID!, $addressId: ID!) {
-         customerDefaultAddressUpdate(customerId: $customerId, addressId: $addressId) {
-           userErrors { message }
-         }
-       }`,
-      { customerId: gid, addressId: newAddrId },
-    );
+    if (!data.customerAddressCreate.address?.id) {
+      // No address and no userErrors should be impossible. Throw rather than
+      // return quietly: the caller alerts, and a silent no-op here is exactly
+      // the failure mode this function just spent three months in.
+      throw new Error("Shopify customerAddressCreate returned no address and no userErrors");
+    }
   }
 
   // ───────────────────────────────────────────────────────────────
@@ -1010,6 +1014,13 @@ class ShopifyAdminClient {
    * Update the shipping address on a subscription contract. Same draft/commit
    * pattern as updateSubscriptionLine, only the middle mutation differs
    * (subscriptionDraftDeliveryMethodUpdate instead of line update).
+   *
+   * ⚠️ UNUSED and BROKEN as written: nothing calls this (Seal is the source of
+   * truth for subscription addresses, see api/subscription/address), and
+   * `subscriptionDraftDeliveryMethodUpdate` no longer exists in Admin API
+   * 2026-04 — the same class of rot that silently killed
+   * `updateCustomerDefaultAddress` for three months. Re-validate the mutation
+   * against the live schema before wiring this up to anything.
    *
    * The Shipping/Local input shapes are documented at:
    *   https://shopify.dev/docs/api/admin-graphql/latest/input-objects/SubscriptionShippingDeliveryMethodInput
