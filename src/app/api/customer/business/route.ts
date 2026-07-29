@@ -76,28 +76,37 @@ export const PATCH = withCustomer<{ updated: boolean; business: BusinessDetails 
     );
 
     if (touchesAddress) {
-      // Shopify rejects an address with no street/city/zip, and a wholesale
-      // customer who blanks one of them would land on a 500 with no idea why.
-      if (!address1 || !city || !postalCode) {
-        throw new ApiHttpError(
-          400,
-          "invalid_address",
-          "address1, city and postalCode are all required",
-        );
+      const address2 = pick(body.address2, addr?.address2);
+      const company = pick(body.company, addr?.company);
+      const phone = pick(body.phone, addr?.phone);
+
+      // No field is required on its own. The form saves ONE field at a time, so
+      // a partner whose Shopify record has no address yet (tagged before ever
+      // ordering) must be able to start anywhere: requiring street + city +
+      // postcode up front made the FIRST save of every empty account fail with
+      // "couldn't save" and no way forward. Shopify accepts a partial address
+      // and checkout asks for whatever is still missing.
+      if (![address1, address2, city, postalCode, company, phone].some(Boolean)) {
+        throw new ApiHttpError(400, "invalid_address", "The address would be empty");
       }
       // Province is derived from the postal code, never asked for (same rule as
       // the subscription address form): in Spain it IS the first two digits, so
       // a move to another province can't leave a label contradicting itself.
       const province = provinceFromEsPostalCode(postalCode);
+      // Empty travels as `undefined`, i.e. the field is omitted from the
+      // mutation rather than explicitly blanked, so a half-filled address never
+      // gets rejected for sending "". Trade-off, worth naming: clearing a field
+      // that already has a value is a no-op (they can overwrite it, not empty
+      // it), which is the right way round for an address used to invoice.
       await shopifyAdmin.updateCustomerDefaultAddress(ctx.customerId, {
         address1,
-        address2: pick(body.address2, addr?.address2) || undefined,
-        city,
-        zip: postalCode,
+        address2: address2 || undefined,
+        city: city || undefined,
+        zip: postalCode || undefined,
         countryCode: addr?.countryCode || "ES",
         provinceCode: province?.code,
-        company: pick(body.company, addr?.company) || undefined,
-        phone: pick(body.phone, addr?.phone) || undefined,
+        company: company || undefined,
+        phone: phone || undefined,
       });
     }
 

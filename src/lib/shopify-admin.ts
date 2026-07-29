@@ -875,8 +875,12 @@ class ShopifyAdminClient {
     address: {
       address1: string;
       address2?: string;
-      city: string;
-      zip: string;
+      // Optional because the B2B form saves ONE field at a time and Shopify
+      // accepts a partial address (checked against the live 2026-04 API: a
+      // create with only address1 + company comes back with no userErrors).
+      // The subscription address sync still always passes both.
+      city?: string;
+      zip?: string;
       countryCode: string;
       provinceCode?: string;
       firstName?: string;
