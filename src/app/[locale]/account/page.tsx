@@ -489,7 +489,10 @@ export default function AccountPage() {
                 >
                   <T en="Your mix" es="Tu mezcla" />
                 </div>
-                <div className="mt-1 font-display text-base font-black uppercase leading-tight text-[color:var(--color-lit-grey)]">
+                {/* font-semibold, no font-black: las celdas de arriba (CAJAS,
+                    FRECUENCIA) van a semibold, y la mezcla es info secundaria.
+                    Iba más gorda que los números que resume. (Juan 2026-07-29) */}
+                <div className="mt-1 font-display text-base font-semibold uppercase leading-tight text-[color:var(--color-lit-grey)]">
                   {compositionLabel(subscription.composition!)}
                 </div>
               </div>

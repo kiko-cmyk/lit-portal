@@ -14,8 +14,8 @@ interface DangerZoneProps {
  * shared-device case and missed the one that actually happens: customers
  * stuck in the WRONG Shopify account, 25 of them in the two months that
  * followed. It came back on 2026-07-29 as <SwitchAccountRow/> under "Mis
- * datos", framed as "entrar con otro correo" rather than as a logout, and
- * deliberately NOT here: leaving an account is not in the same family as
+ * datos", as "cerrar sesión o entrar con otro email", and deliberately NOT
+ * here: leaving an account is not in the same family as
  * cancelling a subscription, and this block is styled to make you hesitate.
  *
  * The note from 2026-05-22 about needing `refresh_token + offline_access` was

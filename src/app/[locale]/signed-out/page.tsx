@@ -127,7 +127,7 @@ export default function SignedOutPage() {
         <p className="mt-5 text-[14px] leading-[1.55] text-[color:var(--color-warm-gray)]">
           <T
             en="You can now sign in with a different email. If you have more than one LIT account, use the address you placed your order with."
-            es="Ya puedes entrar con otro correo. Si tienes más de una cuenta en LIT, usa la dirección con la que hiciste el pedido."
+            es="Ya puedes entrar con otro email. Si tienes más de una cuenta en LIT, usa la dirección con la que hiciste el pedido."
           />
         </p>
       </div>
@@ -139,7 +139,7 @@ export default function SignedOutPage() {
           className="inline-flex w-full items-center justify-center rounded-full bg-[color:var(--color-lit-grey)] px-7 py-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] transition-transform duration-200 ease-out hover:-translate-y-[2px]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
         >
-          <T en="Sign in with another email" es="Entrar con otro correo" />
+          <T en="Sign in with another email" es="Entrar con otro email" />
         </button>
 
         <a
