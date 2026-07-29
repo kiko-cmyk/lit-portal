@@ -1,12 +1,14 @@
-import { after } from "next/server";
+import { after, type NextRequest } from "next/server";
 
 import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { provinceFromEsPostalCode } from "@/lib/es-provinces";
+import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import type { AppProxyContext } from "@/lib/shopify-app-proxy";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 
@@ -28,6 +30,20 @@ export const maxDuration = 20;
  * see it, or does not happen.
  */
 const PROXY_BUDGET_MS = 8_500;
+
+/**
+ * Wall-clock budget for the whole request, shared by every upstream call.
+ *
+ * Without it the per-call budgets still add up past the proxy: rate limiter
+ * (Supabase 5s) + customer email (Shopify 9s) + subscription (Seal 9s) ≈ 23s,
+ * and at ~10s the customer already has storefront HTML and reads
+ * `gateway_timeout` — the very error this whole thread started with. With it,
+ * the last call in the chain only gets the time that is actually left, so a
+ * stall surfaces as a typed, alerted 503 BEFORE the proxy gives up. Set just
+ * under the proxy's patience, and above PROXY_BUDGET_MS so the read guard below
+ * is what normally stops a doomed save, not an abort mid-write.
+ */
+const REQUEST_BUDGET_MS = 9_500;
 
 interface AddressBody {
   address1: string;
@@ -67,7 +83,14 @@ interface AddressBody {
  *   - 2026-05-22: back to Seal-primary, Shopify-sync best-effort.
  *     Fixes Juan's `subscription_not_found` after a cancel+reactivate.
  */
-export const PATCH = withCustomer(async (req, ctx) => {
+export const PATCH = withCustomer((req, ctx) =>
+  runWithRequestDeadline(REQUEST_BUDGET_MS, () => patchAddress(req, ctx)),
+);
+
+async function patchAddress(
+  req: NextRequest,
+  ctx: AppProxyContext & { customerId: string },
+) {
   const startedAt = Date.now();
   await enforceRateLimit(ctx.customerId, "address", { limit: 10, windowMs: 60_000 });
 
@@ -205,17 +228,22 @@ export const PATCH = withCustomer(async (req, ctx) => {
   // do not send a display name it might not recognise.
   after(async () => {
     try {
-      await shopifyAdmin.updateCustomerDefaultAddress(ctx.customerId, {
-        address1: body.address1,
-        address2: body.address2,
-        city: body.city,
-        zip: body.postalCode,
-        countryCode: body.countryCode,
-        provinceCode,
-        firstName,
-        lastName,
-        phone: body.phone,
-      });
+      // Outside the request deadline on purpose: this runs after the response is
+      // flushed, when that budget is spent by definition, and an inherited
+      // exhausted deadline would abort the sync instantly.
+      await runWithoutRequestDeadline(() =>
+        shopifyAdmin.updateCustomerDefaultAddress(ctx.customerId, {
+          address1: body.address1,
+          address2: body.address2,
+          city: body.city,
+          zip: body.postalCode,
+          countryCode: body.countryCode,
+          provinceCode,
+          firstName,
+          lastName,
+          phone: body.phone,
+        }),
+      );
     } catch (err) {
       // Seal already has the address, so the box ships correctly either way —
       // but a silent divergence between Seal and Shopify is exactly what made
@@ -233,10 +261,22 @@ export const PATCH = withCustomer(async (req, ctx) => {
   // Re-fetch Seal for the response (eventual consistency — Seal usually
   // catches up within ~1s). Use the fast singular by-id endpoint, not the
   // paginated scan.
-  const refreshed = await seal.getSubscriptionById(sealSub.id);
+  //
+  // Never let this read fail the request: the write above already landed, so
+  // throwing here would tell the customer "no se pudo guardar" about a change
+  // that DID happen — the same invisible-outcome trap as the original bug, only
+  // inverted. It is also the call most likely to run out of request budget,
+  // being the last one. Without a subscription the FE just skips its optimistic
+  // update and still shows the confirmation (see AddressOverlay.onUpdated).
+  let refreshed = null;
+  try {
+    refreshed = await seal.getSubscriptionById(sealSub.id);
+  } catch (err) {
+    console.warn("[address] read-back after write failed, reporting success anyway:", err);
+  }
   return {
     updated: true,
     appliesFrom: refreshed ? getNextBillingAttempt(refreshed)?.date ?? null : null,
     subscription: refreshed ? mapToSubscription(refreshed, ctx.customerId) : null,
   };
-});
+}

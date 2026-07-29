@@ -11,7 +11,7 @@
  * "close date", regenerated attempts after reschedule, etc).
  */
 
-import { deadlineIn, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
+import { budgetWithin, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
 
 const SEAL_API_BASE = "https://app.sealsubscriptions.com/shopify/merchant/api";
 
@@ -162,7 +162,7 @@ class SealClient {
     const retriable = method === "GET";
     // Budget spans the whole call including retries; set once on attempt 0 and
     // threaded through the recursion.
-    const budget = deadline ?? deadlineIn(SEAL_TOTAL_BUDGET_MS);
+    const budget = deadline ?? budgetWithin(SEAL_TOTAL_BUDGET_MS);
     const left = msLeft(budget);
     if (left <= 0) throw new UpstreamTimeoutError("seal", path, SEAL_TOTAL_BUDGET_MS);
     const { signal, timedOut } = fetchDeadline(

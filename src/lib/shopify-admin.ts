@@ -23,7 +23,7 @@
  * Shopify signs proxy requests with that app's client_secret).
  */
 
-import { deadlineIn, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
+import { budgetWithin, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // e.g. "lit-tienda.myshopify.com"
 const ADMIN_CLIENT_ID = process.env.SHOPIFY_ADMIN_CLIENT_ID ?? process.env.SHOPIFY_API_KEY;
@@ -172,7 +172,7 @@ class ShopifyAdminClient {
     // (see isRetryableReadDocument).
     const readRetryable = isRetryableReadDocument(query);
     // Budget covers the whole call: token exchange + every attempt + backoff.
-    const budget = deadlineIn(SHOPIFY_TOTAL_BUDGET_MS);
+    const budget = budgetWithin(SHOPIFY_TOTAL_BUDGET_MS);
     const token = await getAdminToken();
 
     for (let attempt = 0; ; attempt++) {
@@ -806,6 +806,10 @@ class ShopifyAdminClient {
    *     free-text `country`/`province`. Shopify canonicalises the display names.
    * Any change here must be re-validated against the live schema, the old shape
    * type-checked and linted fine while being rejected at runtime.
+   *
+   * Edits the existing default address in place (2026-07-29) instead of adding a
+   * new one on every save, which used to pile up near-duplicates on the customer
+   * file that support then has to read past.
    */
   async updateCustomerDefaultAddress(
     customerId: string,
@@ -822,9 +826,57 @@ class ShopifyAdminClient {
     },
   ): Promise<void> {
     const gid = customerId.startsWith("gid://") ? customerId : `gid://shopify/Customer/${customerId}`;
-    // Strategy: create a new address and let Shopify default it — simpler than
-    // tracking the existing address ID. Old addresses live on the account; portal
-    // only surfaces the default.
+    const input = {
+      address1: address.address1,
+      address2: address.address2,
+      city: address.city,
+      zip: address.zip,
+      countryCode: address.countryCode,
+      provinceCode: address.provinceCode,
+      firstName: address.firstName,
+      lastName: address.lastName,
+      phone: address.phone,
+    };
+
+    // Edit the existing default in place when there is one. Creating a fresh
+    // address on every save (the old strategy, "simpler than tracking the id")
+    // silently littered the customer file: Juan's had FIVE near-identical
+    // Madrid addresses by 2026-07-29, one of them carrying a typo from a single
+    // mistyped save. Support reads that list, so the noise has a real cost.
+    // Falls back to create when the customer has no default yet.
+    const current = await this.graphql<{
+      customer: { defaultAddress: { id: string } | null } | null;
+    }>(`query defaultAddr($id: ID!) { customer(id: $id) { defaultAddress { id } } }`, {
+      id: gid,
+    });
+    const existingId = current.customer?.defaultAddress?.id ?? null;
+
+    if (existingId) {
+      const data = await this.graphql<{
+        customerAddressUpdate: {
+          address: { id: string } | null;
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      }>(
+        `mutation updateAddr($customerId: ID!, $addressId: ID!, $address: MailingAddressInput!) {
+           customerAddressUpdate(customerId: $customerId, addressId: $addressId, address: $address, setAsDefault: true) {
+             address { id }
+             userErrors { field message }
+           }
+         }`,
+        { customerId: gid, addressId: existingId, address: input },
+      );
+      if (data.customerAddressUpdate.userErrors.length > 0) {
+        throw new Error(
+          `Shopify addressUpdate errors: ${JSON.stringify(data.customerAddressUpdate.userErrors)}`,
+        );
+      }
+      if (!data.customerAddressUpdate.address?.id) {
+        throw new Error("Shopify customerAddressUpdate returned no address and no userErrors");
+      }
+      return;
+    }
+
     const data = await this.graphql<{
       customerAddressCreate: {
         address: { id: string } | null;
@@ -837,20 +889,7 @@ class ShopifyAdminClient {
            userErrors { field message }
          }
        }`,
-      {
-        customerId: gid,
-        address: {
-          address1: address.address1,
-          address2: address.address2,
-          city: address.city,
-          zip: address.zip,
-          countryCode: address.countryCode,
-          provinceCode: address.provinceCode,
-          firstName: address.firstName,
-          lastName: address.lastName,
-          phone: address.phone,
-        },
-      },
+      { customerId: gid, address: input },
     );
     if (data.customerAddressCreate.userErrors.length > 0) {
       throw new Error(
