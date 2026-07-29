@@ -210,7 +210,6 @@ export const PATCH = withCustomer(async (req, ctx) => {
         address2: body.address2,
         city: body.city,
         zip: body.postalCode,
-        country,
         countryCode: body.countryCode,
         provinceCode,
         firstName,
