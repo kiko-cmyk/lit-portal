@@ -6,15 +6,15 @@ import { T, useLangValue } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
 
 /**
- * "Sign in with another email" / "Entrar con otro correo".
+ * "Log out or use another email" / "Cerrar sesión o entrar con otro email".
  *
  * Not a generic logout button, on purpose. What customers actually need is a
  * way OUT of the wrong account: Shopify creates an empty customer on the fly
  * for any email with no orders (checkout typo, "Login with Shop" identity, a
  * work address), and until now landing in one was a dead end. Between
  * 2026-05-27 and 2026-07-29, 25 customers tried to escape through the email
- * field in Cuenta and none succeeded, so the copy names the destination
- * rather than the action.
+ * field in Cuenta and none succeeded, so the copy always spells out where it
+ * takes you and never stops at the bare word "logout".
  *
  * Flow: POST /api/auth/logout (deletes the server-side session and returns
  * the Shopify URL that kills the Customer Account session too) → clear
@@ -82,37 +82,44 @@ export function SwitchAccountLink({ className }: { className?: string }) {
       {busy ? (
         <T en="Signing out…" es="Cerrando sesión…" />
       ) : (
-        <T en="Not your account? Use another email" es="¿No es tu cuenta? Entrar con otro correo" />
+        <T en="Not your account? Use another email" es="¿No es tu cuenta? Entrar con otro email" />
       )}
     </button>
   );
 }
 
 /**
- * Row variant for the Account surface, styled to sit under "Mis datos"
- * without competing with the danger zone below it.
+ * Row variant for the Account surface, under "Mis datos".
+ *
+ * Same outlined pill as "Cambiar cajas o frecuencia" in the section above
+ * (Juan 2026-07-29): both are "take me somewhere to change something" actions,
+ * so they should read as the same kind of control. Deliberately NOT the filled
+ * yellow-on-dark treatment, which the portal reserves for primary actions, and
+ * deliberately not in the Zona oscura, which is styled to make you hesitate.
  */
 export function SwitchAccountRow() {
   const { busy, go } = useSwitchAccount();
   return (
-    <div className="mx-6 border-t border-[color:var(--color-lit-grey)]/8 pt-4 md:mx-0">
+    <div className="mx-6 border-t border-[color:var(--color-lit-grey)]/8 pt-5 md:mx-0">
       <button
         type="button"
         onClick={go}
         disabled={busy}
-        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)] underline decoration-[color:var(--color-lit-grey)]/30 underline-offset-4 transition-colors duration-150 hover:decoration-[color:var(--color-lit-grey)] disabled:opacity-50"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
+        className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)] disabled:opacity-50"
       >
         {busy ? (
           <T en="Signing out…" es="Cerrando sesión…" />
         ) : (
-          <T en="Sign in with another email" es="Entrar con otro correo" />
+          <T
+            en="Log out or use another email"
+            es="Cerrar sesión o entrar con otro email"
+          />
         )}
       </button>
-      <p className="mt-2 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+      <p className="mt-3 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
         <T
-          en="Signs you out of this account so you can use a different email. Your subscription is not affected."
-          es="Cierra la sesión de esta cuenta para que puedas entrar con otro correo. Tu suscripción no se ve afectada."
+          en="Your subscription is not affected."
+          es="Tu suscripción no se ve afectada."
         />
       </p>
     </div>
