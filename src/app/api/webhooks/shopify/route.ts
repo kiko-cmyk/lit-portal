@@ -2,6 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
 import { compositionLabel, shortLabel } from "@/lib/mix";
+import {
+  boxCountFromOrderLines,
+  compositionFromOrderLines,
+  type OrderLine,
+} from "@/lib/order-lines";
 import { BOX_COUNT_BY_VARIANT, type FlavorKey, flavorKeyForVariant, FREQUENCY_BY_SELLING_PLAN } from "@/lib/seal-plans";
 import { klaviyo } from "@/lib/klaviyo";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -158,27 +163,6 @@ interface ShopifyFulfillmentPayload {
   order_id?: number;
 }
 
-/**
- * Boxes per flavor from an order's subscription lines, aggregating several lines of
- * the same flavor (a mix ships as one line per flavor). Lines outside the variant
- * registry are ignored: they have no flavor we can name.
- */
-function compositionFromOrderLines(
-  lines: Array<{ variant_id?: number; quantity: number }>,
-): Array<{ flavor: FlavorKey; boxes: number }> {
-  const byFlavor = new Map<FlavorKey, number>();
-  for (const li of lines) {
-    const vid = String(li.variant_id ?? "");
-    const boxesPerUnit = BOX_COUNT_BY_VARIANT[vid];
-    const flavor = flavorKeyForVariant(vid);
-    if (boxesPerUnit === undefined || !flavor) continue;
-    byFlavor.set(flavor, (byFlavor.get(flavor) ?? 0) + boxesPerUnit * (li.quantity ?? 1));
-  }
-  return [...byFlavor]
-    .map(([flavor, boxes]) => ({ flavor, boxes }))
-    .sort((a, b) => b.boxes - a.boxes);
-}
-
 async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   // 1. Referral attribution
   const refAttr = payload.note_attributes?.find((a) => a.name === "ref" || a.name === "referral_code");
@@ -219,6 +203,15 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   // 2. Confirmation email trigger — fires Klaviyo event with plan details
   const email = payload.customer?.email ?? payload.email;
   if (email && payload.line_items && payload.line_items.length > 0) {
+    // The orders/paid payload does NOT carry selling-plan info, same as
+    // fulfillments/create (see handleFulfillmentsCreate). Verified in production
+    // 2026-07-29: order #8964 is a "Suscripción cada 15 días" in the Admin API, yet
+    // its confirmation_sent event came out is_subscription:false, frequency:null,
+    // selling_plan_name:null, box_count:1 and flavor "LIT Daily Hydration: Watermelon".
+    // 26 of the last 30 orders were misreported the same way, so every plan field in
+    // the welcome email was wrong or missing. Read the lines from the ORDER instead,
+    // exactly as the Drops path already does.
+    const resolved = await resolveOrderLines(payload.id, payload.line_items);
     // BOX COUNT — the LIT model puts the box count in the VARIANT (SL90 = 3 boxes),
     // with quantity almost always 1. Summing `quantity` (audit 2026-07-06, which
     // fixed the multi-line dimension but summed the wrong axis) therefore reported
@@ -226,25 +219,12 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     // confirmation email. Map through the variant registry instead and multiply by
     // quantity, which is correct for all four shapes that exist in production:
     // pack × 1, 1-box × N (a mix), pack × N, and a portal-created mix.
-    const subLines = payload.line_items.filter((li) => li.selling_plan_allocation);
-    const main = subLines[0] ?? payload.line_items[0];
+    const subLines = resolved.filter((li) => li.selling_plan_allocation);
+    const main = subLines[0] ?? resolved[0];
     const planId = main?.selling_plan_allocation?.selling_plan?.id
       ? String(main.selling_plan_allocation.selling_plan.id)
       : null;
-    const knownLines = subLines.filter(
-      (li) => BOX_COUNT_BY_VARIANT[String(li.variant_id)] !== undefined,
-    );
-    const boxCount =
-      knownLines.length > 0
-        ? knownLines.reduce(
-            (s, li) => s + BOX_COUNT_BY_VARIANT[String(li.variant_id)]! * (li.quantity ?? 1),
-            0,
-          )
-        : subLines.length > 0
-          ? // Non-registry subscription lines (B2B, a retired variant): fall back to
-            // the old quantity sum rather than reporting 0.
-            subLines.reduce((s, li) => s + (li.quantity ?? 0), 0)
-          : main?.quantity ?? 1;
+    const boxCount = boxCountFromOrderLines(resolved);
 
     // Boxes per flavor, so the email can name a mix instead of only the first line.
     const composition = compositionFromOrderLines(subLines);
@@ -259,7 +239,7 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     // Exposed as a clean boolean so Klaviyo flows can branch on subscription
     // vs one-time purchases without parsing plan_label (e.g. the
     // "Área personal - Bienvenida" welcome triggers on is_subscription = true).
-    const isSubscription = payload.line_items.some((li) => li.selling_plan_allocation);
+    const isSubscription = resolved.some((li) => li.selling_plan_allocation);
     // AWAIT: on Vercel the function can freeze once the response is sent, so a
     // fire-and-forget trackEvent (and the confirmation/welcome email it drives)
     // could be dropped after processed_at is marked, with no retry. Awaiting
@@ -288,6 +268,75 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
       })
       .catch((err) => console.warn("[orders/paid] confirmation_sent klaviyo failed:", err));
   }
+}
+
+/**
+ * Line items WITH selling-plan and variant data, read from the order.
+ *
+ * The orders/paid webhook body omits `selling_plan_allocation` (verified in production:
+ * a live "Suscripción cada 15 días" order arrived with no plan on any line), so every
+ * plan field derived from it came out empty and the welcome email said "1 CAJA" with the
+ * raw product title as the flavor. The Admin API does return it.
+ *
+ * Falls back to the webhook body on any failure: a degraded email beats no email, which
+ * is what throwing here would cause (confirmation_sent is the last side effect and a
+ * throw would replay the whole handler).
+ */
+async function resolveOrderLines(
+  orderId: number | undefined,
+  fallback: OrderLine[],
+): Promise<OrderLine[]> {
+  if (!orderId) return fallback;
+  const res = await shopifyAdmin
+    .graphql<{
+      order: {
+        lineItems: {
+          nodes: Array<{
+            title: string;
+            quantity: number;
+            variant: { id: string } | null;
+            sellingPlan: { sellingPlanId: string; name: string } | null;
+          }>;
+        };
+      } | null;
+    }>(
+      `query orderLinesForConfirmation($id: ID!) {
+        order(id: $id) {
+          lineItems(first: 100) {
+            nodes {
+              title
+              quantity
+              variant { id }
+              sellingPlan { sellingPlanId name }
+            }
+          }
+        }
+      }`,
+      { id: `gid://shopify/Order/${orderId}` },
+    )
+    .catch((err) => {
+      console.warn(`[orders/paid] could not read lines for order ${orderId}`, err);
+      return null;
+    });
+  const nodes = res?.order?.lineItems?.nodes;
+  if (!nodes?.length) return fallback;
+  const numeric = (gid: string | null | undefined, prefix: string) =>
+    gid ? Number(gid.replace(prefix, "")) : undefined;
+  return nodes.map((li) => ({
+    title: li.title,
+    quantity: li.quantity,
+    variant_id: numeric(li.variant?.id, "gid://shopify/ProductVariant/"),
+    // Rebuilt into the REST shape the rest of this handler already speaks, so the
+    // box-count, composition and cadence logic below stays untouched.
+    selling_plan_allocation: li.sellingPlan
+      ? {
+          selling_plan: {
+            id: String(numeric(li.sellingPlan.sellingPlanId, "gid://shopify/SellingPlan/")),
+            name: li.sellingPlan.name,
+          },
+        }
+      : undefined,
+  }));
 }
 
 async function handleFulfillmentsCreate(payload: ShopifyFulfillmentPayload): Promise<void> {
