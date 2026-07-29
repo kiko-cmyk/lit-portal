@@ -73,6 +73,7 @@ export default function SignedOutPage() {
     clearSelectedSubscription();
     try {
       window.localStorage.removeItem("lit_sub_count_hint");
+      window.localStorage.removeItem("lit_account_only_hint");
       window.localStorage.removeItem(LANG_HINT_KEY);
     } catch {
       // ignore — private mode / storage disabled

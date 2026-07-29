@@ -29,6 +29,7 @@ import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import Link from "next/link";
 import { orderDetailHref } from "@/lib/portal-link";
 import type {
+  BusinessDetails,
   CustomerProfile,
   OrderHistoryItem,
   Subscription,
@@ -72,9 +73,12 @@ export default function AccountPage() {
   const [emailChangeConfirmed, setEmailChangeConfirmed] = useState(false);
   /** null = no banner. A formatted date, or `true` when we have no date. */
   const [addressSaved, setAddressSaved] = useState<string | true | null>(null);
+  // Business (wholesale) details: the customer's own Shopify address + fiscal
+  // fields. Seeded from /api/customer and replaced by the PATCH read-back.
+  const [business, setBusiness] = useState<BusinessDetails | null>(null);
   const t = useLang();
   const lang = useLangValue();
-  const { canSwitch, openChooser } = useSubscriptionSwitch();
+  const { canSwitch, openChooser, accountOnly } = useSubscriptionSwitch();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
 
   useEffect(() => {
@@ -100,6 +104,7 @@ export default function AccountPage() {
         setCustomer(c);
         setSubscription(s);
         setTier(ti);
+        setBusiness(c.business ?? null);
       })
       .catch((e: ApiClientError) => setError(e.code));
     // Order history is shown expanded by default → load it eagerly.
@@ -177,19 +182,38 @@ export default function AccountPage() {
   // `subscription` is non-null even after a cancel. Gate the management UI on
   // the real status (mirrors the Hub, which 404s when there is no ACTIVE sub)
   // so a cancelled customer doesn't see the plan + action buttons. (2026-06-02)
+  //
+  // `accountOnly` (wholesale, no subscription) suppresses all of it: the gate
+  // has already collapsed the nav to this one tab, and GET /api/subscription
+  // falls back to the most recent sub, so without this a partner whose personal
+  // subscription was cancelled long ago would still be shown its dead panels.
   const subActive =
+    !accountOnly &&
     subscription != null &&
     (subscription.status === "active" ||
       subscription.status === "paused" ||
       subscription.status === "reactivating");
-  const subCancelled = subscription != null && !subActive;
+  const subCancelled = !accountOnly && subscription != null && !subActive;
   // Paused (2026-07-28). Cuenta has always rendered a paused sub as fully
   // manageable, which was never true: of the four quick actions, Bring forward,
   // Plan, Skip and Flavor, the backend rejects skip / charge-now / extras and
   // the cancel wizard's last step, because they all reason about a pending
   // billing attempt that a paused sub doesn't have. So the paused customer got a
   // grid of buttons that error. Now they get the one action that makes sense.
-  const subPaused = subscription != null && subscription.status === "paused";
+  const subPaused = !accountOnly && subscription != null && subscription.status === "paused";
+
+  /**
+   * Save one wholesale field. PATCHes only what changed and adopts the
+   * server's read-back, so the province and country shown are the ones Shopify
+   * canonicalised rather than whatever we guessed locally.
+   */
+  const saveBusiness = async (patch: Record<string, string>) => {
+    const res = await api<{ updated: boolean; business: BusinessDetails }>(
+      "/api/customer/business",
+      { method: "PATCH", body: JSON.stringify(patch) },
+    );
+    setBusiness(res.business);
+  };
 
   const handleResume = async () => {
     if (resuming || !subscription) return;
@@ -330,10 +354,19 @@ export default function AccountPage() {
                 })
                 .toUpperCase()}{" "}
               ·{" "}
-              <T
-                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"} delivered`}
-                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"} entregadas`}
-              />
+              {/* A wholesale account buys cases per order, not boxes on a plan,
+                  so counting "boxes delivered" reads wrong on their file. */}
+              {accountOnly ? (
+                <T
+                  en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "order" : "orders"}`}
+                  es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "pedido" : "pedidos"}`}
+                />
+              ) : (
+                <T
+                  en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"} delivered`}
+                  es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"} entregadas`}
+                />
+              )}
             </div>
           </div>
         </section>
@@ -606,6 +639,67 @@ export default function AccountPage() {
           <SwitchAccountRow />
         </Section>
 
+        {/* Wholesale: the address on their Shopify customer record, which is what
+            prefills their checkout. A partner has no Seal subscription, so the
+            section above (Seal's shipping address) never renders for them and
+            this is the only address they can fix themselves. */}
+        {accountOnly && (
+          <Section title={t({ en: "Address", es: "Dirección" })}>
+            <EditableRow
+              label={t({ en: "Street", es: "Dirección" })}
+              value={business?.address1 ?? ""}
+              onSave={(v) => saveBusiness({ address1: v })}
+            />
+            <EditableRow
+              label={t({ en: "Apt, floor", es: "Piso, puerta" })}
+              value={business?.address2 ?? ""}
+              onSave={(v) => saveBusiness({ address2: v })}
+            />
+            <EditableRow
+              label={t({ en: "Postcode", es: "Código postal" })}
+              value={business?.postalCode ?? ""}
+              onSave={(v) => saveBusiness({ postalCode: v })}
+            />
+            <EditableRow
+              label={t({ en: "City", es: "Ciudad" })}
+              value={business?.city ?? ""}
+              onSave={(v) => saveBusiness({ city: v })}
+            />
+            {/* Derived from the postcode, same rule as the subscription address:
+                in Spain the province IS the first two digits, so asking for it
+                only creates labels that contradict themselves. */}
+            <ReadOnlyRow
+              label={t({ en: "Province", es: "Provincia" })}
+              value={business?.province ?? ""}
+            />
+            <ReadOnlyRow
+              label={t({ en: "Country", es: "País" })}
+              value={business?.country ?? "España"}
+            />
+          </Section>
+        )}
+
+        {accountOnly && (
+          <Section title={t({ en: "Billing details", es: "Datos de facturación" })}>
+            <EditableRow
+              label={t({ en: "Company", es: "Empresa" })}
+              value={business?.company ?? ""}
+              onSave={(v) => saveBusiness({ company: v })}
+            />
+            <EditableRow
+              label={t({ en: "Tax ID", es: "NIF / CIF" })}
+              value={business?.taxId ?? ""}
+              onSave={(v) => saveBusiness({ taxId: v })}
+            />
+            <p className="pt-3 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+              <T
+                en="We invoice with this data and the address above. Keep it up to date and your invoices come out right with no back and forth."
+                es="Facturamos con estos datos y la dirección de arriba. Mantenlos al día y tus facturas salen bien sin tener que pedírtelos."
+              />
+            </p>
+          </Section>
+        )}
+
         {subActive && (
           <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
             {/* The overlay used to just vanish on success, with no word that
@@ -638,9 +732,14 @@ export default function AccountPage() {
           </Section>
         )}
 
-        <Section title={t({ en: "Payment method", es: "Método de pago" })}>
-          <PaymentBlock />
-        </Section>
+        {/* Hidden for wholesale: the stored payment method belongs to a
+            subscription. A partner pays each order at checkout, so the section
+            would only ever render an empty state they can't act on. */}
+        {!accountOnly && (
+          <Section title={t({ en: "Payment method", es: "Método de pago" })}>
+            <PaymentBlock />
+          </Section>
+        )}
 
         {/* Idioma vive AQUÍ (en el cuerpo de Cuenta), no en el header
             — decisión de Juan 2026-07-13. */}
@@ -904,6 +1003,21 @@ function SubsummCell({
           {sub}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Same row as EditableRow, without the edit affordance (derived values). */
+function ReadOnlyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-3 border-b border-[color:var(--color-lit-grey)]/6 py-3 last:border-b-0">
+      <div
+        className="min-w-[88px] pt-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+      >
+        {label}
+      </div>
+      <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">{value || "—"}</div>
     </div>
   );
 }

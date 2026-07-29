@@ -274,6 +274,35 @@ export interface CustomerProfile {
   boxesReceived: number;
   languagePref: "en" | "es";
   tierEarned: boolean;
+  /**
+   * Server-computed from the Shopify customer tag `B2B`. Optional on purpose:
+   * read as `=== true` everywhere, so an old cached response or any failure to
+   * resolve it degrades to "retail customer", which is the portal as it was.
+   */
+  isB2B?: boolean;
+  /**
+   * The customer's own Shopify default address plus fiscal fields. This is NOT
+   * the Seal subscription address (`Subscription.shippingAddress`): it is what
+   * prefills their checkout, and for a wholesale customer with no subscription
+   * it is the only address the portal can edit. Only rendered in B2B mode.
+   */
+  business?: BusinessDetails | null;
+}
+
+export interface BusinessDetails {
+  /** Trading name on the address (razón social). */
+  company: string | null;
+  /** NIF/CIF, stored in the `lit_b2b.tax_id` customer metafield. */
+  taxId: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  postalCode: string | null;
+  /** Derived from the postal code, never asked for. Read-only in the UI. */
+  province: string | null;
+  country: string | null;
+  countryCode: string | null;
+  phone: string | null;
 }
 
 export interface ShippingAddress {

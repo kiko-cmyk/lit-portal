@@ -54,6 +54,9 @@ export default function AuthHandoffPage() {
       clearSelectedSubscription();
       try {
         window.localStorage.removeItem("lit_sub_count_hint");
+        // Same reasoning for the wholesale hint: a shared device must not carry
+        // the account-only portal over to whoever logs in next.
+        window.localStorage.removeItem("lit_account_only_hint");
       } catch {
         // ignore
       }

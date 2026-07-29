@@ -52,10 +52,22 @@ const NAV_ICONS: Record<string, ReactNode> = {
   ),
 };
 
+/**
+ * Wholesale accounts see a single tab. The tab bar stays (rather than being
+ * hidden altogether) because the order detail page has no back link in its
+ * loaded state — without a nav, a B2B customer who opened an order would be
+ * stuck there.
+ */
+function useNavItems() {
+  const { accountOnly } = useSubscriptionSwitch();
+  return accountOnly ? ITEMS.filter((i) => i.route === "account") : ITEMS;
+}
+
 export function BottomNav() {
   const pathname = usePathname();
   const lang = useLangValue();
   const t = useLang();
+  const items = useNavItems();
   // Match the active route against the user-visible slug in EITHER locale —
   // usePathname returns the localized slug (mi-lit / cuenta / coleccion), not
   // the canonical EN one, so a plain "=== canonical" check never matched for
@@ -67,10 +79,12 @@ export function BottomNav() {
       // even on short pages like the no-subscription state. Estilo PRE: icono
       // por pestaña, activo en círculo amarillo (mismo lenguaje que la pastilla
       // activa del header desktop).
-      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-1.5 pb-5 backdrop-blur-md md:hidden"
+      className={`fixed bottom-0 left-0 right-0 z-40 grid ${
+        items.length === 1 ? "grid-cols-1" : "grid-cols-3"
+      } border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-1.5 pb-5 backdrop-blur-md md:hidden`}
       aria-label="Primary"
     >
-      {ITEMS.map((it) => {
+      {items.map((it) => {
         const active = current === it.route;
         const icon = NAV_ICONS[it.route];
         if (it.inactive) {
@@ -128,6 +142,7 @@ export function TopNav() {
   const t = useLang();
   const current = activeRoute(pathname);
   const { canSwitch, openChooser } = useSubscriptionSwitch();
+  const items = useNavItems();
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
@@ -152,7 +167,7 @@ export function TopNav() {
             </button>
           )}
           <div className="inline-flex items-center gap-1 rounded-full border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)]/55 p-1 backdrop-blur-sm">
-          {ITEMS.map((it) => {
+          {items.map((it) => {
             const active = current === it.route;
             const label = t({ en: it.en, es: it.es });
             if (it.inactive) {

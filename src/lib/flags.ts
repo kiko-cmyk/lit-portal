@@ -43,3 +43,34 @@ export function dryRunAllowedInProdFor(customerId: string): boolean {
   if (mixMode() !== "allowlist") return false;
   return mixEnabledForCustomer(customerId);
 }
+
+/**
+ * The Shopify customer tag that marks a wholesale account. LIT's store is
+ * non-Plus, so there are no Shopify Companies: the whole B2B experience
+ * (storefront gate, pricing, portal) hangs off this single tag.
+ */
+const B2B_TAG = "b2b";
+
+/**
+ * B2B_ACCOUNT_ONLY=on|off (default on).
+ *
+ * Rollback lever: setting it to `off` in Vercel makes every wholesale customer
+ * see the portal exactly as it was before B2B mode, with no deploy.
+ */
+function b2bAccountOnlyEnabled(): boolean {
+  return (process.env.B2B_ACCOUNT_ONLY ?? "on").trim().toLowerCase() !== "off";
+}
+
+/**
+ * Is this a wholesale customer? Compared case-insensitively: Shopify preserves
+ * the case a tag was created with (the live tag is `B2B`) and support adds tags
+ * by hand, so matching the literal string would be one typo away from silently
+ * treating a partner as a retail customer.
+ *
+ * Resolved SERVER-SIDE and shipped to the browser as one boolean, so the signal
+ * can't be forged from the client the way a NEXT_PUBLIC_* flag could.
+ */
+export function isB2BCustomer(tags: string[] | null | undefined): boolean {
+  if (!b2bAccountOnlyEnabled()) return false;
+  return (tags ?? []).some((t) => t.trim().toLowerCase() === B2B_TAG);
+}
