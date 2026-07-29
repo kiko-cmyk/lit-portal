@@ -177,6 +177,56 @@ por `$locale_language` y estas dos plantillas:
 El id `Utdb9S` que aparecía más abajo en este documento **ya no existe** (verificado
 2026-07-28). Antes de editar una plantilla, resolver el flow y su `template_id` como aquí.
 
+### El flow de bienvenida pierde el 91% de las altas (abierto, 2026-07-29)
+
+**Julio de 2026: 465 altas de suscripción (Seal) y 40 emails de bienvenida enviados
+(Klaviyo).** Unos 425 suscriptores nuevos no recibieron nada. No es un problema de
+plantilla ni de entregabilidad: el 100% de lo enviado se entrega y se abre el 82%.
+
+La estructura real del flow `UAH3ug`, sacada de `GET /api/flow-actions/{id}` con
+**revisión 2026-04-15** (las revisiones anteriores NO devuelven la definición, devuelven un
+`settings: {is_joined:false}` que no dice nada):
+
+```
+confirmation_sent
+  └─ 108096305  conditional-split   ← condición MALFORMADA
+       ├─ next_if_true  → null          ← se sale del flow, sin email
+       └─ next_if_false → 105935902  espera 15 min
+              └─ 106245983  conditional-split: $locale_language starts-with "en"
+                   ├─ true  → 105935906  email EN  (mensaje WjGaJ5, plantilla VxPitu)
+                   └─ false → 106246515  email ES  (mensaje RzQWTf, plantilla XcbbmT)
+```
+
+El nodo roto es **108096305**. La API responde, en todas las revisiones de 2025-10 en
+adelante, `{"type":"malformed","error_message":"Condition could not be encoded."}`, que es lo
+que devuelve Klaviyo cuando una condición apunta a algo que ya no existe (un segmento, una
+métrica o una lista borrada). Y su rama `true` apunta a `null`: **quien la cumple sale del
+flow en silencio**. Se creó el 2026-06-02 y se editó el 2026-06-30.
+
+Lo que se descartó con datos, para no volver a mirarlo:
+
+| Hipótesis | Descartada porque |
+|---|---|
+| Consentimiento de marketing | los dos mensajes son `transactional: true`, y de 24 perfiles muestreados 22 están `SUBSCRIBED`, con la misma proporción entre quien recibió y quien no |
+| Smart sending | `smart_sending_enabled: false` en los dos mensajes |
+| Filtro del mensaje | `additional_filters: null` en los dos |
+| Klaviyo descarta el envío | **0** eventos `Dropped Email` en todo julio: no llegan al paso de enviar |
+| Propiedades del evento | idénticas entre quien recibió y quien no |
+| Perfiles repetidos | 1367 eventos de **1320 perfiles distintos**: son personas diferentes |
+| El split es una regresión | antes de que existiera (8-may a 1-jun) el flow envió **1** email: nunca ha funcionado |
+
+**El arreglo tiene tres partes y las tres son necesarias.** Quitar solo el split haría que el
+email saliera con CADA `confirmation_sent`, unos 1367 al mes, incluidas compras puntuales y
+renovaciones, diciéndole "activa tu cuenta" a quien ya la tiene:
+
+1. Arreglar o borrar el split `108096305`.
+2. Filtro de trigger en el flow: `is_subscription` es `true`. **Ojo con el orden**: esa
+   propiedad solo es fiable desde el 2026-07-29 (PR #85). Antes valía `false` en el 100% de
+   los eventos, así que este filtro puesto ayer habría bloqueado a todo el mundo.
+3. Un guarda de una sola vez por perfil, porque cada renovación de Seal crea un pedido nuevo
+   y vuelve a disparar `confirmation_sent`. O la opción de "solo una vez por perfil" del flow,
+   o un split "ha recibido 'Área personal - Bienvenida' 0 veces".
+
 ### Una plantilla atada a un flow NO se puede editar por API
 
 `PATCH /api/templates/{id}` sobre `Ty5ZeT` o `VReESZ` devuelve **404**, y tampoco salen en el
@@ -199,10 +249,16 @@ personal, CTA de ancho completo, pie JOIN THE LIT MOVEMENT) con los tokens del r
 emails: 480px, Clash Display + Barlow, hueso `#F8F9F2`, tinta `#323743`, coral `#eb586b`
 como acento, tan `#CFBFAD`, amarillo `#ebee62`.
 
-| Idioma | Template id de biblioteca | Mensaje del flow al que va |
-|---|---|---|
-| ES | `S367L2` | mensaje `RzQWTf`, acción `106246515` de `UAH3ug` |
-| EN | `YzLBbj` | mensaje `WjGaJ5`, acción `105935906` de `UAH3ug` |
+| Idioma | Template id de biblioteca | Mensaje del flow | Copia viva que generó Klaviyo |
+|---|---|---|---|
+| ES | `S367L2` | `RzQWTf`, acción `106246515` | `XcbbmT` (asignada 2026-07-29) |
+| EN | `YzLBbj` | `WjGaJ5`, acción `105935906` | `VxPitu` (asignada 2026-07-29) |
+
+Ya están asignadas y en producción. Los ids `VReESZ` / `Ty5ZeT` que aparecen más arriba en
+este documento eran las copias vivas **anteriores** (las del 30-jun con el
+`{{ event.delivery_date }}` que nunca llegaba); siguen existiendo en la cuenta pero el flow ya
+no las usa. Para saber cuál está viva de verdad, leer `definition.data.message.template_id` de
+la acción con **revisión 2026-04-15**, no el endpoint `flow-messages`.
 
 Qué arreglan además del estilo: la pluralización de `box_count`, la mezcla de sabores, la
 cadencia (`frequency`, prop nueva) y **la fecha de entrega inventada**. La plantilla vieja
