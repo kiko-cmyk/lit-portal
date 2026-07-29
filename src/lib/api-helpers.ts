@@ -89,7 +89,26 @@ export function withCustomer<T, P = unknown>(handler: AuthedHandler<T, P>) {
           .select("customer_id, expires_at")
           .eq("session_id_hash", tokenHash)
           .maybeSingle();
-        if (error) console.warn("[withCustomer] bearer lookup error", error);
+        if (error) {
+          // A FAILED lookup is not a bad session. Before this branch existed,
+          // `data` came back null on any Supabase error and the code below
+          // classified it as `session_invalid` — which the FE answers by
+          // deleting the bearer from localStorage (see api-client.ts). So a
+          // Supabase blip logged customers out for good, and while Supabase was
+          // down they could not log back in either. Fail transient and loud, and
+          // above all leave their session alone.
+          console.warn("[withCustomer] bearer lookup error", error);
+          alertSlackError({
+            path: req.nextUrl.pathname,
+            code: "auth_unavailable",
+            msg: `auth_sessions lookup failed: ${error.message}`,
+          });
+          throw new ApiHttpError(
+            503,
+            "auth_unavailable",
+            "Could not verify your session right now. Please try again in a moment.",
+          );
+        }
         if (data) {
           if (new Date(data.expires_at).getTime() > Date.now()) {
             customerId = data.customer_id;
