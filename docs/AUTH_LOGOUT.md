@@ -90,17 +90,23 @@ Cliente pulsa "Entrar con otro correo"
 
 ## Qué hay que tener registrado en Shopify
 
-Canal **Headless → la aplicación → Application setup**:
+Canal **Headless → la aplicación → Application setup** (verificado en el panel
+el 2026-07-29):
 
 | Campo | Valor |
 |-------|-------|
-| Callback URL | `https://litsalt.com/apps/portal/api/auth/callback` |
-| Logout URL | `https://litsalt.com/apps/portal/es/sesion-cerrada` |
+| Callback URI(s) | `https://litsalt.com/apps/portal/api/auth/callback` |
+| Javascript origin(s) | `https://litsalt.com` |
+| Logout URI | `https://litsalt.com/apps/portal/es/mi-lit` (de mayo) **+ `https://litsalt.com/apps/portal/es/sesion-cerrada`** |
 
-El campo Logout URL es único, así que todo el mundo vuelve a la ruta en
-español; a los clientes en inglés los rebota la propia página a
-`/en/signed-out` usando la pista de idioma que su navegador dejó antes de
-salir.
+El campo Logout URI admite una LISTA, así que la nueva se añade sin quitar la
+vieja. Aun así el código manda siempre la ruta en español como
+`post_logout_redirect_uri`, con una sola entrada registrada de por medio: a
+los clientes en inglés los rebota la propia página a `/en/signed-out` usando
+la pista de idioma que su navegador dejó antes de salir. Es a propósito. Si
+dependiéramos de registrar también la URI inglesa, olvidarla no daría un aviso
+sino un cliente aterrizando en www.shopify.com, y ese fallo solo se ve cuando
+un cliente en inglés cierra sesión, o sea casi nunca y siempre tarde.
 
 Si el valor registrado acaba siendo otro, **no hay que tocar código**: la
 variable de entorno `SHOPIFY_POST_LOGOUT_URI` en Vercel lo sobrescribe. Es el
