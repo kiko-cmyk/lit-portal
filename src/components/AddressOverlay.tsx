@@ -19,7 +19,13 @@ export function AddressOverlay({
 }: {
   subscription: Subscription;
   onClose: () => void;
-  onUpdated: (updated: Subscription) => void;
+  /**
+   * Called once on a successful save, BEFORE this overlay closes itself. The
+   * argument is null when Seal's read-back came up empty, which is rare and
+   * harmless (the write landed): the page still owes the customer a
+   * confirmation, so success must be reported either way.
+   */
+  onUpdated: (updated: Subscription | null) => void;
 }) {
   const t = useLang();
   const [busy, setBusy] = useState(false);
@@ -64,7 +70,7 @@ export function AddressOverlay({
           }),
         },
       );
-      if (res.subscription) onUpdated(res.subscription);
+      onUpdated(res.subscription ?? null);
       onClose();
     } catch (e) {
       const code = (e as { code?: string }).code;
