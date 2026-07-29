@@ -86,7 +86,12 @@ export default function AccountPage() {
         if (e.code === "subscription_not_found") return null;
         throw e;
       }),
-      api<TierResponse>("/api/tier"),
+      // The tier pill is decoration; Supabase is its only dependency. Without
+      // this catch, a paused or slow Supabase took down the WHOLE page: that is
+      // the 2026-06-08 "Algo no fue bien (gateway_timeout)" on CUENTA, and the
+      // reason a customer could not even reach the address form. Every usage
+      // below already reads it as `tier?.…`, so null degrades to no pill.
+      api<TierResponse>("/api/tier").catch(() => null),
     ])
       .then(([c, s, ti]) => {
         setCustomer(c);
