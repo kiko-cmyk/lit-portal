@@ -197,11 +197,41 @@ confirmation_sent
                    └─ false → 106246515  email ES  (mensaje RzQWTf, plantilla XcbbmT)
 ```
 
-El nodo roto es **108096305**. La API responde, en todas las revisiones de 2025-10 en
-adelante, `{"type":"malformed","error_message":"Condition could not be encoded."}`, que es lo
-que devuelve Klaviyo cuando una condición apunta a algo que ya no existe (un segmento, una
-métrica o una lista borrada). Y su rama `true` apunta a `null`: **quien la cumple sale del
-flow en silencio**. Se creó el 2026-06-02 y se editó el 2026-06-30.
+El split `108096305` sale por API como
+`{"type":"malformed","error_message":"Condition could not be encoded."}`, pero eso es una
+limitación del serializador de Klaviyo, **no** una condición corrupta: en la UI se lee bien y
+es "ha tenido `confirmation_sent` donde `flavor` contiene [LIT Daily Hydration…] más de 1 vez
+en los últimos 100 días" → Finalizar. Un intento manual de excluir a los compradores puntuales,
+hecho porque `is_subscription` no funcionaba. **Y no es el cuello de botella**: sus propias
+estadísticas dicen Sí 17,8% (33) / No 80,5% (149), o sea que deja pasar al 80%.
+
+**La causa real son dos cosas combinadas:**
+
+1. `confirmation_sent` se dispara en **cualquier** pedido, también en compras puntuales (lo que
+   el flujo no podía distinguir porque `is_subscription` valía `false` en el 100% de los
+   eventos hasta el PR #85).
+2. El flow está en **"Sin reincorporación"**, que es lo correcto para una bienvenida.
+
+Juntas: quien prueba LIT con una compra suelta **gasta su única entrada al flow**, y cuando
+semanas después se suscribe ya no puede entrar, así que nunca recibe la bienvenida. Con el flow
+vivo desde el 2026-05-07, en julio solo llegaron al primer split **185 perfiles** de 1320
+distintos: el resto ya había entrado antes como compradores puntuales.
+
+Verificado sobre 30 de las 465 altas de julio: **9 (30%) ya habían disparado
+`confirmation_sent` antes de suscribirse**, así que estaban excluidas de nacimiento. Y el hueco
+real es mayor, porque el flow llevaba desde mayo consumiendo entradas.
+
+**La configuración correcta es filtro de activador `is_subscription es igual a true` +
+"Sin reincorporación"**, y con eso basta: las compras puntuales ya no entran ni gastan la
+entrada, la primera suscripción recibe la bienvenida, y las renovaciones (que también traen
+`is_subscription: true`) no la repiten porque no hay reincorporación. La división condicional
+se puede borrar: el filtro de activador hace su trabajo bien, y sus cadenas de `flavor` ya no
+existen desde el PR #85, así que solo excluiría por error a suscriptores legítimos que hubieran
+comprado suelto dos veces.
+
+**Ojo con el pasado.** Eso arregla de aquí en adelante. Quien ya entró al flow como comprador
+puntual sigue bloqueado para siempre por "Sin reincorporación", y recuperarlo pide una campaña
+puntual al segmento afectado, no un cambio en el flow.
 
 Lo que se descartó con datos, para no volver a mirarlo:
 
@@ -214,18 +244,6 @@ Lo que se descartó con datos, para no volver a mirarlo:
 | Propiedades del evento | idénticas entre quien recibió y quien no |
 | Perfiles repetidos | 1367 eventos de **1320 perfiles distintos**: son personas diferentes |
 | El split es una regresión | antes de que existiera (8-may a 1-jun) el flow envió **1** email: nunca ha funcionado |
-
-**El arreglo tiene tres partes y las tres son necesarias.** Quitar solo el split haría que el
-email saliera con CADA `confirmation_sent`, unos 1367 al mes, incluidas compras puntuales y
-renovaciones, diciéndole "activa tu cuenta" a quien ya la tiene:
-
-1. Arreglar o borrar el split `108096305`.
-2. Filtro de trigger en el flow: `is_subscription` es `true`. **Ojo con el orden**: esa
-   propiedad solo es fiable desde el 2026-07-29 (PR #85). Antes valía `false` en el 100% de
-   los eventos, así que este filtro puesto ayer habría bloqueado a todo el mundo.
-3. Un guarda de una sola vez por perfil, porque cada renovación de Seal crea un pedido nuevo
-   y vuelve a disparar `confirmation_sent`. O la opción de "solo una vez por perfil" del flow,
-   o un split "ha recibido 'Área personal - Bienvenida' 0 veces".
 
 ### Una plantilla atada a un flow NO se puede editar por API
 
