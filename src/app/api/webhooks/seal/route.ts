@@ -139,19 +139,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "subscription.shipping_address_updated":
         await syncSubscription(payload as { subscription: SealSubscription });
         break;
-      // Subscribed in Seal since 2026-07-23 (webhook id 129549) and SEAL HAS
-      // NEVER DELIVERED IT. Three customer pauses happened after that date
-      // (2026-07-23 14:31, 2026-07-23 15:36, 2026-07-26 12:06) and webhook_log
-      // has zero rows for this topic, while a subscription/updated landed one
-      // second after each pause. The reservation insert happens after the HMAC
-      // check but before the switch and records ANY topic, so absence here is
-      // absence of delivery, not a logging gap.
+      // READ THIS BEFORE TRUSTING THIS CASE. Subscribed in Seal since 2026-07-23
+      // (webhook id 129549), and it fires for an API pause but NOT for a customer
+      // pause in Seal's own portal. Measured, not guessed:
       //
-      // Conclusion: a customer-side pause is only observable as
-      // subscription/updated. That is why the notification hangs off the
-      // active -> paused transition inside syncSubscription instead of off this
-      // case. This stays wired in case Seal starts delivering it, and the
-      // transition guard means one pause produces exactly one alert either way.
+      //  - Three CUSTOMER pauses after that date (2026-07-23 14:31, 2026-07-23
+      //    15:36, 2026-07-26 12:06) produced ZERO rows for this topic in
+      //    webhook_log, while a subscription/updated landed one second after each.
+      //  - A MERCHANT pause via the API (probe on sub 14692586, 2026-07-29
+      //    10:03:08) delivered subscription/paused at 10:03:09, 1s later.
+      //
+      // The reservation insert runs after the HMAC check but before this switch
+      // and records ANY topic, so the absence in the customer case is absence of
+      // delivery, not a logging gap. So if you test this by pausing through the
+      // API you will see the event arrive and wrongly conclude the case is enough.
+      //
+      // It isn't: the pauses that cost money are the customer ones, and those are
+      // only observable as subscription/updated. That is why the notification
+      // hangs off the active -> paused transition inside syncSubscription rather
+      // than off this case. The transition guard means one pause produces exactly
+      // one alert whichever topic (or both) happens to arrive.
       case "subscription.paused":
         await syncSubscription(payload as { subscription: SealSubscription });
         break;
