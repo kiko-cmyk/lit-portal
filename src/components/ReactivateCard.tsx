@@ -3,6 +3,13 @@
 import { T } from "@/lib/i18n";
 
 interface ReactivateCardProps {
+  /**
+   * `cancelled` (default) is the post-cancel state with the 90-day Drops hold.
+   * `paused` is the resume state: no hold, no Drops countdown, different copy.
+   * Pauses only ever came from Seal's own portal, so a paused customer has no
+   * idea our portal exists — the copy has to make the way back obvious.
+   */
+  variant?: "cancelled" | "paused";
   dropsHeld?: number;
   dropsHeldDays?: number;
   cardsKept?: number;
@@ -18,12 +25,16 @@ interface ReactivateCardProps {
 }
 
 /**
- * Post-cancel state: replaces NextBoxHero when subscription.status is
- * post_cancel or expired. Dark gradient card with reactivation CTA.
+ * Terminal-ish states: replaces NextBoxHero when the subscription isn't running.
+ * Dark gradient card with a single CTA.
+ *
+ *   - `cancelled` (post_cancel / expired) → reactivate, with the Drops hold.
+ *   - `paused` → resume. Added 2026-07-28.
  *
  * Mirrors `.reactivate-card` in the Hub hi-fi.
  */
 export function ReactivateCard({
+  variant = "cancelled",
   dropsHeld,
   dropsHeldDays,
   cardsKept,
@@ -31,6 +42,7 @@ export function ReactivateCard({
   busy,
   error,
 }: ReactivateCardProps) {
+  const paused = variant === "paused";
   return (
     <section
       className="relative mx-6 mt-2 overflow-hidden rounded-[24px] px-6 py-7 text-center text-[#F2EEE1] md:mx-0"
@@ -42,14 +54,36 @@ export function ReactivateCard({
       }}
     >
       <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]">
-        <T en="Come back any time" es="Vuelve cuando quieras" />
+        {paused ? (
+          <T en="Paused" es="En pausa" />
+        ) : (
+          <T en="Come back any time" es="Vuelve cuando quieras" />
+        )}
       </div>
       <h2 className="mt-2.5 font-display text-[32px] font-black leading-[0.92] tracking-[-0.02em] uppercase">
-        <T en="Your drops" es="Tus drops" />
-        <br />
-        <T en="are waiting." es="te esperan." />
+        {paused ? (
+          <>
+            <T en="Pick it up" es="Reanúdala" />
+            <br />
+            <T en="whenever." es="cuando quieras." />
+          </>
+        ) : (
+          <>
+            <T en="Your drops" es="Tus drops" />
+            <br />
+            <T en="are waiting." es="te esperan." />
+          </>
+        )}
       </h2>
-      {(dropsHeld !== undefined || cardsKept !== undefined) && (
+      {paused && (
+        <p className="mt-2.5 text-[13px] leading-[1.5] text-[#b3ab98]">
+          <T
+            en="Your subscription is paused, so we are not billing you. Resume it and your next box is scheduled from today."
+            es="Tu suscripción está en pausa, así que no te estamos cobrando. Reanúdala y tu próxima caja se programa desde hoy."
+          />
+        </p>
+      )}
+      {!paused && (dropsHeld !== undefined || cardsKept !== undefined) && (
         <p className="mt-2.5 text-[13px] leading-[1.5] text-[#b3ab98]">
           {dropsHeld !== undefined && dropsHeldDays !== undefined && (
             <>
@@ -79,7 +113,13 @@ export function ReactivateCard({
         className="mt-5 rounded-full bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] disabled:opacity-60"
       >
         {busy ? (
-          <T en="Reactivating…" es="Reactivando…" />
+          paused ? (
+            <T en="Resuming…" es="Reanudando…" />
+          ) : (
+            <T en="Reactivating…" es="Reactivando…" />
+          )
+        ) : paused ? (
+          <T en="Resume" es="Reanudar" />
         ) : (
           <T en="Reactivate" es="Reactivar" />
         )}

@@ -36,7 +36,18 @@ export type KlaviyoEvent =
   | "subscription_charge_now"
   | "subscription_renewal_reminder"
   | "drops_earned"
-  | "email_change_requested";
+  | "email_change_requested"
+  // Dunning (2026-07-28). Fired from the Seal webhook when a charge fails, on
+  // the FIRST failure of each cycle — see lib/dunning.ts. Seal retries 4 times
+  // and then auto-cancels, so this is the trigger that has to beat Seal's own
+  // email to the inbox.
+  | "payment_failed"
+  // Fired when Seal reports a subscription paused. The PAUSE button was removed
+  // from Seal's customer portal on 2026-07-28, so new pauses should be rare;
+  // the event exists so the 86 already-paused customers can be walked back into
+  // the portal to resume.
+  | "subscription_paused"
+  | "subscription_resumed";
 
 // Transient-failure retry budget. Klaviyo throttles /events/ (429) and can 5xx
 // under load; without a retry a single hiccup on a high-volume day (e.g. the

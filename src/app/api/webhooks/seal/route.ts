@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
+import { alertSlackError, alertSlackNotice } from "@/lib/alert";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { fireDunningTrigger } from "@/lib/dunning";
+import { klaviyo } from "@/lib/klaviyo";
 import { consumeRetentionDiscountIfCharged } from "@/lib/retention-discount";
 import {
   getNextBillingAttempt,
@@ -47,11 +50,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const sb = supabaseAdmin();
   // Dedup by a hash of the body (Seal doesn't send a stable event id header).
   const eventId = crypto.createHash("sha256").update(rawBody).digest("hex").slice(0, 32);
-  const dedup = await sb.from("webhook_log").insert({
+  const reservation = {
     provider: "seal",
     event_id: eventId,
     topic: eventType,
-  });
+  };
+  // Store the body (2026-07-28). Seal's subscription object carries a `log`
+  // array that names the actor verbatim ("Customer paused the subscription."
+  // vs "Merchant … through the API."), which is the only record of WHO did
+  // what. Without this, answering "who paused these four subs" took ~40
+  // minutes of paging the Seal API by hand; now it's a query. Parsed body, not
+  // rawBody, so it lands as queryable jsonb. 90-day retention via purge_after.
+  let dedup = await sb.from("webhook_log").insert({ ...reservation, payload: safeJson(rawBody) });
+
+  // 42703 = undefined_column: this deploy landed BEFORE
+  // database/migrations/2026-07-28_webhook_payload_audit.sql was applied. Retry
+  // without the audit column, because the alternative is catastrophic: the only
+  // error code handled below is 23505, so an unhandled insert error falls through
+  // and the request proceeds with NO dedup reservation at all. Every Seal
+  // redelivery would then reprocess, and applyReanchorIfPending calls
+  // seal.reanchorCadence, a NON-idempotent mutation that would over-shift real
+  // customers' billing schedules. Auditability is worth losing here; dedup is not.
+  if (dedup.error?.code === "42703") {
+    console.error(
+      "[seal-webhook] webhook_log.payload missing — apply migrations/2026-07-28_webhook_payload_audit.sql. Falling back to reservation without audit payload.",
+    );
+    alertSlackError({
+      path: "/api/webhooks/seal",
+      code: "webhook_log_payload_missing",
+      msg: "Falta la columna webhook_log.payload: aplica database/migrations/2026-07-28_webhook_payload_audit.sql. Los webhooks siguen funcionando pero sin auditoría.",
+    });
+    dedup = await sb.from("webhook_log").insert(reservation);
+  }
   if (dedup.error?.code === "23505") {
     return NextResponse.json({ ok: true, dedup: true });
   }
@@ -74,31 +104,124 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         await syncSubscription(payload as { subscription: SealSubscription });
         await applyReanchorIfPending((payload as { subscription?: SealSubscription }).subscription);
         // A successful charge advances the schedule and fires subscription/updated,
-        // so this is where we retire the cancel-flow 15%: the dedicated
-        // billing_attempt/succeeded topic is NOT subscribed in Seal (incident
-        // 2026-07-23 — only subscription/updated reaches the portal). The consumer
-        // is idempotent and guarded (removes ONLY after the discounted charge has
-        // landed). Best-effort here; the daily cron sweep is the guaranteed
-        // backstop, so a transient failure must never fail the whole webhook.
+        // so this is where we retire the cancel-flow 15%. This used to be the ONLY
+        // place it could happen, because billing_attempt/succeeded wasn't
+        // subscribed in Seal (incident 2026-07-23). It is subscribed now (74
+        // delivered between 2026-07-22 and 2026-07-27), so both paths run; the
+        // consumer is idempotent and guarded (removes ONLY after the discounted
+        // charge has landed), so doing it twice is a no-op. Best-effort here: the
+        // daily cron sweep is the guaranteed backstop, so a transient failure must
+        // never fail the whole webhook.
         await consumeRetentionDiscountSafe((payload as { subscription?: SealSubscription }).subscription);
         break;
       case "subscription.cancelled":
       case "subscription.expired":
+        await syncSubscription(payload as { subscription: SealSubscription });
+        break;
+      // Four documented Seal topics that fell through to `default` until
+      // 2026-07-28, i.e. a console.warn and nothing else. Seal's topic list is
+      // subscription/{created,updated,paused,resumed,reactivated,expired,
+      // payment_method_updated,shipping_address_updated,cancelled}. All four are
+      // pure cache refreshes, idempotent, and already covered by REPLAY_SAFE.
+      //
+      // `resumed` and `reactivated` are the ones that mattered: Seal fires
+      // resumed for the `resume` action and reactivated for `reactivate`, so
+      // WITHOUT these a subscription brought back to life anywhere other than our
+      // own resume route (Seal's admin, Seal's portal) left our cache reading
+      // 'paused' or 'expired' forever. Terminal-looking states may never be
+      // followed by another event for that sub, so nothing would have healed it.
+      //
+      // `payment_method_updated` is the other half of the dunning loop: it is the
+      // signal that the customer fixed the card we just emailed them about.
+      case "subscription.resumed":
+      case "subscription.reactivated":
+      case "subscription.payment_method_updated":
+      case "subscription.shipping_address_updated":
+        await syncSubscription(payload as { subscription: SealSubscription });
+        break;
+      // Subscribed in Seal since 2026-07-23 (webhook id 129549) and SEAL HAS
+      // NEVER DELIVERED IT. Three customer pauses happened after that date
+      // (2026-07-23 14:31, 2026-07-23 15:36, 2026-07-26 12:06) and webhook_log
+      // has zero rows for this topic, while a subscription/updated landed one
+      // second after each pause. The reservation insert happens after the HMAC
+      // check but before the switch and records ANY topic, so absence here is
+      // absence of delivery, not a logging gap.
+      //
+      // Conclusion: a customer-side pause is only observable as
+      // subscription/updated. That is why the notification hangs off the
+      // active -> paused transition inside syncSubscription instead of off this
+      // case. This stays wired in case Seal starts delivering it, and the
+      // transition guard means one pause produces exactly one alert either way.
       case "subscription.paused":
         await syncSubscription(payload as { subscription: SealSubscription });
         break;
-      case "billing_attempt.succeeded":
-        // Charge succeeded → next ship moved. Refresh the cache. Kept wired even
-        // though the topic isn't subscribed today, so it works as the primary
-        // trigger the moment someone adds it in Seal (defense in depth).
-        await syncSubscription(payload as { subscription: SealSubscription });
-        await consumeRetentionDiscountSafe((payload as { subscription?: SealSubscription }).subscription);
+      case "billing_attempt.succeeded": {
+        // Charge succeeded → next ship moved. Refresh the cache.
+        // (The comment that used to sit here said this topic "isn't subscribed
+        // today". It is now: 74 delivered between 2026-07-22 and 2026-07-27.)
+        const sub = await subFromBillingAttemptPayload(payload);
+        if (sub) {
+          await syncSubscription({ subscription: sub });
+          await consumeRetentionDiscountSafe(sub);
+        }
         break;
-      case "billing_attempt.failed":
-        // TODO: notify customer via Klaviyo + log
+      }
+      case "billing_attempt.failed": {
+        // The retention moment. Seal retries 4 times on consecutive days,
+        // emails the customer each time from a template we don't control whose
+        // CTA is a magic link into Seal's portal, and then auto-cancels:
+        // 35 subscriptions in July 2026 alone (~987 €/month). We now speak
+        // first, with our own email and a CTA into the portal.
+        //
+        // Order matters: refresh the cache BEFORE the trigger so a customer who
+        // clicks through immediately sees current state, and keep the trigger
+        // last so a Klaviyo problem can't cost us the cache update.
+        const sub = await subFromBillingAttemptPayload(payload);
+        if (sub) await syncSubscription({ subscription: sub });
+        const outcome = await fireDunningTrigger(
+          sub ?? undefined,
+          (payload as { billing_attempt?: { date?: string; error_message?: string | null } })
+            .billing_attempt,
+        );
+        // Do NOT discard the outcome. fireDunningTrigger never throws by design,
+        // so without this a broken dunning path would return 200 and say nothing,
+        // which is the exact failure mode this whole change exists to remove: the
+        // TODO that sat here for months was silent too. `already_fired_this_cycle`
+        // is the healthy steady state (Seal retries 4 times, we mail once), so it
+        // is not an alert.
+        if (!outcome.fired && outcome.reason !== "already_fired_this_cycle") {
+          alertSlackError({
+            path: "/api/webhooks/seal",
+            code: `dunning_not_fired:${outcome.reason}`,
+            msg:
+              `Cobro fallido recibido y NO se avisó al cliente (${outcome.reason}). ` +
+              `Seal cancela la suscripción al cuarto intento, quedan ~3 días. ` +
+              `Sub ${sub?.id ?? "?"}.`,
+          });
+        }
         break;
+      }
       default:
         console.warn(`[seal-webhook] unhandled topic ${eventType}`);
+        // Alert, don't just log (2026-07-28). An unhandled topic is precisely
+        // the bug class this whole change exists to close: a `break` with a TODO
+        // sat in billing_attempt.failed for months and nothing ever said so.
+        //
+        // It also covers the one thing we can't verify from here: the exact
+        // topic string. webhook_log proves Seal sends `billing_attempt/succeeded`
+        // (74 of them), so `billing_attempt/failed` is the obvious counterpart,
+        // but BACKEND_CONTRACT.md:579 calls it "billing.attempt.failure". If the
+        // header turns out to be something else, the case below never matches
+        // and we'd be back to silence. This turns that into a Slack ping the
+        // first time Seal sends it, and the stored payload has the rest.
+        //
+        // alertSlackError dedupes by (path, code) for 60 s, so a burst of an
+        // unknown topic posts once, not a thousand times.
+        alertSlackError({
+          path: "/api/webhooks/seal",
+          code: "unhandled_topic",
+          msg: `Seal envió el topic "${eventType}" y no lo maneja nadie. Revisa el switch y webhook_log.payload.`,
+        });
     }
     await sb
       .from("webhook_log")
@@ -128,7 +251,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       "subscription.cancelled",
       "subscription.expired",
       "subscription.paused",
+      // Pure cache refreshes, idempotent by construction.
+      "subscription.resumed",
+      "subscription.reactivated",
+      "subscription.payment_method_updated",
+      "subscription.shipping_address_updated",
       "billing_attempt.succeeded",
+      // billing_attempt.failed is replay-safe too: syncSubscription is an
+      // idempotent cache upsert and fireDunningTrigger is guarded by an
+      // email_logs row per (sub, 5-day cycle), so a redelivery can't double-mail
+      // the customer. Releasing matters here — if the Shopify lookup inside
+      // syncSubscription blips, we'd otherwise lose the dunning signal for a
+      // whole retry day.
+      "billing_attempt.failed",
     ]);
     if (REPLAY_SAFE.has(topic)) {
       const { error: releaseErr } = await sb
@@ -158,6 +293,25 @@ function verifySealSignature(
   const hex = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
   const b64 = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");
   return safeEqual(signature, hex) || safeEqual(signature, b64);
+}
+
+/**
+ * Parse for storage only. The reservation insert runs BEFORE the route parses
+ * the body for real, so a malformed payload must degrade to a NULL audit column,
+ * never break dedup (the strict parse right after still returns 400).
+ */
+function safeJson(raw: string): unknown {
+  try {
+    // Strip NUL bytes. Postgres refuses \u0000 inside jsonb ("unsupported Unicode
+    // escape sequence"), and that error would surface on the reservation INSERT,
+    // whose only handled error code is 23505 (unique violation). Every other code
+    // falls through and the request proceeds WITHOUT a dedup reservation, so a
+    // stray control character in a customer's address could disable dedup for
+    // that event. The audit column gives way, never the reservation.
+    return JSON.parse(raw.replace(/\u0000/g, ""));
+  } catch {
+    return null;
+  }
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -237,6 +391,94 @@ async function applyReanchorIfPending(subFromPayload?: SealSubscription): Promis
 }
 
 /**
+ * Get the subscription a `billing_attempt/*` event refers to.
+ *
+ * Seal's documented payload for the subscription topics is `{ subscription: … }`
+ * and the billing_attempt topics were written here on the assumption that they
+ * look the same. That assumption was never verified: the topic wasn't even
+ * subscribed until 2026-07-22, and if the payload turned out to carry only the
+ * attempt, `syncSubscription` would return early on `!s` and the whole handler
+ * would be a silent no-op — the exact failure mode we're here to remove, just
+ * one layer down.
+ *
+ * So: use the embedded subscription when it's there, otherwise take whatever id
+ * the payload does carry and read the subscription from Seal. One extra GET on a
+ * path that fires a handful of times a day, in exchange for the feature not
+ * depending on an unverified payload shape.
+ */
+async function subFromBillingAttemptPayload(payload: unknown): Promise<SealSubscription | null> {
+  const p = payload as {
+    subscription?: SealSubscription;
+    subscription_id?: number | string;
+    billing_attempt?: { subscription_id?: number | string };
+  };
+  if (p?.subscription?.id) return p.subscription;
+
+  const rawId = p?.billing_attempt?.subscription_id ?? p?.subscription_id;
+  const id = Number(rawId);
+  if (!rawId || Number.isNaN(id)) {
+    console.warn("[seal-webhook] billing_attempt payload has no resolvable subscription", {
+      keys: p && typeof p === "object" ? Object.keys(p) : typeof p,
+    });
+    return null;
+  }
+  const sub = await seal.getSubscriptionById(id);
+  if (!sub) {
+    // Transient Seal failure. Throwing here is deliberate: billing_attempt.* is
+    // in REPLAY_SAFE, so the reservation is released and Seal's redelivery gets
+    // another shot at the dunning trigger.
+    throw new Error(`billing_attempt: subscription ${id} not readable from Seal`);
+  }
+  console.log("[seal-webhook] billing_attempt payload had no embedded subscription, fetched by id", { id });
+  return sub;
+}
+
+/**
+ * A pause became visible to us. Two jobs, both best-effort:
+ *
+ *  1. Tell us on Slack. For a year the only way to learn about a pause was to
+ *     page through the Seal API by hand.
+ *  2. Fire a Klaviyo event so the customer can be walked back to the portal to
+ *     resume (POST /api/subscription/resume). Nothing sends until someone
+ *     switches the flow on in Klaviyo, so this is inert-but-ready.
+ *
+ * Called from syncSubscription on the active -> paused TRANSITION, not from the
+ * subscription.paused case. See the comment there for why.
+ *
+ * Never throws: the cache upsert already happened and is the part that matters.
+ */
+async function notifyPausedSafe(sub?: SealSubscription): Promise<void> {
+  if (!sub?.id) return;
+  const sealId = String(sub.id);
+  try {
+    alertSlackNotice({
+      title:
+        "Suscripción PAUSADA (la pausa no existe en nuestro portal, viene del portal nativo de Seal)",
+      fields: {
+        seal_subscription_id: sealId,
+        importe: `${sub.total_value ?? "?"} ${sub.currency ?? ""}`.trim(),
+        cadencia: sub.delivery_interval,
+        pausada_el: sub.paused_on,
+      },
+    });
+    const email = (sub.email ?? "").trim().toLowerCase();
+    if (email) {
+      await klaviyo.trackEvent("subscription_paused", email, {
+        sealSubscriptionId: sealId,
+        pausedOn: sub.paused_on || null,
+        amount: sub.total_value ?? null,
+        currency: sub.currency ?? "EUR",
+      });
+    }
+  } catch (err) {
+    console.warn("[seal-webhook] paused notification failed (non-fatal)", {
+      sealId,
+      msg: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Retire the cancel-flow 15% retention discount once its first (discounted)
  * charge has landed. Best-effort wrapper: never throws, so a transient Seal
  * failure can't fail the whole webhook (which, on subscription/updated, would
@@ -285,6 +527,24 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
 
   const sb = supabaseAdmin();
   const mapped = mapToSubscription(s, customerId);
+  const nextStatus = mapStatus(s);
+
+  // Previous cached status, read BEFORE the upsert overwrites it, so we can spot
+  // the active -> paused transition. This is the only way we ever find out about
+  // a pause: Seal has the subscription/paused topic subscribed since 2026-07-23
+  // and has never delivered a single one, while a subscription/updated lands one
+  // second after every pause. Best-effort read: a miss just means no alert, never
+  // a failed webhook.
+  let prevStatus: string | null = null;
+  if (nextStatus === "paused") {
+    const { data: prevRow } = await sb
+      .from("subscriptions")
+      .select("status")
+      .eq("seal_subscription_id", String(s.id))
+      .maybeSingle();
+    prevStatus = (prevRow?.status as string | undefined) ?? null;
+  }
+
   const cacheRow = {
     customer_id: customerId,
     seal_subscription_id: String(s.id),
@@ -300,7 +560,7 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
     charge_total_cents: mapped.chargeTotalCents,
     next_ship_date: mapped.nextShipDate,
     next_box_number: mapped.nextBoxNumber,
-    status: mapStatus(s),
+    status: nextStatus,
     updated_at: new Date().toISOString(),
   };
   const { error: upsertErr } = await sb.from("subscriptions").upsert(
@@ -335,5 +595,16 @@ async function syncSubscription(payload: { subscription: SealSubscription }): Pr
       // silently stale cache (the {error} used to be discarded entirely).
       throw new Error(`subscriptions cache upsert failed for sub ${s.id}: ${upsertErr.message}`);
     }
+  }
+
+  // Pause detection, by transition. Fires at most once per pause: after this the
+  // cache reads 'paused', so the next event for the same sub finds
+  // prevStatus === 'paused' and stays quiet. Runs for EVERY topic that carries the
+  // subscription, which is what makes it work at all given that
+  // subscription/paused never arrives. Deliberately after the upsert: if the
+  // cache write failed we've already thrown, and alerting about a state we didn't
+  // manage to persist would be lying.
+  if (nextStatus === "paused" && prevStatus !== "paused") {
+    await notifyPausedSafe(s);
   }
 }

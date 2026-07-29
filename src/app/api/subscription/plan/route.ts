@@ -324,6 +324,29 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
   }
 
+  // Refuse plan changes on a PAUSED sub (2026-07-28). Deliberately HERE and not
+  // inside either resolution branch: `preMutationSub` is the one thing both paths
+  // populate (slow path from the email scan, fast path from the by-id read above),
+  // so this is the only place a single check covers both.
+  //
+  // An earlier draft of this guard sat inside the slow-path `else`, which made it
+  // dead code: verifyOwnershipFast only checks that a cache row exists for
+  // (customer_id, seal_subscription_id) and never reads status, and every real
+  // caller (PlanOverlay, FlavorOverlay) sends the four fast-path ids, so 100% of
+  // production traffic skipped it. Caught by review before shipping.
+  //
+  // Why it matters: a paused sub has no pending billing attempt, so
+  // `nextAttemptDate` is null and the cutoff check right below passes silently.
+  // Without this, edit + add_items + remove_items ran against a paused
+  // subscription with no cutoff protection at all.
+  if (preMutationSub?.status === "PAUSED") {
+    throw new ApiHttpError(
+      400,
+      "subscription_paused",
+      "Resume the subscription before changing the plan",
+    );
+  }
+
   // Optimistic concurrency (replaces the Phase 1 multi-line block): when a
   // mix-aware client tells us which lines it saw, refuse if the live set differs.
   // Applying a diff against a state the customer never saw is how a mix silently
@@ -340,6 +363,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
         "This subscription changed since the page loaded; reload and try again",
       );
     }
+
   }
 
   // Cutoff against next billing attempt date (only when we have it from
@@ -1273,7 +1297,6 @@ function synthesizePostMutationSub(
     payment: {
       cardExpiryMonth: null,
       cardExpiryYear: null,
-      sealEditUrl: null,
     },
   };
 }
@@ -1312,7 +1335,6 @@ function synthesizeNoOpSub(
     payment: {
       cardExpiryMonth: null,
       cardExpiryYear: null,
-      sealEditUrl: null,
     },
   };
 }

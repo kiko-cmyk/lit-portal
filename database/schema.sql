@@ -382,10 +382,24 @@ create table if not exists webhook_log (
   topic         text not null,
   received_at   timestamptz not null default now(),
   processed_at  timestamptz,
+  -- Raw body, for audit. Added 2026-07-28: without it, "who paused this
+  -- subscription" was unanswerable from our own DB and took ~40 min of manual
+  -- Seal API paging, even though Seal ships the answer in the payload's `log`
+  -- array. See database/migrations/2026-07-28_webhook_payload_audit.sql.
+  payload       jsonb,
+  purge_after   timestamptz default (now() + interval '90 days'),
   primary key (provider, event_id)
 );
+-- Backfill for databases created before the payload column existed.
+alter table webhook_log add column if not exists payload jsonb;
+alter table webhook_log
+  add column if not exists purge_after timestamptz
+  default (now() + interval '90 days');
 
 create index if not exists idx_webhook_log_topic on webhook_log(topic, received_at desc);
+create index if not exists idx_webhook_log_purge
+  on webhook_log (purge_after)
+  where payload is not null;
 
 -- ============================================================
 -- 5b. Auth sessions

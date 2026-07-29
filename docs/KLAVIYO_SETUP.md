@@ -26,6 +26,58 @@ El cliente Klaviyo (`src/lib/klaviyo.ts`) llama a `klaviyo.trackEvent(name, emai
 
 > Nota: hoy mismo el código tiene los wrappers listos pero **pocos endpoints llaman a `trackEvent`** todavía. Hay que añadir las llamadas en cada endpoint relevante. Lo dejo pendiente como un sweep rápido cuando los flows estén creados.
 
+### 1.b Dunning y pausa (añadidos 2026-07-28)
+
+| Event name (metric) | Cuándo se dispara | Properties |
+|---|---|---|
+| `payment_failed` | Webhook Seal `billing_attempt/failed`, **solo en el primer fallo de cada ciclo** | `sealSubscriptionId`, `attemptDate`, `gatewayMessage`, `paymentType`, `cardExpiryMonth`, `cardExpiryYear`, `amount`, `currency`, `locale`, `daysUntilCancel` |
+| `subscription_paused` | Webhook Seal `subscription/paused` | `sealSubscriptionId`, `pausedOn`, `amount`, `currency` |
+| `subscription_resumed` | `POST /api/subscription/resume` | `sealSubscriptionId`, `pausedOn` |
+
+**Por qué importa `payment_failed`.** Medido sobre datos reales de Seal el 2026-07-28:
+Seal reintenta un cobro fallido 4 veces en días consecutivos, manda su propio email
+cada vez, y a la cuarta **cancela la suscripción**. Solo en julio 2026 eso cancelo
+35 suscripciones, unos 987 €/mes. Hasta hoy el `case` del webhook era un `break`
+con un TODO, así que en esa ventana de 3 días el único que hablaba con el cliente
+era Seal, con un email que no controlamos cuyo CTA es un enlace mágico al portal
+nativo de Seal (el mismo que tenía el botón de pausar hasta el 2026-07-28).
+
+**Antiduplicados.** El backend dispara `payment_failed` una sola vez por ciclo de
+dunning, no una por reintento: guarda una fila en `email_logs` con
+`template_id = 'payment_failed'` y `metadata.sealSubscriptionId`, y se calla si ya
+hay una en los últimos 5 días. Por eso la secuencia (día 0, día 2, último aviso)
+hay que montarla **dentro del flow con delays**, no esperando 4 triggers.
+
+**CTA del email: siempre al portal**, `https://litsalt.com/apps/portal/es/cuenta`.
+Nunca a un enlace de Seal ni al de actualizar tarjeta de Shopify. Motivos: el
+enlace de Shopify es de un solo uso y caduca, y para Shop Pay / PayPal Shopify
+rechaza el formulario inline (`INVALID_INSTRUMENT_TYPE`), así que el portal es el
+único sitio que resuelve los dos casos. Usa `paymentType` para el copy:
+
+- `card` → "actualiza tu tarjeta" (en Cuenta se cambia en línea).
+- `shop_pay` / `paypal` / `other` → "entra en tu área personal y pídenos el enlace"
+  (el botón de Cuenta dispara el email de Shopify). 2 de los 3 clientes que
+  pausaron tras un cobro fallido eran Shop Pay.
+
+**Flow que hay que crear** (no existe ninguno de fallo de pago en la cuenta hoy,
+lo verifiqué el 2026-07-28):
+
+```
+Trigger: Metric = payment_failed
+  ├─ Email 1 · inmediato   · "No pudimos cobrar tu caja" · CTA → /apps/portal/es/cuenta
+  ├─ Delay 48 h
+  ├─ Filtro: no ha habido `subscription_charge_now` ni cobro correcto desde el trigger
+  └─ Email 2 · "Último aviso, mañana se cancela" · mismo CTA
+```
+
+`daysUntilCancel` viene a 3 en el evento: es la ventana real medida, no una
+estimación. Ojo con la cadencia del § 3: esto es transaccional, va fuera de la
+Quiet Zone.
+
+> La métrica `payment_failed` no aparecerá en el selector de Klaviyo hasta que
+> llegue el primer evento. Para poder montar el flow antes, dispara uno de prueba
+> contra un perfil interno.
+
 ---
 
 ## 2. Flows que hay que construir (Klaviyo dashboard)

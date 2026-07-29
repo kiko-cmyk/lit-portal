@@ -71,3 +71,38 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
     console.warn("[alert] slack post failed:", e);
   }
 }
+
+/**
+ * Non-error operational notice (not a 5xx). Same transport and same
+ * fire-and-forget/no-throw contract as `alertSlackError`, different intent: a
+ * business event we want to know about within seconds instead of discovering by
+ * sampling the Seal API weeks later.
+ *
+ * First use (2026-07-28): `subscription/paused`. Customer-side pauses were
+ * invisible to us for a year — 86 of them, and the four Kiko spotted were only
+ * noticed because they happened to land after the dashboard started recording.
+ *
+ * Deliberately NOT deduped by content: these are low-frequency by nature and
+ * collapsing two different customers' pauses into one alert would hide one.
+ */
+export function alertSlackNotice(opts: {
+  /** Short headline, e.g. "Suscripción pausada en el portal de Seal". */
+  title: string;
+  /** `key: value` context lines. PII discipline: ids, never emails. */
+  fields?: Record<string, string | number | null | undefined>;
+}): void {
+  const url =
+    process.env.SLACK_ALERTS_WEBHOOK_URL || process.env.SLACK_SECURITY_WEBHOOK_URL;
+  if (!url) return;
+
+  const lines = Object.entries(opts.fields ?? {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => `• ${k}: \`${String(v)}\``);
+  const text = [`:pause_button: *lit-portal* ${opts.title}`, ...lines].join("\n");
+
+  void fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  }).catch((e) => console.warn("[alert] slack notice failed:", e));
+}
