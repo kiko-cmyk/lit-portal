@@ -75,6 +75,58 @@ function isEmpty(a: ReturnType<typeof mergeAddress>): boolean {
   return ![a.address1, a.address2, a.city, a.zip, a.company, a.phone].some(Boolean);
 }
 
+/** Same postal address, ignoring case and stray whitespace. */
+function sameAddress(
+  a: ReturnType<typeof mergeAddress>,
+  b: ShopifyCustomerAddress | null,
+): boolean {
+  if (!b) return false;
+  const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+  return (
+    norm(a.address1) === norm(b.address1) &&
+    norm(a.address2) === norm(b.address2) &&
+    norm(a.city) === norm(b.city) &&
+    norm(a.zip) === norm(b.zip) &&
+    norm(a.company) === norm(b.company)
+  );
+}
+
+/**
+ * The shape the client renders, read back from Shopify so the province and
+ * country are the ones Shopify canonicalised rather than our guess.
+ */
+async function readBack(customerId: string) {
+  const after = await shopifyAdmin.getCustomer(customerId);
+  if (!after) {
+    throw new ApiHttpError(404, "customer_not_found", `No Shopify customer ${customerId}`);
+  }
+  const billingId = after.b2bMetafields.billing_address_id || null;
+  const billing = billingId ? after.addresses.find((a) => a.id === billingId) ?? null : null;
+
+  const shape = (a: ShopifyCustomerAddress | null) => ({
+    company: a?.company || null,
+    address1: a?.address1 ?? null,
+    address2: a?.address2 ?? null,
+    city: a?.city ?? null,
+    postalCode: a?.zip ?? null,
+    province: a?.province ?? (a?.zip ? provinceFromEsPostalCode(a.zip)?.name ?? null : null),
+    country: a?.country ?? null,
+    phone: a?.phone ?? null,
+  });
+
+  return {
+    updated: true,
+    business: {
+      delivery: shape(after.defaultAddress),
+      billing: {
+        ...shape(billing),
+        taxId: after.b2bMetafields.tax_id || null,
+        sameAsDelivery: billing == null,
+      },
+    },
+  };
+}
+
 export const PATCH = withCustomer(async (req, ctx) => {
   await enforceRateLimit(ctx.customerId, "customer-business", { limit: 15, windowMs: 60_000 });
 
@@ -128,6 +180,23 @@ export const PATCH = withCustomer(async (req, ctx) => {
     if (isEmpty(next)) {
       throw new ApiHttpError(400, "invalid_address", "The billing address would be empty");
     }
+    // The form opens PREFILLED with the delivery address, so "save" with nothing
+    // changed must not mint a duplicate: an identical fiscal address is the same
+    // thing as not having one, and storing it would freeze a copy that goes
+    // stale the day they move. Same reason the reset below drops the pointer
+    // instead of copying.
+    if (sameAddress(next, current.defaultAddress)) {
+      if (billingId) {
+        await shopifyAdmin.setCustomerMetafield(
+          ctx.customerId,
+          "lit_b2b",
+          "billing_address_id",
+          "",
+          "single_line_text_field",
+        );
+      }
+      return await readBack(ctx.customerId);
+    }
     const savedId = await shopifyAdmin.upsertCustomerSecondaryAddress(
       ctx.customerId,
       billingAddr?.id ?? null,
@@ -154,37 +223,5 @@ export const PATCH = withCustomer(async (req, ctx) => {
     );
   }
 
-  // Read back so the client renders what Shopify actually stored (it
-  // canonicalises province and country display names).
-  const after = await shopifyAdmin.getCustomer(ctx.customerId);
-  if (!after) {
-    throw new ApiHttpError(404, "customer_not_found", `No Shopify customer ${ctx.customerId}`);
-  }
-  const afterBillingId = after.b2bMetafields.billing_address_id || null;
-  const afterBilling = afterBillingId
-    ? after.addresses.find((a) => a.id === afterBillingId) ?? null
-    : null;
-
-  const shape = (a: ShopifyCustomerAddress | null) => ({
-    company: a?.company || null,
-    address1: a?.address1 ?? null,
-    address2: a?.address2 ?? null,
-    city: a?.city ?? null,
-    postalCode: a?.zip ?? null,
-    province: a?.province ?? (a?.zip ? provinceFromEsPostalCode(a.zip)?.name ?? null : null),
-    country: a?.country ?? null,
-    phone: a?.phone ?? null,
-  });
-
-  return {
-    updated: true,
-    business: {
-      delivery: shape(after.defaultAddress),
-      billing: {
-        ...shape(afterBilling),
-        taxId: after.b2bMetafields.tax_id || null,
-        sameAsDelivery: afterBilling == null,
-      },
-    },
-  };
+  return await readBack(ctx.customerId);
 });
