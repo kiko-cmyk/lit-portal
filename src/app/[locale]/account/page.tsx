@@ -607,7 +607,7 @@ export default function AccountPage() {
         </Section>
 
         {subActive && (
-          <Section title={t({ en: "Where boxes land", es: "Dónde llegan las cajas" })}>
+          <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
             {/* The overlay used to just vanish on success, with no word that
                 anything had been saved (Juan, 2026-07-29). After the
                 gateway_timeout incident, silence on success is the worst
