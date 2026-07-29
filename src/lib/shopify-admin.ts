@@ -160,6 +160,25 @@ export class ShopifyUserError extends Error {
   }
 }
 
+/**
+ * A native Shopify customer address (MailingAddress), as the portal reads it.
+ * `province` / `country` are Shopify's canonical display names; the *Code
+ * variants are what mutations take.
+ */
+export interface ShopifyCustomerAddress {
+  id: string;
+  company: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  zip: string | null;
+  province: string | null;
+  provinceCode: string | null;
+  country: string | null;
+  countryCode: string | null;
+  phone: string | null;
+}
+
 class ShopifyAdminClient {
   private endpoint(): string {
     if (!SHOPIFY_STORE) throw new Error("SHOPIFY_STORE not set");
@@ -287,20 +306,16 @@ class ShopifyAdminClient {
     createdAt: string;
     numberOfOrders: string;
     tags: string[];
-    defaultAddress: {
-      company: string | null;
-      address1: string | null;
-      address2: string | null;
-      city: string | null;
-      zip: string | null;
-      province: string | null;
-      provinceCode: string | null;
-      country: string | null;
-      countryCode: string | null;
-      phone: string | null;
-    } | null;
-    /** `lit_b2b.tax_id` — NIF/CIF. Only ever written from the B2B account form. */
-    taxId: string | null;
+    defaultAddress: ShopifyCustomerAddress | null;
+    /**
+     * The customer's whole Shopify address book. A wholesale account needs two
+     * addresses (delivery + the fiscal one), and Shopify has no "address type",
+     * so both live here as native addresses and `lit_b2b.billing_address_id`
+     * says which one is the fiscal one.
+     */
+    addresses: ShopifyCustomerAddress[];
+    /** Everything under the `lit_b2b` metafield namespace, keyed. */
+    b2bMetafields: Record<string, string>;
   } | null> {
     const gid = customerId.startsWith("gid://")
       ? customerId
@@ -315,38 +330,34 @@ class ShopifyAdminClient {
         createdAt: string;
         numberOfOrders: string;
         tags: string[];
-        defaultAddress: {
-          company: string | null;
-          address1: string | null;
-          address2: string | null;
-          city: string | null;
-          zip: string | null;
-          province: string | null;
-          provinceCode: string | null;
-          country: string | null;
-          countryCode: string | null;
-          phone: string | null;
-        } | null;
-        metafield: { value: string } | null;
+        defaultAddress: ShopifyCustomerAddress | null;
+        addresses: ShopifyCustomerAddress[];
+        metafields: { edges: Array<{ node: { key: string; value: string } }> };
       } | null;
     }>(
-      // `tags`, `defaultAddress` and the fiscal metafield ride along in the query
-      // this route already makes (no extra round trip) so the Account page can
-      // tell a wholesale customer apart and show their billing details.
+      // `tags`, the address book and the lit_b2b metafields ride along in the
+      // query this route already makes (no extra round trip) so the Account page
+      // can tell a wholesale customer apart and show their billing details.
       `query getCustomer($id: ID!) {
          customer(id: $id) {
            id email firstName lastName phone createdAt numberOfOrders tags
-           defaultAddress {
-             company address1 address2 city zip province provinceCode country countryCode phone
+           defaultAddress { ...addr }
+           addresses { ...addr }
+           metafields(first: 20, namespace: "lit_b2b") {
+             edges { node { key value } }
            }
-           metafield(namespace: "lit_b2b", key: "tax_id") { value }
          }
+       }
+       fragment addr on MailingAddress {
+         id company address1 address2 city zip province provinceCode country countryCode phone
        }`,
       { id: gid },
     );
     if (!data.customer) return null;
-    const { metafield, ...rest } = data.customer;
-    return { ...rest, taxId: metafield?.value ?? null };
+    const { metafields, ...rest } = data.customer;
+    const b2bMetafields: Record<string, string> = {};
+    for (const { node } of metafields?.edges ?? []) b2bMetafields[node.key] = node.value;
+    return { ...rest, b2bMetafields };
   }
 
   /**
@@ -973,6 +984,81 @@ class ShopifyAdminClient {
       // the failure mode this function just spent three months in.
       throw new Error("Shopify customerAddressCreate returned no address and no userErrors");
     }
+  }
+
+  /**
+   * Write a SECONDARY address in the customer's address book, i.e. never the
+   * default one. Used for the wholesale billing address, which must stay out of
+   * the delivery slot: `setAsDefault: false` on both branches, so saving fiscal
+   * data can never redirect where the boxes go.
+   *
+   * Pass `addressId` to edit in place; omit it to create and get the new id
+   * back (the caller stores it in `lit_b2b.billing_address_id`, since Shopify
+   * addresses carry no type of their own).
+   */
+  async upsertCustomerSecondaryAddress(
+    customerId: string,
+    addressId: string | null,
+    address: {
+      address1?: string;
+      address2?: string;
+      city?: string;
+      zip?: string;
+      countryCode: string;
+      provinceCode?: string;
+      company?: string;
+      phone?: string;
+    },
+  ): Promise<string> {
+    const gid = customerId.startsWith("gid://") ? customerId : `gid://shopify/Customer/${customerId}`;
+
+    if (addressId) {
+      const data = await this.graphql<{
+        customerAddressUpdate: {
+          address: { id: string } | null;
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      }>(
+        `mutation updateSecondaryAddr($customerId: ID!, $addressId: ID!, $address: MailingAddressInput!) {
+           customerAddressUpdate(customerId: $customerId, addressId: $addressId, address: $address, setAsDefault: false) {
+             address { id }
+             userErrors { field message }
+           }
+         }`,
+        { customerId: gid, addressId, address },
+      );
+      if (data.customerAddressUpdate.userErrors.length > 0) {
+        throw new Error(
+          `Shopify addressUpdate (secondary) errors: ${JSON.stringify(data.customerAddressUpdate.userErrors)}`,
+        );
+      }
+      const id = data.customerAddressUpdate.address?.id;
+      if (!id) throw new Error("Shopify customerAddressUpdate (secondary) returned no address");
+      return id;
+    }
+
+    const data = await this.graphql<{
+      customerAddressCreate: {
+        address: { id: string } | null;
+        userErrors: Array<{ field: string[]; message: string }>;
+      };
+    }>(
+      `mutation createSecondaryAddr($customerId: ID!, $address: MailingAddressInput!) {
+         customerAddressCreate(customerId: $customerId, address: $address, setAsDefault: false) {
+           address { id }
+           userErrors { field message }
+         }
+       }`,
+      { customerId: gid, address },
+    );
+    if (data.customerAddressCreate.userErrors.length > 0) {
+      throw new Error(
+        `Shopify addressCreate (secondary) errors: ${JSON.stringify(data.customerAddressCreate.userErrors)}`,
+      );
+    }
+    const id = data.customerAddressCreate.address?.id;
+    if (!id) throw new Error("Shopify customerAddressCreate (secondary) returned no address");
+    return id;
   }
 
   // ───────────────────────────────────────────────────────────────

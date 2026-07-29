@@ -281,19 +281,17 @@ export interface CustomerProfile {
    */
   isB2B?: boolean;
   /**
-   * The customer's own Shopify default address plus fiscal fields. This is NOT
-   * the Seal subscription address (`Subscription.shippingAddress`): it is what
-   * prefills their checkout, and for a wholesale customer with no subscription
-   * it is the only address the portal can edit. Only rendered in B2B mode.
+   * Wholesale account data, read from the customer's own Shopify record. This is
+   * NOT the Seal subscription address (`Subscription.shippingAddress`): a
+   * partner has no subscription, and these are the addresses that prefill their
+   * checkout. Only sent in B2B mode.
    */
   business?: BusinessDetails | null;
 }
 
-export interface BusinessDetails {
-  /** Trading name on the address (razón social). */
+/** One editable address block in the portal. */
+export interface PortalAddress {
   company: string | null;
-  /** NIF/CIF, stored in the `lit_b2b.tax_id` customer metafield. */
-  taxId: string | null;
   address1: string | null;
   address2: string | null;
   city: string | null;
@@ -301,8 +299,29 @@ export interface BusinessDetails {
   /** Derived from the postal code, never asked for. Read-only in the UI. */
   province: string | null;
   country: string | null;
-  countryCode: string | null;
   phone: string | null;
+}
+
+export interface BusinessDetails {
+  /**
+   * Where the boxes go: the customer's Shopify DEFAULT address, i.e. the one
+   * Shopify prefills the shipping step with.
+   */
+  delivery: PortalAddress;
+  /**
+   * Fiscal data. `taxId` is the one field Shopify has nowhere to put on a
+   * non-Plus customer, so it lives in the `lit_b2b.tax_id` metafield. The
+   * address is a second, NON-default entry in the same Shopify address book,
+   * pointed at by `lit_b2b.billing_address_id` — addresses carry no type of
+   * their own, and keeping it native means it shows on the customer file and
+   * can be picked at checkout.
+   */
+  billing: PortalAddress & {
+    /** NIF/CIF. */
+    taxId: string | null;
+    /** True while there is no separate fiscal address: invoice = delivery. */
+    sameAsDelivery: boolean;
+  };
 }
 
 export interface ShippingAddress {

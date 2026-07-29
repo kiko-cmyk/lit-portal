@@ -31,6 +31,7 @@ import { orderDetailHref } from "@/lib/portal-link";
 import type {
   BusinessDetails,
   CustomerProfile,
+  PortalAddress,
   OrderHistoryItem,
   Subscription,
   SubscriptionAddress,
@@ -76,6 +77,9 @@ export default function AccountPage() {
   // Business (wholesale) details: the customer's own Shopify address + fiscal
   // fields. Seeded from /api/customer and replaced by the PATCH read-back.
   const [business, setBusiness] = useState<BusinessDetails | null>(null);
+  // Opens the fiscal-address form for a partner who has none yet (the common
+  // case: invoice = delivery, nothing stored).
+  const [billingOpen, setBillingOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
   const { canSwitch, openChooser, accountOnly } = useSubscriptionSwitch();
@@ -207,7 +211,10 @@ export default function AccountPage() {
    * server's read-back, so the province and country shown are the ones Shopify
    * canonicalised rather than whatever we guessed locally.
    */
-  const saveBusiness = async (patch: Record<string, string>) => {
+  const saveBusiness = async (patch: {
+    delivery?: Record<string, string>;
+    billing?: Record<string, string | boolean>;
+  }) => {
     const res = await api<{ updated: boolean; business: BusinessDetails }>(
       "/api/customer/business",
       { method: "PATCH", body: JSON.stringify(patch) },
@@ -653,37 +660,16 @@ export default function AccountPage() {
             section above (Seal's shipping address) never renders for them and
             this is the only address they can fix themselves. */}
         {accountOnly && (
-          <Section title={t({ en: "Address", es: "Dirección" })}>
-            <EditableRow
-              label={t({ en: "Street", es: "Dirección" })}
-              value={business?.address1 ?? ""}
-              onSave={(v) => saveBusiness({ address1: v })}
-            />
-            <EditableRow
-              label={t({ en: "Apt, floor", es: "Piso, puerta" })}
-              value={business?.address2 ?? ""}
-              onSave={(v) => saveBusiness({ address2: v })}
-            />
-            <EditableRow
-              label={t({ en: "Postcode", es: "Código postal" })}
-              value={business?.postalCode ?? ""}
-              onSave={(v) => saveBusiness({ postalCode: v })}
-            />
-            <EditableRow
-              label={t({ en: "City", es: "Ciudad" })}
-              value={business?.city ?? ""}
-              onSave={(v) => saveBusiness({ city: v })}
-            />
-            {/* Derived from the postcode, same rule as the subscription address:
-                in Spain the province IS the first two digits, so asking for it
-                only creates labels that contradict themselves. */}
-            <ReadOnlyRow
-              label={t({ en: "Province", es: "Provincia" })}
-              value={business?.province ?? ""}
-            />
-            <ReadOnlyRow
-              label={t({ en: "Country", es: "País" })}
-              value={business?.country ?? "España"}
+          <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
+            <p className="pb-3 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+              <T
+                en="Where your orders ship. It also prefills your checkout."
+                es="Donde te llegan los pedidos. También es la que se rellena sola en el checkout."
+              />
+            </p>
+            <AddressRows
+              value={business?.delivery ?? null}
+              onSaveField={(patch) => saveBusiness({ delivery: patch })}
             />
           </Section>
         )}
@@ -691,19 +677,63 @@ export default function AccountPage() {
         {accountOnly && (
           <Section title={t({ en: "Billing details", es: "Datos de facturación" })}>
             <EditableRow
-              label={t({ en: "Company", es: "Empresa" })}
-              value={business?.company ?? ""}
-              onSave={(v) => saveBusiness({ company: v })}
-            />
-            <EditableRow
               label={t({ en: "Tax ID", es: "NIF / CIF" })}
-              value={business?.taxId ?? ""}
-              onSave={(v) => saveBusiness({ taxId: v })}
+              value={business?.billing.taxId ?? ""}
+              onSave={(v) => saveBusiness({ billing: { taxId: v } })}
             />
-            <p className="pt-3 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+            {/* Most partners invoice to the same place the boxes go, so that is
+                the default and they type nothing. "Same as delivery" is the
+                ABSENCE of a second address, not a copy of the first: copying
+                would freeze a stale duplicate the day they move. */}
+            {business?.billing.sameAsDelivery !== false ? (
+              <div className="border-t border-[color:var(--color-lit-grey)]/8 pt-4">
+                <p className="text-[12px] leading-[1.5] text-[color:var(--color-lit-grey)]">
+                  <T
+                    en="We invoice to the delivery address above."
+                    es="Facturamos a la dirección de entrega de arriba."
+                  />
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setBillingOpen(true)}
+                  className="mt-3 rounded-full border border-[color:var(--color-lit-grey)]/40 px-5 py-2.5 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
+                >
+                  <T
+                    en="Use a different billing address"
+                    es="Usar otra dirección de facturación"
+                  />
+                </button>
+              </div>
+            ) : null}
+            {(billingOpen || business?.billing.sameAsDelivery === false) && (
+              <div className="border-t border-[color:var(--color-lit-grey)]/8 pt-2">
+                <AddressRows
+                  value={business?.billing ?? null}
+                  onSaveField={(patch) => saveBusiness({ billing: patch })}
+                  companyLabel={t({ en: "Registered name", es: "Razón social" })}
+                />
+                {business?.billing.sameAsDelivery === false && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await saveBusiness({ billing: { sameAsDelivery: true } });
+                      setBillingOpen(false);
+                    }}
+                    className="mt-4 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
+                    style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                  >
+                    <T
+                      en="Invoice to the delivery address instead"
+                      es="Facturar a la dirección de entrega"
+                    />
+                  </button>
+                )}
+              </div>
+            )}
+            <p className="pt-4 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray)]">
               <T
-                en="We invoice with this data and the address above. Keep it up to date and your invoices come out right with no back and forth."
-                es="Facturamos con estos datos y la dirección de arriba. Mantenlos al día y tus facturas salen bien sin tener que pedírtelos."
+                en="We invoice with this data. Keep it up to date and your invoices come out right with no back and forth."
+                es="Facturamos con estos datos. Mantenlos al día y tus facturas salen bien sin tener que pedírtelos."
               />
             </p>
           </Section>
@@ -1013,6 +1043,60 @@ function SubsummCell({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The address block used by both wholesale addresses. One EditableRow per field
+ * (the same control as Mis datos) instead of an overlay: there is no cutoff and
+ * no Seal write behind these, so a field can just be saved on its own.
+ */
+function AddressRows({
+  value,
+  onSaveField,
+  companyLabel,
+}: {
+  value: PortalAddress | null;
+  onSaveField: (patch: Record<string, string>) => Promise<void>;
+  companyLabel?: string;
+}) {
+  const t = useLang();
+  return (
+    <>
+      <EditableRow
+        label={companyLabel ?? t({ en: "Company", es: "Empresa" })}
+        value={value?.company ?? ""}
+        onSave={(v) => onSaveField({ company: v })}
+      />
+      <EditableRow
+        label={t({ en: "Street", es: "Dirección" })}
+        value={value?.address1 ?? ""}
+        onSave={(v) => onSaveField({ address1: v })}
+      />
+      <EditableRow
+        label={t({ en: "Apt, floor", es: "Piso, puerta" })}
+        value={value?.address2 ?? ""}
+        onSave={(v) => onSaveField({ address2: v })}
+      />
+      <EditableRow
+        label={t({ en: "Postcode", es: "Código postal" })}
+        value={value?.postalCode ?? ""}
+        onSave={(v) => onSaveField({ postalCode: v })}
+      />
+      <EditableRow
+        label={t({ en: "City", es: "Ciudad" })}
+        value={value?.city ?? ""}
+        onSave={(v) => onSaveField({ city: v })}
+      />
+      {/* Derived from the postcode, same rule as the subscription address: in
+          Spain the province IS the first two digits, so asking for it only
+          creates labels that contradict themselves. */}
+      <ReadOnlyRow label={t({ en: "Province", es: "Provincia" })} value={value?.province ?? ""} />
+      <ReadOnlyRow
+        label={t({ en: "Country", es: "País" })}
+        value={value?.country ?? "España"}
+      />
+    </>
   );
 }
 
