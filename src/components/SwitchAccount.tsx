@@ -90,6 +90,29 @@ export function SwitchAccountLink({ className }: { className?: string }) {
 }
 
 /**
+ * Header variant: plain "CERRAR SESIÓN", sitting where the nav capsule sits.
+ *
+ * Only used in wholesale mode, where Cuenta is the only page: a nav with a
+ * single tab that points at the page you are already on says nothing, so the
+ * space goes to the one action that was missing from the top of the screen
+ * (Juan 2026-07-29). Same pill shape as the "Cambiar" control so the header
+ * keeps one visual language.
+ */
+export function SignOutPill() {
+  const { busy, go } = useSwitchAccount();
+  return (
+    <button
+      type="button"
+      onClick={go}
+      disabled={busy}
+      className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/40 bg-[color:var(--color-sharp-white)]/70 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]/80 shadow-[0_1px_2px_rgba(50,40,30,0.08)] transition-colors hover:text-[color:var(--color-lit-grey)] disabled:opacity-50"
+    >
+      {busy ? <T en="Signing out…" es="Cerrando…" /> : <T en="Sign out" es="Cerrar sesión" />}
+    </button>
+  );
+}
+
+/**
  * Row variant for the Account surface, under "Mis datos".
  *
  * Same outlined pill as "Cambiar cajas o frecuencia" in the section above

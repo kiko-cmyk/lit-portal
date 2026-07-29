@@ -11,7 +11,7 @@ import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
-import { SwitchAccountRow } from "@/components/SwitchAccount";
+import { SignOutPill, SwitchAccountRow } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -299,10 +299,16 @@ export default function AccountPage() {
             visible={tier?.earned ?? false}
             tierEarnedAt={tier?.earnedAt ?? null}
           />
+          {/* Wholesale: the bottom tab bar is gone, so the way out lives here. */}
+          {accountOnly && <SignOutPill />}
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      {/* pb-32 reserves room for the fixed tab bar; without one, that is just a
+          hole at the end of the page. */}
+      <main
+        className={`flex-1 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12`}
+      >
         {/* H1 "CUENTA" eliminado a petición de Juan 2026-05-19: la
             pestaña activa de la nav + el browser tab title ya indican
             dónde está el usuario, el titular interno es redundante. */}
@@ -635,8 +641,11 @@ export default function AccountPage() {
           {/* Sits right under the email row on purpose: this is where people
               who are in the WRONG account try to fix it, by retyping their
               email. That never works when the other address already has a
-              Shopify customer, so give them the door that does. 2026-07-29. */}
-          <SwitchAccountRow />
+              Shopify customer, so give them the door that does. 2026-07-29.
+              Hidden in wholesale mode: the header already carries CERRAR
+              SESIÓN, and two controls firing the same logout three rows apart
+              is noise on a screen that is now only rows of data. */}
+          {!accountOnly && <SwitchAccountRow />}
         </Section>
 
         {/* Wholesale: the address on their Shopify customer record, which is what

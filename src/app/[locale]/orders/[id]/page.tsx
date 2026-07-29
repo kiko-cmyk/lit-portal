@@ -6,8 +6,9 @@ import { BottomNav, TopNav } from "@/components/BottomNav";
 import { CustomerChip } from "@/components/CustomerChip";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
+import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SubSwitchPill } from "@/components/SubSwitchPill";
-import { SwitchAccountLink } from "@/components/SwitchAccount";
+import { SignOutPill, SwitchAccountLink } from "@/components/SwitchAccount";
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
@@ -316,6 +317,7 @@ function Frame({
   children: React.ReactNode;
   customer: CustomerProfile | null;
 }) {
+  const { accountOnly } = useSubscriptionSwitch();
   return (
     <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
@@ -330,10 +332,15 @@ function Frame({
         <div className="flex min-w-0 items-center gap-2.5">
           <SubSwitchPill />
           {customer && <CustomerChip name={customer.name} />}
+          {/* Wholesale: same header as Cuenta, since the tab bar is gone there
+              too. Getting back is the "← Cuenta" link above the order number. */}
+          {accountOnly && <SignOutPill />}
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main
+        className={`flex-1 pt-[88px] ${accountOnly ? "pb-12" : "pb-24"} md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12`}
+      >
         {children}
       </main>
 
