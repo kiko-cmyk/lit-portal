@@ -4,7 +4,11 @@ import { provinceFromEsPostalCode } from "@/lib/es-provinces";
 import { isB2BCustomer } from "@/lib/flags";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { shopifyAdmin, ShopifyUserError } from "@/lib/shopify-admin";
+import {
+  shopifyAdmin,
+  ShopifyUserError,
+  type ShopifyCustomerAddress,
+} from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { CustomerProfile } from "@/lib/types";
 
@@ -27,7 +31,6 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
   const lang: "en" | "es" = languagePref === "es" || languagePref === "en" ? languagePref : "en";
 
   const isB2B = isB2BCustomer(c.tags);
-  const addr = c.defaultAddress;
 
   return {
     name: [c.firstName, c.lastName].filter(Boolean).join(" ").trim() || c.email,
@@ -39,29 +42,49 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
     tierEarned: false, // TODO when Supabase: read drops_balances.tier_earned_at
     isB2B,
     // Only shipped for wholesale accounts: for a subscriber the address that
-    // matters is the Seal one, and sending a second address would invite the
-    // Account page to edit the wrong record.
-    business: isB2B
-      ? {
-          company: addr?.company || null,
-          taxId: c.taxId,
-          address1: addr?.address1 ?? null,
-          address2: addr?.address2 ?? null,
-          city: addr?.city ?? null,
-          postalCode: addr?.zip ?? null,
-          // Prefer what Shopify canonicalised; fall back to deriving it from the
-          // postal code so the field is never blank on an address typed at
-          // checkout without one.
-          province:
-            addr?.province ??
-            (addr?.zip ? provinceFromEsPostalCode(addr.zip)?.name ?? null : null),
-          country: addr?.country ?? null,
-          countryCode: addr?.countryCode ?? null,
-          phone: addr?.phone ?? null,
-        }
-      : null,
+    // matters is the Seal one, and sending these would invite the Account page
+    // to edit the wrong record.
+    business: isB2B ? buildBusinessDetails(c) : null,
   };
 });
+
+/**
+ * Shape the two wholesale addresses out of the raw Shopify customer.
+ *
+ * Delivery = the default address. Billing = the address book entry pointed at by
+ * `lit_b2b.billing_address_id`; when that pointer is missing (or dangles, e.g.
+ * the address was deleted from the admin) the invoice simply uses the delivery
+ * address, which is both the honest default and the common case.
+ */
+function buildBusinessDetails(c: NonNullable<Awaited<ReturnType<typeof shopifyAdmin.getCustomer>>>) {
+  const mf = c.b2bMetafields;
+  const billingId = mf.billing_address_id || null;
+  const billingAddr = billingId ? c.addresses.find((a) => a.id === billingId) ?? null : null;
+
+  const shape = (a: ShopifyCustomerAddress | null) => ({
+    company: a?.company || null,
+    address1: a?.address1 ?? null,
+    address2: a?.address2 ?? null,
+    city: a?.city ?? null,
+    postalCode: a?.zip ?? null,
+    // Prefer what Shopify canonicalised; fall back to deriving it from the
+    // postal code so the field is never blank on an address typed at checkout
+    // without a province.
+    province:
+      a?.province ?? (a?.zip ? provinceFromEsPostalCode(a.zip)?.name ?? null : null),
+    country: a?.country ?? null,
+    phone: a?.phone ?? null,
+  });
+
+  return {
+    delivery: shape(c.defaultAddress),
+    billing: {
+      ...shape(billingAddr),
+      taxId: mf.tax_id || null,
+      sameAsDelivery: billingAddr == null,
+    },
+  };
+}
 
 interface CustomerPatchBody {
   firstName?: string;
