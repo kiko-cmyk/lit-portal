@@ -276,7 +276,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               aviso_al_cliente: outcome.fired
                 ? "enviado en este ciclo"
                 : `NO enviado (${outcome.reason})`,
-              siguiente_intento: attempt?.date ?? "?",
+              // NO es el proximo intento. Verificado sobre una alerta real
+              // (sub 13944154, 2026-07-29): Seal mantiene fija la fecha del cobro
+              // programado original y solo incrementa number_of_tries, asi que
+              // etiquetarlo "siguiente_intento" mostraba una fecha ya pasada y
+              // hacia pensar que el reintento ya se habia agotado.
+              cobro_programado: attempt?.date ?? "?",
             },
           });
         }
