@@ -250,41 +250,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           });
         }
 
-        // LAST-CHANCE ALERT to the humans (Juan, 2026-07-29). Not on every failed
-        // charge: there were 41 in a single morning, and an alert that fires 41
-        // times a day is an alert nobody reads. Only from the third try, because
-        // Seal cancels after the FOURTH, so this lands with roughly one day of
-        // margin to do something about it.
+        // AVISO A LOS HUMANOS: ya no va por Slack (Kiko, 2026-07-31).
         //
-        // `number_of_tries` is the whole reason this is possible, and we only know
-        // it exists because of the payload audit column.
-        const tries = attempt?.number_of_tries ?? 0;
-        if (tries >= 3) {
-          alertSlackNotice({
-            channel: "incidents",
-            icon: ":warning:",
-            title:
-              tries >= 4
-                ? "Suscripción a punto de cancelarse: CUARTO cobro fallido, Seal la cancela ya"
-                : "Suscripción en riesgo: tercer cobro fallido, Seal la cancela al cuarto (mañana)",
-            fields: {
-              seal_subscription_id: String(sub.id),
-              intento: `${tries} de 4`,
-              importe: `${sub.total_value ?? "?"} ${sub.currency ?? ""}`.trim(),
-              cadencia: sub.delivery_interval,
-              tarjeta: [sub.card_expiry_month, sub.card_expiry_year].filter(Boolean).join("/"),
-              aviso_al_cliente: outcome.fired
-                ? "enviado en este ciclo"
-                : `NO enviado (${outcome.reason})`,
-              // NO es el proximo intento. Verificado sobre una alerta real
-              // (sub 13944154, 2026-07-29): Seal mantiene fija la fecha del cobro
-              // programado original y solo incrementa number_of_tries, asi que
-              // etiquetarlo "siguiente_intento" mostraba una fecha ya pasada y
-              // hacia pensar que el reintento ya se habia agotado.
-              cobro_programado: attempt?.date ?? "?",
-            },
-          });
-        }
+        // Del 29 al 31 de julio esto posteaba a #server-errors desde el tercer
+        // intento. Funcionaba, pero estaba en el sitio equivocado: un canal de
+        // errores no es una cola de trabajo. Nadie es responsable de un mensaje
+        // de Slack, no se puede saber si alguien lo atendió, y el aviso moría
+        // con el scroll.
+        //
+        // Ahora esa señal vive en la CS Platform del dashboard, como cuarta
+        // cola de llamadas (`cobro_fallido`), que es donde trabaja el equipo de
+        // Antonio: tiene dueño, guion, intentos, caducidad y una métrica de
+        // cuántos cobros se salvaron. La alimenta `etl/crm_ingest.py` leyendo
+        // los `billing_attempts` de la API de Seal cada 15 minutos, así que NO
+        // depende de este webhook y no hay nada que mantener aquí.
+        //
+        // Lo de arriba (el evento `payment_failed` de Klaviyo que avisa al
+        // CLIENTE, y el alertSlackError de cuando ese aviso NO sale) se queda
+        // exactamente como estaba: eso sí es un fallo nuestro y sí es de
+        // #server-errors.
         break;
       }
       default:
