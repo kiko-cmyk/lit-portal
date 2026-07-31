@@ -51,6 +51,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackErrorAwaited } from "./alert";
 import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
+import { runAsBackgroundJob } from "./http-timeout";
 import { klaviyo } from "./klaviyo";
 import { diffLines, type FlavorComposition, planTargetLines, shortLabel } from "./mix";
 import { priceForBoxCount } from "./pricing";
@@ -263,7 +264,11 @@ export async function runRenewalReminder(
   const dryRun = isDryRunRequest(req);
 
   try {
-    return await runBucket(cfg, dryRun);
+    // No App Proxy is waiting on a cron, so the Seal client may use its wider
+    // budget and its retry-on-stall (incident 2026-07-30: one page crossing 6s
+    // killed the whole run and nobody got their email). Entered only AFTER
+    // requireCron passed, so no interactive request can ever reach either.
+    return await runAsBackgroundJob(() => runBucket(cfg, dryRun));
   } catch (err) {
     // Still re-thrown after alerting, so Vercel marks the run as failed.
     await alertSlackErrorAwaited({

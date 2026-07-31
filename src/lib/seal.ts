@@ -11,7 +11,14 @@
  * "close date", regenerated attempts after reschedule, etc).
  */
 
-import { budgetWithin, fetchDeadline, msLeft, UpstreamTimeoutError } from "./http-timeout";
+import {
+  budgetWithin,
+  deadlineIn,
+  fetchDeadline,
+  isBackgroundJob,
+  msLeft,
+  UpstreamTimeoutError,
+} from "./http-timeout";
 
 const SEAL_API_BASE = "https://app.sealsubscriptions.com/shopify/merchant/api";
 
@@ -23,14 +30,83 @@ const SEAL_MAX_RETRIES = 2;
 const SEAL_BACKOFF_MS = 300;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-// Deadlines (incident 2026-07-27, see lib/http-timeout.ts). Seal answers in
-// ~150-400ms in the healthy case, so 6s per attempt is already 15-40x normal:
-// anything slower is a stall, not slowness. The 9s total caps attempt + retries
-// + backoff together, which matters more than the per-attempt cap — 3 attempts
-// of 6s plus backoff would otherwise sum past the App Proxy's ~10s patience and
-// reproduce the exact bug we're fixing.
-const SEAL_ATTEMPT_TIMEOUT_MS = 6_000;
-const SEAL_TOTAL_BUDGET_MS = 9_000;
+// OUR OWN deadline is retriable too (see the catch in req()) — but only for a
+// BACKGROUND job, and at most once.
+//
+// Only background: an interactive route has to surface its typed 503 before
+// Shopify's App Proxy gives up at ~10s. A retry fits inside the 9s total budget,
+// so allowing it would push the observable failure from ~6s to ~9s and leave
+// under a second of margin — on the routes without a request deadline, plus a
+// Shopify or Supabase call ahead of it, that is the 2026-07-27 gateway_timeout
+// coming back through the front door. A cron has no proxy waiting on the far
+// end, and the cron is where the 2026-07-30 incident actually happened.
+//
+// At most once, on its OWN counter: a blown deadline is almost always a dead
+// socket, and a fresh connection answers in ~300ms, so one extra shot buys
+// nearly all of the recovery for a fraction of the budget. The counter is
+// SEPARATE from `attempt` on purpose — sharing it meant a page that had already
+// retried a 429 got no second chance against a stall, which is exactly the
+// mixed regime (throttle + slowness) of a bad Seal night. Wall clock is still
+// bounded by the total budget below, so a separate counter cannot run away.
+const SEAL_MAX_TIMEOUT_RETRIES = 1;
+
+// Below this there is no point sleeping the backoff: the attempt that follows
+// would be born already expired.
+const MIN_USEFUL_ATTEMPT_MS = 500;
+
+/**
+ * Deadlines (incident 2026-07-27, see lib/http-timeout.ts).
+ *
+ * INTERACTIVE (`attemptMs` / `totalMs`) — DO NOT LOOSEN. Seal answers in
+ * ~150-400ms in the healthy case, so 6s per attempt is already 15-40x normal:
+ * anything slower is a stall, not slowness. The 9s total caps attempt + retries
+ * + backoff together, which matters more than the per-attempt cap — 3 attempts
+ * of 6s plus backoff would otherwise sum past the App Proxy's ~10s patience and
+ * reproduce the exact bug we're fixing.
+ *
+ * BACKGROUND (`cronAttemptMs` / `cronTotalMs` / `sweepMs`, added 2026-07-30).
+ * A cron has no App Proxy in front, only the route's 60s `maxDuration`, so the
+ * interactive budget was protecting a caller that does not exist: the 7d
+ * reminder died because ONE page crossed 6s, and the heavy list endpoint
+ * (with-items + with-billing-attempts) legitimately does that under
+ * concurrency. 10s per attempt inside a 25s per-page budget.
+ *
+ * `sweepMs` is the wall clock for a WHOLE `listAllSubscriptions`, on top of each
+ * page's own budget. The arithmetic, with the real page count — the book is ~51
+ * pages (measured 2026-07-06, see the comment in `getSubscriptionsByEmail`; the
+ * "33 pages" that used to be quoted around here is from May and is stale):
+ *   - 51 pages at POOL 8 = 1 + ceil(50/8) = 8 sequential waves.
+ *   - Healthy, that is ~1-3s per heavy wave under concurrency 8, so 8-24s.
+ *   - One stalled page costs its 10s window plus a retry that normally answers
+ *     on a fresh socket in ~0.3s, so ~11s. A page that stalls PERSISTENTLY
+ *     throws on its own (20.5s) and the sweep never gets to matter.
+ *   - 45s therefore covers a healthy sweep plus two bad pages, and still leaves
+ *     15s of the 60s `maxDuration` for the Klaviyo fan-out (~130 candidates at
+ *     the month-end spike / POOL 6 = ~22 waves = 5-9s).
+ * Crossing 45s means several pages are broken at once and the run is lost
+ * either way. We would rather lose it LOUDLY than have Vercel kill the function
+ * at 60s: a kill throws nothing, so nobody is alerted and half the customers
+ * got their email while the rest did not.
+ *
+ * If the book grows past ~70 pages, or the fan-out grows, these three numbers
+ * have to be re-derived TOGETHER — `sweepMs` is not independent of POOL.
+ */
+export interface SealTimings {
+  attemptMs: number;
+  totalMs: number;
+  cronAttemptMs: number;
+  cronTotalMs: number;
+  /** Wall clock for a whole `listAllSubscriptions` sweep. Background only. */
+  sweepMs: number;
+}
+
+const DEFAULT_TIMINGS: SealTimings = {
+  attemptMs: 6_000,
+  totalMs: 9_000,
+  cronAttemptMs: 10_000,
+  cronTotalMs: 25_000,
+  sweepMs: 45_000,
+};
 
 // Backoff with jitter, honouring Seal's `Retry-After` header when present.
 // Jitter avoids retry stampedes across concurrent requests; Retry-After avoids
@@ -147,12 +223,30 @@ interface SealListResponse<T> {
 
 // ============ Client ============
 
-class SealClient {
+export class SealClient {
+  /**
+   * `timings` is injectable ONLY so scripts/test-seal-retry.ts can exercise the
+   * real retry path in milliseconds instead of waiting 6-10s for each deadline
+   * to fire for real. Production uses the `seal` singleton and the defaults.
+   */
+  constructor(private readonly timings: SealTimings = DEFAULT_TIMINGS) {}
+
+  /** Per-attempt cap and total budget for the kind of caller we run under. */
+  private budgets(): { attemptMs: number; totalMs: number } {
+    const t = this.timings;
+    return isBackgroundJob()
+      ? { attemptMs: t.cronAttemptMs, totalMs: t.cronTotalMs }
+      : { attemptMs: t.attemptMs, totalMs: t.totalMs };
+  }
+
   private async req<T>(
     path: string,
     init?: RequestInit,
     attempt = 0,
     deadline?: number,
+    /** Retries spent on OUR OWN deadline. Separate from `attempt` — see
+     *  SEAL_MAX_TIMEOUT_RETRIES for why sharing one counter was a bug. */
+    timeoutRetries = 0,
   ): Promise<T> {
     // Retry transient failures (network error, 429, 5xx) — but ONLY on
     // idempotent GETs. Mutations (PUT/POST) must never be retried: Seal
@@ -160,15 +254,26 @@ class SealClient {
     // reschedule / charge-now could double-apply.
     const method = (init?.method ?? "GET").toUpperCase();
     const retriable = method === "GET";
+    // Which budget applies depends on WHO is calling: an interactive route is
+    // racing Shopify's App Proxy, a cron is not (see lib/http-timeout.ts).
+    const { attemptMs, totalMs } = this.budgets();
     // Budget spans the whole call including retries; set once on attempt 0 and
     // threaded through the recursion.
-    const budget = deadline ?? budgetWithin(SEAL_TOTAL_BUDGET_MS);
+    const budget = deadline ?? budgetWithin(totalMs);
     const left = msLeft(budget);
-    if (left <= 0) throw new UpstreamTimeoutError("seal", path, SEAL_TOTAL_BUDGET_MS);
-    const { signal, timedOut } = fetchDeadline(
-      Math.min(SEAL_ATTEMPT_TIMEOUT_MS, left),
-      init?.signal ?? null,
-    );
+    // Report 0, not `totalMs`. This attempt got exactly zero milliseconds: the
+    // budget (ours, or an ambient request/sweep deadline clamped on top of it)
+    // was already spent before we could open a socket. Printing the CONSTANT
+    // here is how the first cut of this fix ended up telling the on-call "seal
+    // timed out after 25000ms on ...&page=14" about a request that never left
+    // the building. "after 0ms" says the opposite, and says it truthfully.
+    if (left <= 0) throw new UpstreamTimeoutError("seal", path, 0);
+    // What this attempt actually got, which is not always the cap: the last
+    // attempt of a retry chain, or a page near the end of a sweep, gets the
+    // remainder. Report THAT in the error — "timed out after 830ms" and "after
+    // 10000ms" are different diagnoses and the Slack alert prints the number.
+    const attemptWindow = Math.min(attemptMs, left);
+    const { signal, timedOut } = fetchDeadline(attemptWindow, init?.signal ?? null);
     try {
       const res = await fetch(`${SEAL_API_BASE}${path}`, {
         ...init,
@@ -190,9 +295,9 @@ class SealClient {
           const wait = backoffMs(attempt, res);
           // Only retry if the budget can still fit the backoff plus a usable
           // attempt; otherwise fail now instead of sleeping into a timeout.
-          if (msLeft(budget) > wait + 500) {
+          if (msLeft(budget) > wait + MIN_USEFUL_ATTEMPT_MS) {
             await sleep(wait);
-            return this.req<T>(path, init, attempt + 1, budget);
+            return this.req<T>(path, init, attempt + 1, budget, timeoutRetries);
           }
         }
         const body = await res.text().catch(() => "");
@@ -201,10 +306,25 @@ class SealClient {
       return (await res.json()) as T;
     } catch (err) {
       // Our own deadline fired: a stalled socket, not an error Seal reported.
-      // Surface it typed so api-helpers can alert and return a retryable 503
-      // rather than letting it hang out the route's full maxDuration.
       if (timedOut()) {
-        throw new UpstreamTimeoutError("seal", path, SEAL_ATTEMPT_TIMEOUT_MS);
+        // Until 2026-07-30 this threw RIGHT HERE, above the retry block below,
+        // which made our own deadline the ONLY failure mode without a second
+        // chance: 429s, 5xx and connection resets all retried, a stall did not.
+        // One stalled page of the ~51 that the renewal reminder sweeps was
+        // enough to kill the whole run and leave everybody without their email.
+        //
+        // Background only, and on its own counter: see SEAL_MAX_TIMEOUT_RETRIES.
+        if (retriable && isBackgroundJob() && timeoutRetries < SEAL_MAX_TIMEOUT_RETRIES) {
+          const wait = backoffMs(attempt);
+          if (msLeft(budget) > wait + MIN_USEFUL_ATTEMPT_MS) {
+            await sleep(wait);
+            return this.req<T>(path, init, attempt + 1, budget, timeoutRetries + 1);
+          }
+        }
+        // Still a stall after the retry: surface it typed so api-helpers can
+        // alert and return a retryable 503 rather than letting it hang out the
+        // route's full maxDuration, and so a cron fails loud instead of quiet.
+        throw new UpstreamTimeoutError("seal", path, attemptWindow);
       }
       // fetch() itself rejected (DNS / connection reset). Retry idempotent
       // calls. Never retry aborts (caller-driven cancellation) or a
@@ -218,9 +338,9 @@ class SealClient {
         !(err instanceof UpstreamTimeoutError)
       ) {
         const wait = backoffMs(attempt);
-        if (msLeft(budget) > wait + 500) {
+        if (msLeft(budget) > wait + MIN_USEFUL_ATTEMPT_MS) {
           await sleep(wait);
-          return this.req<T>(path, init, attempt + 1, budget);
+          return this.req<T>(path, init, attempt + 1, budget, timeoutRetries);
         }
       }
       throw err;
@@ -306,34 +426,90 @@ class SealClient {
    * Pages are fetched with bounded concurrency: page 1 first to learn
    * total_pages, then the rest in waves of `POOL`. A failed page propagates
    * (no silent truncation) so the caller fails loud rather than acting on a
-   * partial book.
+   * partial book. That guarantee is why every knob below is a DEADLINE and
+   * never a "skip this page": running out of time also fails loud.
+   *
+   * The per-page retry lives in `req()`, deliberately not here: that is where
+   * the jitter and the `Retry-After` handling already are, and a second retry
+   * layer stacked on top would MULTIPLY attempts instead of adding to them, and
+   * turn a bad night into the stampede that tripped Seal's rate limit in
+   * 2026-07-06.
    */
   async listAllSubscriptions(signal?: AbortSignal): Promise<SealSubscription[]> {
+    // POOL stays at 8. Halving it was tempting — this is the HEAVY endpoint and
+    // parallel pressure on it is a known trigger (firing ~50 pages at once is
+    // what tripped Seal's rate limit in getSubscriptionsByEmail, 2026-07-06) —
+    // but nobody has MEASURED per-page latency at 4 vs 8, and with the book at
+    // ~51 pages POOL 4 means 14 sequential waves instead of 8. That makes the
+    // sweep SLOWER, which is the opposite of what this fix is for, and it would
+    // also make the first production readings uninterpretable by moving two
+    // knobs at once. Followup: measure, then decide.
     const POOL = 8;
-    const fetchPage = (page: number) => {
+
+    // Wall clock for the WHOLE sweep, on top of each page's own budget. Without
+    // it a bad night multiplies (8 waves x attempt + retry) past the route's 60s
+    // maxDuration and Vercel kills the function — a kill throws nothing, so it
+    // alerts nobody, and some customers got their email while the rest did not.
+    // Interactive callers get NO sweep budget: their per-call deadline is
+    // exactly what it is today.
+    const sweepDeadline = isBackgroundJob() ? deadlineIn(this.timings.sweepMs) : null;
+    const sweepStart = Date.now();
+    let pagesFetched = 0;
+
+    /**
+     * Never START a wave that cannot fit a useful round trip. Doing the check
+     * here rather than only clamping the per-page deadline is what keeps the
+     * error honest: a page launched with 40ms of sweep left would otherwise
+     * report a 40ms Seal timeout, which is true of the socket and a lie about
+     * what actually failed.
+     */
+    const requireSweepBudget = (totalPages: number) => {
+      if (sweepDeadline === null || msLeft(sweepDeadline) >= MIN_USEFUL_ATTEMPT_MS) return;
+      throw new SealSweepTimeoutError(Date.now() - sweepStart, pagesFetched, totalPages);
+    };
+
+    const fetchPage = async (page: number, totalPages: number) => {
       const params = new URLSearchParams({
         "with-items": "true",
         "with-billing-attempts": "true",
         page: String(page),
       });
-      return this.req<SealListResponse<SealSubscription>>(
-        `/subscriptions?${params.toString()}`,
-        { signal },
-      );
+      const own = budgetWithin(this.budgets().totalMs);
+      try {
+        return await this.req<SealListResponse<SealSubscription>>(
+          `/subscriptions?${params.toString()}`,
+          { signal },
+          0,
+          sweepDeadline === null ? own : Math.min(own, sweepDeadline),
+        );
+      } catch (err) {
+        // A page can still be cut off mid-flight when the sweep runs out under
+        // it. Re-label it: blaming Seal for a truncated window sends the on-call
+        // to debug Seal instead of our own cap.
+        if (
+          err instanceof UpstreamTimeoutError &&
+          sweepDeadline !== null &&
+          msLeft(sweepDeadline) <= 0
+        ) {
+          throw new SealSweepTimeoutError(Date.now() - sweepStart, pagesFetched, totalPages);
+        }
+        throw err;
+      }
     };
 
-    const page1 = await fetchPage(1);
+    const page1 = await fetchPage(1, 1);
     const totalPages = page1?.payload?.total_pages ?? 1;
+    pagesFetched = 1;
 
     const all: SealSubscription[] = [...(page1?.payload?.subscriptions ?? [])];
     for (let start = 2; start <= totalPages; start += POOL) {
-      const wave = Array.from(
-        { length: Math.min(POOL, totalPages - start + 1) },
-        (_, i) => fetchPage(start + i),
-      );
+      requireSweepBudget(totalPages);
+      const size = Math.min(POOL, totalPages - start + 1);
+      const wave = Array.from({ length: size }, (_, i) => fetchPage(start + i, totalPages));
       for (const data of await Promise.all(wave)) {
         all.push(...(data?.payload?.subscriptions ?? []));
       }
+      pagesFetched += size;
     }
     return all;
   }
@@ -1019,6 +1195,35 @@ export class SealApiError extends Error {
   constructor(public status: number, body: string) {
     super(`Seal API error ${status}: ${body}`);
     this.name = "SealApiError";
+  }
+}
+
+/**
+ * The WHOLE `listAllSubscriptions` sweep ran out of its own wall clock
+ * (`SealTimings.sweepMs`). Nothing here says anything about how Seal behaved.
+ *
+ * A distinct error on purpose. The first cut of the sweep budget reused
+ * `UpstreamTimeoutError` and posted `seal timed out after 25000ms on
+ * /subscriptions?...&page=14` to #server-errors — for a page that had never been
+ * sent, naming an arbitrary pending page instead of the one that stalled. The
+ * on-call reads that and goes to debug Seal. The message has to name the cap,
+ * the elapsed time and how far the sweep actually got.
+ *
+ * Still a subclass of `UpstreamTimeoutError` so api-helpers keeps classifying it
+ * as a transient upstream problem (retryable 503) rather than an internal fault.
+ */
+export class SealSweepTimeoutError extends UpstreamTimeoutError {
+  constructor(
+    public readonly elapsedMs: number,
+    public readonly pagesFetched: number,
+    public readonly totalPages: number,
+  ) {
+    super("seal", "listAllSubscriptions", elapsedMs);
+    this.name = "SealSweepTimeoutError";
+    // No em dash in the message itself: it is copy that lands in Slack.
+    this.message =
+      `seal sweep gave up after ${elapsedMs}ms with ${pagesFetched}/${totalPages} pages fetched. ` +
+      `This is OUR cap on the whole sweep (SealTimings.sweepMs), not one Seal call timing out.`;
   }
 }
 

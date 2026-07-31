@@ -17,6 +17,10 @@
  *     can never sum its way past the proxy's patience.
  *   - request deadline: caps a whole route, so several sequential upstreams
  *     cannot sum their way past it either (added 2026-07-29).
+ *
+ * All three are sized for an INTERACTIVE request racing the App Proxy. A cron
+ * has no proxy waiting on the far end, so `runAsBackgroundJob` below lets a
+ * client pick a wider budget for that caller only (incident 2026-07-30).
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -72,6 +76,42 @@ export function budgetWithin(totalMs: number): number {
   const own = deadlineIn(totalMs);
   const at = requestDeadline.getStore();
   return at === undefined ? own : Math.min(own, at);
+}
+
+/**
+ * Ambient "nobody interactive is waiting for this" flag.
+ *
+ * Why (incident 2026-07-30): the 7d renewal reminder died with `seal timed out
+ * after 6000ms on /subscriptions?...&page=17` and nobody got their email that
+ * day. Seal's 6s/9s budgets are sized for the ~10s patience of Shopify's App
+ * Proxy on interactive routes. A nightly cron that sweeps the whole Seal book
+ * (~51 heavy pages) has no proxy in front of it, so that tight budget was
+ * protecting a caller that does not exist — and one slow page was enough to
+ * lose the entire run.
+ *
+ * A cron entry point opts in with `runAsBackgroundJob`; clients read
+ * `isBackgroundJob()` to pick the generous variant of their own budgets. Two
+ * rules keep this from leaking onto an interactive path: only cron handlers may
+ * call it, and only AFTER `requireCron` has passed. It is a separate store from
+ * the request deadline above on purpose — that one still clamps on top, so a
+ * route that sets a request deadline stays clamped even if it opts in.
+ *
+ * KNOWN GAP, not fixed here: `lib/klaviyo.ts` and `postAlert` in `lib/alert.ts`
+ * pass no signal to `fetch` at all, so a hung socket in the reminder's Klaviyo
+ * fan-out still burns the route's whole `maxDuration` and gets killed in
+ * silence. Widening a budget does not create that hole, but it does move the
+ * fan-out closer to it. Give those two clients a `fetchDeadline` next.
+ */
+const backgroundJob = new AsyncLocalStorage<true>();
+
+/** Run `fn` as a cron/background job: no App Proxy is waiting on the far end. */
+export function runAsBackgroundJob<T>(fn: () => Promise<T>): Promise<T> {
+  return backgroundJob.run(true, fn);
+}
+
+/** True inside `runAsBackgroundJob`. Clients use it to pick which budget applies. */
+export function isBackgroundJob(): boolean {
+  return backgroundJob.getStore() === true;
 }
 
 /** A single outbound call blew its deadline. Transient by definition. */
