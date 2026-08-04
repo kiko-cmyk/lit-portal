@@ -186,6 +186,14 @@ export interface SealSubscription {
   delivery_interval: string; // e.g. "1 month", "15 days", "3 months"
   billing_interval: string;
   order_id: string;
+  /**
+   * Id numérico del cliente en Shopify (sin el prefijo `gid://`). Seal lo
+   * devuelve siempre en `/subscription?id=` — verificado en vivo el 2026-08-04
+   * contra la sub 14030060. Lo necesita la entrada máquina a máquina del cambio
+   * de dirección, que no tiene sesión de la que sacar el `customerId` y aun así
+   * debe sincronizar la dirección por defecto en Shopify.
+   */
+  customer_id?: string;
   email: string;
   currency: string;
   first_name: string;

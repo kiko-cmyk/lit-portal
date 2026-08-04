@@ -1,12 +1,18 @@
 import { after, type NextRequest } from "next/server";
 
-import { alertSlackError } from "@/lib/alert";
+import {
+  assertBeforeCutoff,
+  assertWriteBudget,
+  normalizeAddress,
+  syncShopifyDefaultAddress,
+  validateAddressInput,
+  writeAddress,
+  type AddressInput,
+} from "@/lib/address-core";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
-import { isWithinCutoff } from "@/lib/cutoff";
-import { provinceFromEsPostalCode } from "@/lib/es-provinces";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
+import { mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import type { AppProxyContext } from "@/lib/shopify-app-proxy";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -45,20 +51,9 @@ const PROXY_BUDGET_MS = 8_500;
  */
 const REQUEST_BUDGET_MS = 9_500;
 
-interface AddressBody {
-  address1: string;
-  address2?: string;
-  city: string;
-  postalCode: string;
-  country: string;
-  countryCode: string;
-  province?: string;
-  provinceCode?: string;
-  firstName?: string;
-  lastName?: string;
-  phone?: string;
+type AddressBody = AddressInput & {
   sealSubscriptionId?: number | string; // multi-sub: which sub to update (optional)
-}
+};
 
 /**
  * PATCH /apps/portal/api/subscription/address
@@ -100,24 +95,7 @@ async function patchAddress(
   if (!email) throw new ApiHttpError(404, "customer_not_found", `No email for ${ctx.customerId}`);
 
   const body = (await req.json().catch(() => ({}))) as AddressBody;
-  if (!body.address1 || !body.city || !body.postalCode || !body.country || !body.countryCode) {
-    throw new ApiHttpError(
-      400,
-      "invalid_address",
-      "address1, city, postalCode, country, countryCode are required",
-    );
-  }
-  // Light validation — Shopify/Seal will reject anything truly malformed.
-  if (!/^[A-Za-z]{2}$/.test(body.countryCode)) {
-    throw new ApiHttpError(400, "invalid_country_code", "countryCode must be ISO 2-letter (e.g. ES)");
-  }
-  const pc = body.postalCode.trim();
-  if (pc.length < 3 || pc.length > 12) {
-    throw new ApiHttpError(400, "invalid_postal_code", "postalCode must be 3-12 chars");
-  }
-  if (body.provinceCode && body.provinceCode.length > 12) {
-    throw new ApiHttpError(400, "invalid_province_code", "provinceCode too long (max 12)");
-  }
+  validateAddressInput(body);
 
   // Fast-path: resolve via the cached Seal id (1 quick call). Falls back to
   // the full email scan on a cache miss. The old scan-first approach (twice
@@ -144,43 +122,10 @@ async function patchAddress(
 
   // Cutoff against the next billing attempt date (Seal's, since Seal is
   // source of truth for this flow).
-  const nextAttempt = getNextBillingAttempt(sealSub);
-  if (nextAttempt?.date && isWithinCutoff(nextAttempt.date)) {
-    throw new ApiHttpError(400, "cutoff_passed", "Cannot change address within 24h of next ship");
-  }
+  assertBeforeCutoff(sealSub);
 
-  // Seal requires `s_first_name` + `s_last_name` + `s_country` on every
-  // address edit. If the FE didn't send them, fall back to current
-  // values on the sub so the edit doesn't fail.
-  const firstName = (body.firstName || sealSub.s_first_name || "").trim();
-  const lastName = (body.lastName || sealSub.s_last_name || "").trim();
-  const country = (body.country || sealSub.s_country || "").trim();
-  if (!firstName || !lastName || !country) {
-    throw new ApiHttpError(
-      400,
-      "invalid_address",
-      "firstName, lastName and country must be present (existing or in payload)",
-    );
-  }
-
-  // Province is NOT collected by the form (AddressOverlay has no province or
-  // country field), so whatever the client sent is inherited from the address
-  // being replaced. For a Spanish address the province IS the first two digits
-  // of the postal code, so derive it and let it win: without this, a subscriber
-  // moving her box from Madrid to a summer house in Asturias shipped with
-  // `province: Madrid / M` against a 33xxx postal code (incident 2026-07-27).
-  // Non-ES or unrecognised code → keep whatever we were given, never worse.
-  const derived =
-    body.countryCode.toUpperCase() === "ES"
-      ? provinceFromEsPostalCode(body.postalCode)
-      : null;
-  const province = derived?.name ?? body.province;
-  const provinceCode = derived?.code ?? body.provinceCode;
-  if (derived && derived.code !== body.provinceCode) {
-    console.log(
-      `[address] province derived from postal code: ${body.provinceCode ?? "∅"} → ${derived.code} (${derived.name})`,
-    );
-  }
+  // Rellena lo que Seal exige y deriva la provincia del CP. Ver address-core.
+  const addr = normalizeAddress(body, sealSub);
 
   // Deadline guard. Everything above is reads; the write starts here. Shopify's
   // App Proxy stops waiting at ~10s and hands the customer storefront HTML,
@@ -188,34 +133,13 @@ async function patchAddress(
   // point succeeds INVISIBLY: her address changes while she reads "no se pudo
   // guardar" and writes to support. Refusing to start the write is the honest
   // outcome: retrying is safe and cheap, an untracked silent success is not.
-  const elapsed = Date.now() - startedAt;
-  if (elapsed > PROXY_BUDGET_MS) {
-    alertSlackError({
-      path: "/api/subscription/address",
-      code: "proxy_budget_exceeded",
-      msg: `Reads took ${elapsed}ms (> ${PROXY_BUDGET_MS}ms) — refused to write so the save can't succeed invisibly`,
-      customerId: ctx.customerId,
-    });
-    throw new ApiHttpError(
-      503,
-      "upstream_timeout",
-      `Too slow to save safely (${elapsed}ms). Please try again.`,
-    );
-  }
+  assertWriteBudget(startedAt, PROXY_BUDGET_MS, "/api/subscription/address", ctx.customerId);
 
-  await seal.updateShippingAddress(sealSub.id, {
-    firstName,
-    lastName,
-    address1: body.address1,
-    address2: body.address2,
-    city: body.city,
-    postalCode: body.postalCode,
-    country,
-    countryCode: body.countryCode,
-    province,
-    provinceCode,
-    phone: body.phone,
-  });
+  // Sin `verify`: la relectura es tolerante y nunca convierte en error un
+  // guardado que sí ocurrió. Aquí hay una persona mirando la pantalla, y las
+  // esperas que exige verificar se comerían el margen del App Proxy. La entrada
+  // máquina a máquina sí verifica, que allí no mira nadie. Ver address-core.
+  const { appliesFrom, refreshed } = await writeAddress(sealSub, addr);
 
   // Sync the Shopify customer default address (drives one-off storefront
   // orders, not the subscription box). Runs via `after()` so it is NOT
@@ -224,59 +148,18 @@ async function patchAddress(
   // land while the follow-up `customerDefaultAddressUpdate` never runs, leaving
   // an orphan address that is not the default. `after()` keeps the invocation
   // alive until it settles, and still never blocks the customer's response.
-  // Shopify canonicalises the province from `provinceCode`, so we deliberately
-  // do not send a display name it might not recognise.
-  after(async () => {
-    try {
-      // Outside the request deadline on purpose: this runs after the response is
-      // flushed, when that budget is spent by definition, and an inherited
-      // exhausted deadline would abort the sync instantly.
-      await runWithoutRequestDeadline(() =>
-        shopifyAdmin.updateCustomerDefaultAddress(ctx.customerId, {
-          address1: body.address1,
-          address2: body.address2,
-          city: body.city,
-          zip: body.postalCode,
-          countryCode: body.countryCode,
-          provinceCode,
-          firstName,
-          lastName,
-          phone: body.phone,
-        }),
-      );
-    } catch (err) {
-      // Seal already has the address, so the box ships correctly either way —
-      // but a silent divergence between Seal and Shopify is exactly what made
-      // this bug invisible for weeks. Alert instead of only console.warn.
-      console.warn("[address-sync] Shopify default address update failed:", err);
-      alertSlackError({
-        path: "/api/subscription/address",
-        code: "shopify_address_sync_failed",
-        msg: err instanceof Error ? err.message : String(err),
-        customerId: ctx.customerId,
-      });
-    }
-  });
+  after(() =>
+    // Outside the request deadline on purpose: this runs after the response is
+    // flushed, when that budget is spent by definition, and an inherited
+    // exhausted deadline would abort the sync instantly.
+    runWithoutRequestDeadline(() =>
+      syncShopifyDefaultAddress(ctx.customerId, addr, "/api/subscription/address"),
+    ),
+  );
 
-  // Re-fetch Seal for the response (eventual consistency — Seal usually
-  // catches up within ~1s). Use the fast singular by-id endpoint, not the
-  // paginated scan.
-  //
-  // Never let this read fail the request: the write above already landed, so
-  // throwing here would tell the customer "no se pudo guardar" about a change
-  // that DID happen — the same invisible-outcome trap as the original bug, only
-  // inverted. It is also the call most likely to run out of request budget,
-  // being the last one. Without a subscription the FE just skips its optimistic
-  // update and still shows the confirmation (see AddressOverlay.onUpdated).
-  let refreshed = null;
-  try {
-    refreshed = await seal.getSubscriptionById(sealSub.id);
-  } catch (err) {
-    console.warn("[address] read-back after write failed, reporting success anyway:", err);
-  }
   return {
     updated: true,
-    appliesFrom: refreshed ? getNextBillingAttempt(refreshed)?.date ?? null : null,
+    appliesFrom,
     subscription: refreshed ? mapToSubscription(refreshed, ctx.customerId) : null,
   };
 }
