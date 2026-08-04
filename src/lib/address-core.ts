@@ -162,29 +162,38 @@ export function formatAddress(a: {
   city?: string | null;
   province?: string | null;
 }): string {
+  const clean = (v: unknown) => String(v ?? "").trim();
   return [
-    [a.address1, a.address2].filter(Boolean).join(", "),
-    [a.postalCode, a.city].filter(Boolean).join(" "),
-    a.province,
+    [clean(a.address1), clean(a.address2)].filter(Boolean).join(", "),
+    [clean(a.postalCode), clean(a.city)].filter(Boolean).join(" "),
+    clean(a.province),
   ]
-    .filter((part) => part && String(part).trim())
+    .filter(Boolean)
     .join(", ");
 }
 
-/** La dirección que Seal tiene hoy para esta suscripción. */
+/**
+ * La dirección que Seal tiene hoy para esta suscripción.
+ *
+ * Se recorta todo: en producción hay valores guardados con espacios de sobra
+ * (la sub 14030060 tiene `s_address2 = "3B "`), y esta cadena la lee un bot en
+ * voz alta por WhatsApp, donde "3B , 28004 Madrid" se nota.
+ */
 export function currentAddress(sealSub: SealSubscription): NormalizedAddress {
+  const t = (v: string | undefined | null) => (v ?? "").trim();
+  const opt = (v: string | undefined | null) => t(v) || undefined;
   return {
-    address1: sealSub.s_address1 ?? "",
-    address2: sealSub.s_address2 ?? undefined,
-    city: sealSub.s_city ?? "",
-    postalCode: sealSub.s_zip ?? "",
-    country: sealSub.s_country ?? "",
-    countryCode: sealSub.s_country_code ?? "",
-    province: sealSub.s_province ?? undefined,
-    provinceCode: sealSub.s_province_code ?? undefined,
-    firstName: sealSub.s_first_name ?? "",
-    lastName: sealSub.s_last_name ?? "",
-    phone: sealSub.s_phone ?? undefined,
+    address1: t(sealSub.s_address1),
+    address2: opt(sealSub.s_address2),
+    city: t(sealSub.s_city),
+    postalCode: t(sealSub.s_zip),
+    country: t(sealSub.s_country),
+    countryCode: t(sealSub.s_country_code),
+    province: opt(sealSub.s_province),
+    provinceCode: opt(sealSub.s_province_code),
+    firstName: t(sealSub.s_first_name),
+    lastName: t(sealSub.s_last_name),
+    phone: opt(sealSub.s_phone),
   };
 }
 
