@@ -219,6 +219,54 @@ const run = async () => {
     );
   }
 
+  // ── el piso se puede BORRAR ────────────────────────────────────────────
+  //
+  // El bug del 2026-08-12: un cambio de Madrid a Barcelona dejó puesto el "3B"
+  // de Madrid porque `updateShippingAddress` sólo mandaba `s_address2` si era
+  // truthy. La caja habría salido a la calle nueva con el piso viejo, y el
+  // mensaje de confirmación que leyó el cliente no lo mencionaba.
+  {
+    const capturado: Array<Record<string, string>> = [];
+    const orig = (seal as unknown as Record<string, unknown>).editSubscription;
+    (seal as unknown as Record<string, unknown>).editSubscription = async (
+      _id: number,
+      edit: Record<string, string>,
+    ) => {
+      capturado.push(edit);
+    };
+    const base = {
+      address1: "C/ de prueba 25",
+      city: "Barcelona",
+      postalCode: "08001",
+      country: "Spain",
+      countryCode: "ES",
+    };
+    try {
+      await seal.updateShippingAddress(1, { ...base, address2: "" });
+      check(
+        'address2 vacío se manda como "" para que Seal lo borre',
+        capturado[0]?.s_address2 === "",
+        JSON.stringify(capturado[0]?.s_address2),
+      );
+
+      await seal.updateShippingAddress(1, { ...base, address2: "1-1" });
+      check(
+        "un piso de verdad se manda tal cual",
+        capturado[1]?.s_address2 === "1-1",
+        JSON.stringify(capturado[1]?.s_address2),
+      );
+
+      await seal.updateShippingAddress(1, base);
+      check(
+        "sin la clave, se sigue interpretando como 'no lo toques'",
+        !("s_address2" in (capturado[2] ?? {})),
+        JSON.stringify(capturado[2]),
+      );
+    } finally {
+      (seal as unknown as Record<string, unknown>).editSubscription = orig;
+    }
+  }
+
   console.log(failures === 0 ? "\nTodos OK" : `\n${failures} fallo(s)`);
   process.exit(failures === 0 ? 0 : 1);
 };

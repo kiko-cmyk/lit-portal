@@ -137,9 +137,16 @@ async function handle(req: NextRequest) {
   // en WhatsApp dice "mándalo a Calle Nueva 5, 08001 Barcelona" y no repite su
   // apellido ni el país; heredar es lo que hace que eso funcione. `address2` NO
   // se hereda: si la calle cambia, el piso viejo es peor que ninguno.
+  //
+  // Y se dice con cadena VACÍA, no con `undefined`. Aquí ponía `undefined`, que
+  // expresa la intención correcta pero que `updateShippingAddress` interpretaba
+  // como "no toques este campo", así que el piso viejo sobrevivía igual. Un
+  // cambio de Madrid a Barcelona dejó puesto el "3B" de Madrid (2026-08-12,
+  // primera prueba real de la capability). `""` es lo único que Seal entiende
+  // como borrar.
   const merged: Partial<AddressInput> = {
     address1: body.address1 || current.address1,
-    address2: body.address1 && !body.address2 ? undefined : body.address2 ?? current.address2,
+    address2: body.address1 && !body.address2 ? "" : body.address2 ?? current.address2,
     city: body.city || current.city,
     postalCode: body.postalCode || current.postalCode,
     country: body.country || current.country,

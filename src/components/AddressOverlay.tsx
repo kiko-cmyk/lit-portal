@@ -58,7 +58,10 @@ export function AddressOverlay({
             firstName: form.firstName || undefined,
             lastName: form.lastName || undefined,
             address1: form.address1,
-            address2: form.address2 || undefined,
+            // Vacío se manda como "", no como undefined: quien se muda de un
+            // piso a una casa borra este campo y tiene que borrarse de verdad.
+            // Con undefined, Seal conservaba el piso anterior (2026-08-12).
+            address2: form.address2 ?? "",
             city: form.city,
             postalCode: form.postalCode,
             country: form.country,

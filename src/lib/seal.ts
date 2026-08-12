@@ -1112,7 +1112,15 @@ export class SealClient {
       s_country: address.country,
       s_country_code: address.countryCode,
     };
-    if (address.address2) edit.s_address2 = address.address2;
+    // `address2` se manda si el llamante lo ha decidido, AUNQUE VENGA VACIO.
+    //
+    // Con el `if (address.address2)` de antes, una direccion nueva sin piso no
+    // mandaba la clave, Seal conservaba el piso de la direccion ANTERIOR y la
+    // caja salia a la calle nueva con el piso viejo pegado. Medido el
+    // 2026-08-12: un cambio de Madrid a Barcelona dejo el "3B" de Madrid.
+    // `undefined` sigue significando "no lo toques"; `""` significa "borralo",
+    // que es lo que hace falta para que alguien pueda mudarse a una casa.
+    if (address.address2 !== undefined) edit.s_address2 = address.address2;
     if (address.province) edit.s_province = address.province;
     if (address.provinceCode) edit.s_province_code = address.provinceCode;
     if (address.firstName) edit.s_first_name = address.firstName;
