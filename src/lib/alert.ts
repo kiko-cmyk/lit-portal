@@ -85,7 +85,7 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
  * Deliberately NOT deduped by content: these are low-frequency by nature and
  * collapsing two different customers' pauses into one alert would hide one.
  */
-export function alertSlackNotice(opts: {
+export interface SlackNotice {
   /** Short headline, e.g. "Suscripción pausada en el portal de Seal". */
   title: string;
   /** `key: value` context lines. PII discipline: ids, never emails. */
@@ -101,7 +101,25 @@ export function alertSlackNotice(opts: {
   channel?: "alerts" | "incidents";
   /** Slack emoji prefix. Defaults to the pause icon for historical reasons. */
   icon?: string;
-}): void {
+}
+
+export function alertSlackNotice(opts: SlackNotice): void {
+  void postNotice(opts);
+}
+
+/**
+ * Same notice, but awaited — for callers with nothing after them keeping the
+ * invocation alive. Same reason as {@link alertSlackErrorAwaited}, and the case
+ * that forced it: a handler that alerts and then THROWS hands control straight
+ * back to the runtime, which can freeze the invocation with the POST still
+ * pending. Callers on that path must `await` this (inside `after()` for a
+ * request handler, directly in a cron).
+ */
+export async function alertSlackNoticeAwaited(opts: SlackNotice): Promise<void> {
+  await postNotice(opts);
+}
+
+async function postNotice(opts: SlackNotice): Promise<void> {
   const alerts =
     process.env.SLACK_ALERTS_WEBHOOK_URL || process.env.SLACK_SECURITY_WEBHOOK_URL;
   const url =
@@ -112,12 +130,35 @@ export function alertSlackNotice(opts: {
 
   const lines = Object.entries(opts.fields ?? {})
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `• ${k}: \`${String(v)}\``);
+    .map(([k, v]) => `• ${k}: \`${safeFieldValue(v)}\``);
   const text = [`${opts.icon ?? ":pause_button:"} *lit-portal* ${opts.title}`, ...lines].join("\n");
 
-  void fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
-  }).catch((e) => console.warn("[alert] slack notice failed:", e));
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  } catch (e) {
+    console.warn("[alert] slack notice failed:", e);
+  }
+}
+
+/**
+ * Los valores de los campos ya no salen todos de nuestro código: desde que el
+ * aviso de dirección fallida los rellena con lo que el cliente escribió en el
+ * formulario (ciudad, código postal) y con mensajes de error de Seal, un valor
+ * puede traer saltos de línea, comillas invertidas que rompen el bloque de
+ * código, o `<!channel>`, que en Slack es una mención a todo el canal.
+ *
+ * Se sanea aquí y no en cada llamante para que valga para todos, incluidos los
+ * que vengan después.
+ */
+function safeFieldValue(v: unknown): string {
+  return String(v)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/`/g, "'")
+    .replace(/[<>]/g, "")
+    .slice(0, 200)
+    .trim();
 }

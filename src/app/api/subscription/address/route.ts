@@ -4,9 +4,11 @@ import {
   assertBeforeCutoff,
   assertWriteBudget,
   normalizeAddress,
+  reportAddressSaveFailure,
   syncShopifyDefaultAddress,
   validateAddressInput,
   writeAddress,
+  type AddressAttempt,
   type AddressInput,
 } from "@/lib/address-core";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
@@ -82,9 +84,40 @@ export const PATCH = withCustomer((req, ctx) =>
   runWithRequestDeadline(REQUEST_BUDGET_MS, () => patchAddress(req, ctx)),
 );
 
+const PATH = "/api/subscription/address";
+
+/**
+ * Envoltorio que hace VISIBLE un guardado que no llega a escribirse.
+ *
+ * Las salidas más probables de esta ruta cuando algo va mal (`seal_busy` con
+ * Seal saturado, `subscription_not_found`) devuelven un error al cliente y no
+ * avisan a nadie, así que un cliente que no puede cambiar su dirección era
+ * exactamente igual de silencioso que uno que sí puede. Ver
+ * `reportAddressSaveFailure`, que decide qué merece aviso y qué no.
+ *
+ * El aviso va en `after()`: se manda con la respuesta ya fuera, así no le suma
+ * latencia a un guardado que ya ha ido mal, y Next mantiene viva la invocación
+ * hasta que sale (`after` corre también cuando el handler lanza). Y en
+ * `runWithoutRequestDeadline` por el mismo motivo que el sync de Shopify: para
+ * entonces el presupuesto de la petición está gastado por definición.
+ */
 async function patchAddress(
   req: NextRequest,
   ctx: AppProxyContext & { customerId: string },
+) {
+  const attempt: AddressAttempt = { path: PATH, customerId: ctx.customerId };
+  try {
+    return await savePatchAddress(req, ctx, attempt);
+  } catch (err) {
+    after(() => runWithoutRequestDeadline(() => reportAddressSaveFailure(attempt, err)));
+    throw err;
+  }
+}
+
+async function savePatchAddress(
+  req: NextRequest,
+  ctx: AppProxyContext & { customerId: string },
+  attempt: AddressAttempt,
 ) {
   const startedAt = Date.now();
   await enforceRateLimit(ctx.customerId, "address", { limit: 10, windowMs: 60_000 });
@@ -95,6 +128,10 @@ async function patchAddress(
   if (!email) throw new ApiHttpError(404, "customer_not_found", `No email for ${ctx.customerId}`);
 
   const body = (await req.json().catch(() => ({}))) as AddressBody;
+  // Antes de validar: si el fallo salta aquí, el aviso todavía puede decir a
+  // dónde se quería mandar la caja.
+  attempt.postalCode = body.postalCode;
+  attempt.city = body.city;
   validateAddressInput(body);
 
   // Fast-path: resolve via the cached Seal id (1 quick call). Falls back to
@@ -116,8 +153,15 @@ async function patchAddress(
       null;
   }
   if (!sealSub) {
-    throw new ApiHttpError(404, "subscription_not_found", `No Seal subscription for ${email}`);
+    // Por id, no por email: este mensaje viaja a Slack en el aviso de fallo y el
+    // id es lo que cruza con Shopify de todas formas.
+    throw new ApiHttpError(
+      404,
+      "subscription_not_found",
+      `No Seal subscription for customer ${ctx.customerId}`,
+    );
   }
+  attempt.sealSubscriptionId = sealSub.id;
   assertSubscriptionBelongsToCustomer(sealSub, email, "subscription/address");
 
   // Cutoff against the next billing attempt date (Seal's, since Seal is
@@ -133,7 +177,7 @@ async function patchAddress(
   // point succeeds INVISIBLY: her address changes while she reads "no se pudo
   // guardar" and writes to support. Refusing to start the write is the honest
   // outcome: retrying is safe and cheap, an untracked silent success is not.
-  assertWriteBudget(startedAt, PROXY_BUDGET_MS, "/api/subscription/address", ctx.customerId);
+  assertWriteBudget(startedAt, PROXY_BUDGET_MS, PATH, ctx.customerId);
 
   // Sin `verify`: la relectura es tolerante y nunca convierte en error un
   // guardado que sí ocurrió. Aquí hay una persona mirando la pantalla, y las
@@ -153,7 +197,7 @@ async function patchAddress(
     // flushed, when that budget is spent by definition, and an inherited
     // exhausted deadline would abort the sync instantly.
     runWithoutRequestDeadline(() =>
-      syncShopifyDefaultAddress(ctx.customerId, addr, "/api/subscription/address"),
+      syncShopifyDefaultAddress(ctx.customerId, addr, PATH),
     ),
   );
 

@@ -6,9 +6,11 @@ import {
   currentAddress,
   formatAddress,
   normalizeAddress,
+  reportAddressSaveFailure,
   syncShopifyDefaultAddress,
   validateAddressInput,
   writeAddress,
+  type AddressAttempt,
   type AddressInput,
 } from "@/lib/address-core";
 import { ApiHttpError } from "@/lib/api-helpers";
@@ -65,6 +67,8 @@ interface InternalAddressBody extends Partial<AddressInput> {
   dryRun?: boolean;
 }
 
+const PATH = "/api/internal/subscription/address";
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     requireCron(req);
@@ -75,9 +79,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     throw err;
   }
 
+  // Aquí NO hay pantalla ni persona: el bot le dice al cliente lo que salga y
+  // nadie más se entera. Esta entrada era la más silenciosa de las dos, porque
+  // ni siquiera pasa por el `withCustomer` que avisa de los 5xx. Ver
+  // `reportAddressSaveFailure`.
+  const attempt: AddressAttempt = { path: PATH };
   try {
-    return NextResponse.json(await runWithRequestDeadline(REQUEST_BUDGET_MS, () => handle(req)));
+    return NextResponse.json(
+      await runWithRequestDeadline(REQUEST_BUDGET_MS, () => handle(req, attempt)),
+    );
   } catch (err) {
+    after(() => runWithoutRequestDeadline(() => reportAddressSaveFailure(attempt, err)));
     if (err instanceof ApiHttpError) {
       return NextResponse.json(
         { ok: false, code: err.code, message: err.message },
@@ -92,11 +104,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 }
 
-async function handle(req: NextRequest) {
+async function handle(req: NextRequest, attempt: AddressAttempt) {
   const startedAt = Date.now();
   const body = (await req.json().catch(() => ({}))) as InternalAddressBody;
 
   const subId = Number(body.sealSubscriptionId);
+  // El contexto del aviso se rellena ANTES del primer throw: los fallos más
+  // probables de esta ruta (Seal saturado, suscripción que no existe) saltan en
+  // las líneas siguientes, y un aviso que no dice ni en qué modo iba obliga a
+  // abrir los logs para saber si el bot llegó a prometerle algo al cliente.
+  const hasNewAddress = Boolean(body.address1 || body.postalCode || body.city);
+  attempt.sealSubscriptionId = body.sealSubscriptionId;
+  attempt.postalCode = body.postalCode;
+  attempt.city = body.city;
+  attempt.mode = !hasNewAddress ? "read" : body.dryRun ? "dry_run" : "write";
   if (!subId || Number.isNaN(subId)) {
     throw new ApiHttpError(400, "missing_field", "sealSubscriptionId is required");
   }
@@ -117,11 +138,11 @@ async function handle(req: NextRequest) {
     );
   }
 
+  attempt.customerId = sealSub.customer_id ? String(sealSub.customer_id) : undefined;
   const nextAttempt = getNextBillingAttempt(sealSub);
   const current = currentAddress(sealSub);
 
   // CONSULTA: sin dirección nueva no hay nada que validar ni que escribir.
-  const hasNewAddress = Boolean(body.address1 || body.postalCode || body.city);
   if (!hasNewAddress) {
     return {
       ok: true,
@@ -176,7 +197,7 @@ async function handle(req: NextRequest) {
     };
   }
 
-  assertWriteBudget(startedAt, READ_BUDGET_MS, "/api/internal/subscription/address");
+  assertWriteBudget(startedAt, READ_BUDGET_MS, PATH);
 
   // `verify: true`: aquí nadie mira una pantalla. El bot dice "hecho" y el
   // cliente se lo cree, así que un no-op silencioso de Seal sería una caja
@@ -185,11 +206,7 @@ async function handle(req: NextRequest) {
 
   after(() =>
     runWithoutRequestDeadline(() =>
-      syncShopifyDefaultAddress(
-        String(sealSub.customer_id ?? ""),
-        addr,
-        "/api/internal/subscription/address",
-      ),
+      syncShopifyDefaultAddress(String(sealSub.customer_id ?? ""), addr, PATH),
     ),
   );
 
