@@ -20,10 +20,11 @@
  * por accidente desde una entrada nueva.
  */
 
-import { alertSlackError } from "@/lib/alert";
+import { alertSlackError, alertSlackNoticeAwaited } from "@/lib/alert";
 import { ApiHttpError } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { provinceFromEsPostalCode } from "@/lib/es-provinces";
+import { UpstreamTimeoutError } from "@/lib/http-timeout";
 import { getNextBillingAttempt, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 
@@ -359,4 +360,174 @@ export function assertWriteBudget(
     "upstream_timeout",
     `Too slow to save safely (${elapsed}ms). Please try again.`,
   );
+}
+
+/* ─────────────── Un cambio de dirección que no se guarda tiene que verse ────────────── */
+
+/**
+ * Lo que se sabe del intento cuando falla. Todo opcional menos la ruta: el fallo
+ * puede saltar antes de haber resuelto la suscripción, y un aviso a medias vale
+ * mucho más que ninguno.
+ *
+ * Del destino se manda SOLO código postal y ciudad. Es lo que distingue una
+ * mudanza de verdad de una errata y lo que permite a soporte arreglarlo, y deja
+ * fuera calle, nombre y teléfono. Igual que el resto de avisos: ids sí, ficha
+ * completa del cliente no.
+ */
+export interface AddressAttempt {
+  path: string;
+  customerId?: string;
+  sealSubscriptionId?: number | string;
+  postalCode?: string;
+  city?: string;
+  /** Solo la entrada del bot: `read` | `dry_run` | `write`. */
+  mode?: string;
+}
+
+/**
+ * Fallos que son una respuesta de diseño, no un portal roto: el cliente escribió
+ * algo que no vale, o llegó dentro de las 24h previas al envío. No van a
+ * #server-errors, que es un canal de errores y no una cola de trabajo.
+ *
+ * `cutoff_passed` es el que más duele dejar fuera, porque a quien se muda dos
+ * días antes del cobro le sale la caja a la dirección vieja igual. Pero eso es
+ * trabajo de CS con dueño y guion, o sea la cola de llamadas de la CS Platform
+ * (`lit-dashboard`), no una línea de Slack que muere con el scroll.
+ */
+const BY_DESIGN_FAILURES = new Set([
+  "cutoff_passed",
+  "invalid_address",
+  "invalid_country_code",
+  "invalid_postal_code",
+  "invalid_province_code",
+  // El limitador haciendo su trabajo tampoco es un portal roto. Y sobre todo:
+  // para llegar a él hacen falta 10 intentos previos en el mismo minuto, que si
+  // fallaron YA avisaron uno a uno; y si salieron bien, avisar del 11º diría
+  // "no se guardó" de un cliente al que sí se le guardó. Cuando el limitador
+  // falla de verdad ya avisa por su cuenta (`rate_limit_rpc_error`).
+  "rate_limited",
+]);
+
+/**
+ * Etiqueta con la que se reporta el fallo. Reproduce el mapeo de `withCustomer`
+ * para que el motivo del aviso sea EL MISMO código que ve el cliente entre
+ * paréntesis en el overlay, que es como se cruza un aviso con un correo de
+ * soporte sin tener que abrir los logs.
+ */
+export function addressFailureCode(err: unknown): string {
+  if (err instanceof ApiHttpError) return err.code;
+  if (err instanceof UpstreamTimeoutError) return `upstream_timeout:${err.upstream}`;
+  const up = err as { name?: string; status?: number };
+  if (up?.name === "SealApiError") {
+    return up.status === 429 || (up.status ?? 0) >= 500 ? "seal_busy" : `seal_error_${up.status ?? "?"}`;
+  }
+  return "internal_error";
+}
+
+/** True si el fallo es una respuesta de diseño y no merece aviso. */
+export function isByDesignFailure(code: string): boolean {
+  return BY_DESIGN_FAILURES.has(code);
+}
+
+/**
+ * Avisa a #server-errors de un cambio de dirección que NO llegó a escribirse.
+ *
+ * Por qué existe. El 2026-07-06 un cliente intentó cambiar su dirección desde el
+ * portal, no pudo, escribió a soporte, se le cambió la dirección en la ficha de
+ * Shopify creyendo que bastaba, y su caja siguió saliendo a la dirección vieja
+ * dos meses. De nuestro lado no quedó NADA: ni alerta ni rastro, porque las tres
+ * salidas más probables de esa ruta (`seal_busy` cuando Seal va saturado,
+ * `subscription_not_found`, y el 4xx) no avisan a nadie. Con 50 clientes en tres
+ * meses usando este formulario, un intento perdido es un cliente perdido.
+ *
+ * Se usa `alertSlackNoticeAwaited` y no `alertSlackError` por dos razones:
+ * el aviso NO se deduplica (la clave `path|code` de `alertSlackError` se
+ * comería el segundo cliente que falle en el mismo minuto, que es justo el que
+ * no queremos perder), y se puede esperar, que hace falta porque el llamante
+ * avisa y RELANZA. El llamante debe envolverlo en `after()`: así se manda
+ * cuando la respuesta ya ha salido y no le añade latencia a un guardado que ya
+ * ha ido mal.
+ *
+ * Nunca lanza: un fallo de Slack no puede cambiar lo que ve el cliente.
+ */
+export async function reportAddressSaveFailure(
+  attempt: AddressAttempt,
+  err: unknown,
+): Promise<void> {
+  try {
+    const code = addressFailureCode(err);
+    const raw = err instanceof Error ? err.message : String(err);
+    if (isByDesignFailure(code)) {
+      // Greppable en los logs de Vercel, fuera de Slack. Ver BY_DESIGN_FAILURES.
+      console.log(
+        `[address] intento rechazado por diseño (${code}) · cliente ${attempt.customerId ?? "?"} · ${attempt.path}`,
+      );
+      return;
+    }
+    // El log completo sí lleva el email si lo trae: es de Vercel, no de Slack.
+    console.warn(`[address] guardado fallido (${code}) · ${attempt.path} · ${raw}`);
+    if (!shouldPost(attempt, code)) return;
+    await alertSlackNoticeAwaited({
+      icon: ":red_circle:",
+      title:
+        attempt.mode && attempt.mode !== "write"
+          ? "El bot no pudo operar sobre la dirección"
+          : "Un cambio de dirección no se guardó",
+      fields: {
+        motivo: code,
+        cliente: attempt.customerId,
+        suscripcion: attempt.sealSubscriptionId,
+        destino: [attempt.postalCode, attempt.city].filter(Boolean).join(" ") || undefined,
+        modo: attempt.mode,
+        ruta: attempt.path,
+        detalle: redactEmails(raw).slice(0, 160),
+      },
+    });
+  } catch (e) {
+    console.warn("[address] no se pudo avisar del guardado fallido:", e);
+  }
+}
+
+/**
+ * Fuera emails del texto que va a Slack.
+ *
+ * `detalle` es el mensaje del error, y por ahí se cuela el correo del cliente
+ * sin que se vea venir: `subscription_not_found` lo lleva dentro
+ * (`No Seal subscription for ...`), igual que el guard de propiedad, y el
+ * mensaje de `SealApiError` arrastra el cuerpo crudo de la respuesta de Seal,
+ * que no controlamos. La regla del módulo de avisos es "ids sí, email no", y
+ * con motivo + cliente + suscripción ya se cruza un aviso con un correo de
+ * soporte. Se filtra en la salida, que es lo único que cubre también lo que
+ * venga de fuera.
+ */
+function redactEmails(text: string): string {
+  return text.replace(/[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}/g, "[email]");
+}
+
+/**
+ * Un mismo cliente fallando en bucle no puede llenar el canal.
+ *
+ * La ventana es por (ruta, motivo, CLIENTE) a propósito, no por contenido: dos
+ * clientes distintos fallando en el mismo minuto son dos avisos, que es
+ * justamente lo que el dedupe de `alertSlackError` se comería y por lo que aquí
+ * se usa `alertSlackNoticeAwaited`. Vive en memoria del proceso, así que un
+ * arranque en frío lo reinicia; con medio cambio de dirección al día eso da
+ * igual, y errar hacia "avisa de más" es el lado correcto.
+ */
+const POST_WINDOW_MS = 60_000;
+const lastPosted = new Map<string, number>();
+
+function shouldPost(attempt: AddressAttempt, code: string): boolean {
+  const key = `${attempt.path}|${code}|${attempt.customerId ?? attempt.sealSubscriptionId ?? "?"}`;
+  const now = Date.now();
+  const prev = lastPosted.get(key);
+  if (prev !== undefined && now - prev < POST_WINDOW_MS) {
+    console.log(`[address] aviso repetido en menos de 60s, no se manda: ${key}`);
+    return false;
+  }
+  if (lastPosted.size > 500) {
+    for (const [k, t] of lastPosted) if (now - t >= POST_WINDOW_MS) lastPosted.delete(k);
+  }
+  lastPosted.set(key, now);
+  return true;
 }

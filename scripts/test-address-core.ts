@@ -25,14 +25,19 @@
  */
 
 import {
+  addressFailureCode,
   currentAddress,
   formatAddress,
+  isByDesignFailure,
   normalizeAddress,
+  reportAddressSaveFailure,
   validateAddressInput,
   writeAddress,
   type AddressInput,
 } from "@/lib/address-core";
-import { seal, type SealSubscription } from "@/lib/seal";
+import { ApiHttpError } from "@/lib/api-helpers";
+import { UpstreamTimeoutError } from "@/lib/http-timeout";
+import { seal, SealApiError, type SealSubscription } from "@/lib/seal";
 
 let failures = 0;
 
@@ -264,6 +269,140 @@ const run = async () => {
       );
     } finally {
       (seal as unknown as Record<string, unknown>).editSubscription = orig;
+    }
+  }
+
+  // ── un guardado que no se guarda tiene que verse ───────────────────────
+  //
+  // El caso que lo forzó (2026-07-06): un cliente no pudo cambiar su dirección,
+  // escribió a soporte, se le cambió en la ficha de Shopify creyendo que
+  // bastaba, y su caja siguió saliendo a la dirección vieja dos meses. De
+  // nuestro lado no quedó nada, porque las salidas más probables de esa ruta no
+  // avisaban a nadie. Lo que estos tests protegen: que el motivo que se reporta
+  // sea EL MISMO código que ve el cliente en pantalla (así se cruza un aviso con
+  // un correo de soporte), y que el filtro de "esto es de diseño" no se coma un
+  // fallo de verdad.
+  {
+    check(
+      "el motivo de un ApiHttpError es su propio código",
+      addressFailureCode(new ApiHttpError(404, "subscription_not_found", "x")) ===
+        "subscription_not_found",
+    );
+    check(
+      "un 429 de Seal se reporta como seal_busy",
+      addressFailureCode(new SealApiError(429, "throttled")) === "seal_busy",
+    );
+    check(
+      "un 5xx de Seal también es seal_busy",
+      addressFailureCode(new SealApiError(503, "busy")) === "seal_busy",
+    );
+    check(
+      "un 4xx de Seal que NO es throttle se distingue",
+      addressFailureCode(new SealApiError(422, "nope")) === "seal_error_422",
+    );
+    check(
+      "un timeout de upstream dice de quién fue",
+      addressFailureCode(new UpstreamTimeoutError("seal", "/subscription", 6000)) ===
+        "upstream_timeout:seal",
+    );
+    check(
+      "cualquier otra cosa cae en internal_error",
+      addressFailureCode(new TypeError("undefined is not a function")) === "internal_error",
+    );
+
+    check("el corte de 24h es de diseño", isByDesignFailure("cutoff_passed"));
+    check("un CP inválido es de diseño", isByDesignFailure("invalid_postal_code"));
+    check("Seal saturado NO es de diseño", !isByDesignFailure("seal_busy"));
+    check("no encontrar la suscripción NO es de diseño", !isByDesignFailure("subscription_not_found"));
+    check("un timeout NO es de diseño", !isByDesignFailure("upstream_timeout:seal"));
+  }
+
+  {
+    const origFetch = globalThis.fetch;
+    const origUrl = process.env.SLACK_ALERTS_WEBHOOK_URL;
+    process.env.SLACK_ALERTS_WEBHOOK_URL = "https://hooks.slack.test/x";
+    const posted: string[] = [];
+    globalThis.fetch = (async (_u: unknown, init?: { body?: string }) => {
+      posted.push(String(init?.body ?? ""));
+      return { ok: true } as Response;
+    }) as typeof fetch;
+    try {
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "27973889392989", sealSubscriptionId: 14326024, postalCode: "30880", city: "Águilas" },
+        new SealApiError(429, "throttled"),
+      );
+      check("un fallo nuestro sí avisa", posted.length === 1, `${posted.length} avisos`);
+      const body = posted[0] ?? "";
+      check("el aviso lleva el motivo", body.includes("seal_busy"));
+      check("el aviso lleva el cliente", body.includes("27973889392989"));
+      check("el aviso lleva la suscripción", body.includes("14326024"));
+      check("el aviso lleva el destino, para poder arreglarlo", body.includes("30880"));
+
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "1" },
+        new ApiHttpError(400, "cutoff_passed", "dentro de 24h"),
+      );
+      check("un rechazo de diseño NO avisa", posted.length === 1, `${posted.length} avisos`);
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "2" },
+        new ApiHttpError(429, "rate_limited", "Too many requests. Retry in 42s."),
+      );
+      check("el limitador haciendo su trabajo NO avisa", posted.length === 1, `${posted.length} avisos`);
+
+      // PII: el mensaje de `subscription_not_found` llevaba el email dentro, y
+      // el de SealApiError arrastra el cuerpo crudo de Seal. A Slack no va.
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "3" },
+        new ApiHttpError(404, "subscription_not_found", "No Seal subscription for lromanhurtado@gmail.com"),
+      );
+      const pii = posted[1] ?? "";
+      check("el aviso NO publica el email del cliente", posted.length === 2 && !pii.includes("lromanhurtado@gmail.com"), pii.slice(0, 140));
+      check("y deja constancia de que había uno", pii.includes("[email]"));
+
+      // Inyección: `ciudad` la escribe el cliente y acaba dentro del mensaje.
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "4", city: "Águilas`\n<!channel> pwned", postalCode: "30880" },
+        new SealApiError(429, "throttled"),
+      );
+      const inj = JSON.parse(posted[2] ?? "{}").text ?? "";
+      const destino = inj.split("\n").find((l: string) => l.startsWith("• destino")) ?? "";
+      check("lo que escribe el cliente no puede mencionar al canal", !inj.includes("<!channel>"), destino);
+      check("ni romper el formato del mensaje con comillas o saltos", !destino.includes("`Águilas`") && destino.includes("30880"), destino);
+
+      // Un cliente en bucle no llena el canal, pero otro cliente distinto sí pasa.
+      const antes = posted.length;
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "5" },
+        new SealApiError(429, "throttled"),
+      );
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "5" },
+        new SealApiError(429, "throttled"),
+      );
+      check("el mismo cliente fallando dos veces seguidas avisa una vez", posted.length === antes + 1, `${posted.length - antes}`);
+      await reportAddressSaveFailure(
+        { path: "/api/subscription/address", customerId: "6" },
+        new SealApiError(429, "throttled"),
+      );
+      check("pero otro cliente distinto NO se pierde", posted.length === antes + 2, `${posted.length - antes}`);
+
+      globalThis.fetch = (async () => {
+        throw new Error("slack caído");
+      }) as typeof fetch;
+      let threw = false;
+      try {
+        await reportAddressSaveFailure(
+          { path: "/api/subscription/address" },
+          new SealApiError(500, "boom"),
+        );
+      } catch {
+        threw = true;
+      }
+      check("si Slack se cae, el aviso no puede romper la respuesta al cliente", !threw);
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origUrl === undefined) delete process.env.SLACK_ALERTS_WEBHOOK_URL;
+      else process.env.SLACK_ALERTS_WEBHOOK_URL = origUrl;
     }
   }
 
