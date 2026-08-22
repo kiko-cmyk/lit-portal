@@ -136,16 +136,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "subscription.cancelled":
       case "subscription.expired":
         await syncSubscription(sub);
-        // Tell the humans when Seal, not a customer and not us, killed the
-        // subscription because the card kept failing. 35 went this way in July
-        // 2026 (~987 €/month) and not one of them produced a signal anywhere:
-        // Seal's own admin notification for failed payments turns out not to
-        // reach us either (zero in 90 days of inbox).
+        // NO SE AVISA POR SLACK. Esta señal YA tiene dueño, y es el mismo motivo
+        // que Kiko dio el 2026-07-31 tres casos más arriba: un canal de errores no
+        // es una cola de trabajo.
         //
-        // Detected from the `log` array, which is the only field that names the
-        // actor. `cancellation_reason` is empty on every cancellation we've
-        // stored, so it cannot be used for this.
-        notifyDunningCancelSafe(sub);
+        // Cuando Seal cancela una suscripción por cobros fallidos, el cliente
+        // entra en la cola `recuperacion` de la CS Platform, que la alimenta
+        // `etl/crm_ingest.py` cada 15 minutos leyendo Seal (status CANCELLED +
+        // cancelled_on de los últimos 7 días), con expiración a 7 días porque el
+        // LIT caduca. Eso tiene dueño, guion, intentos y métrica; un mensaje de
+        // Slack no tenía ninguna de las cuatro cosas.
+        //
+        // Verificado en prod el 2026-08-22 con el caso que disparó LIT-354, la sub
+        // 13757031: estaba en `cobro_fallido` desde el 18-ago (la ventana de
+        // llamada de ~3 días antes de que Seal cancele) y entró en `recuperacion`
+        // el 21-ago, el mismo día de la cancelación, con caducidad el 28. Esa
+        // semana pasaron 60 leads de `recuperacion` por la cola en silencio: el
+        // único que además puso un mensaje en #n8n-errors fue este, y solo porque
+        // el aviso seguía aquí. Era duplicación, no cobertura.
+        //
+        // Lo que motivó el aviso en julio ("35 se fueron así y no produjeron señal
+        // en ninguna parte, ~987 €/mes") sigue siendo verdad de aquel julio, y se
+        // resolvió construyendo la cola. El aviso se quedó encendido detrás.
+        //
+        // 🔶 PENDIENTE DE DECIDIR (Kiko): la tabla `cancellations` NO se escribe
+        // desde aquí, así que estas bajas no entran en el win-back automático de
+        // `api/cron/winback` (d14/d30). NO lo he cableado a propósito: la CS
+        // Platform ya está LLAMANDO a este cliente, y añadir el correo automático
+        // encima es contactarle dos veces por lo mismo. Es una decisión de negocio
+        // (llamada, correo, o los dos y en qué orden), no un cable que falte.
         break;
       // Four documented Seal topics that fell through to `default` until
       // 2026-07-28, i.e. a console.warn and nothing else. Seal's topic list is
@@ -528,44 +547,18 @@ async function trackPaymentFixedSafe(sub: SealSubscription): Promise<void> {
 }
 
 /**
- * Seal auto-cancelled a subscription because the card kept failing. Tell the
- * humans, in the incidents channel, once.
+ * (Retirada el 2026-08-22, LIT-354.) Aquí vivía `notifyDunningCancelSafe`, que
+ * posteaba a Slack cuando Seal cancelaba una suscripción por cobros fallidos.
  *
- * Detection is by Seal's own `log` array (the field that names the actor), whose
- * entry reads "Subscription was cancelled because the payment couldn't be
- * processed within the allowed number of…". `cancellation_reason` is empty on
- * every cancellation payload we have stored, so it is useless here.
+ * Se ha quitado, no movido: la señal ya tiene dueño en la cola `recuperacion` de la
+ * CS Platform, y el aviso era duplicación. El razonamiento y la verificación en prod
+ * están en el `case "subscription.cancelled"` de arriba.
  *
- * Synchronous and non-async on purpose: alertSlackNotice is fire-and-forget and
- * never throws, so this cannot affect the webhook response.
+ * Si algún día hace falta volver a avisar de esto por Slack, la detección iba por el
+ * array `log` de Seal (`/payment could(n.t| not) be processed/i`), que es el único
+ * campo que nombra al actor: `cancellation_reason` viene vacío en TODOS los payloads
+ * de cancelación que tenemos guardados, así que no sirve.
  */
-function notifyDunningCancelSafe(sub: SealSubscription): void {
-  try {
-    const log = (sub as SealSubscription & { log?: Array<{ content?: string }> }).log ?? [];
-    const entry = log
-      .map((e) => e?.content ?? "")
-      .find((t) => /payment could(n.t| not) be processed/i.test(t));
-    if (!entry) return;
-
-    alertSlackNotice({
-      channel: "incidents",
-      icon: ":x:",
-      title: "Suscripción CANCELADA por Seal tras agotar los reintentos de cobro",
-      fields: {
-        seal_subscription_id: String(sub.id),
-        importe_perdido: `${sub.total_value ?? "?"} ${sub.currency ?? ""}`.trim(),
-        cadencia: sub.delivery_interval,
-        cancelada_el: sub.cancelled_on,
-        motivo_seal: entry.slice(0, 140),
-      },
-    });
-  } catch (err) {
-    console.warn("[seal-webhook] dunning-cancel notice failed (non-fatal)", {
-      sealId: sub?.id,
-      msg: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
 
 /**
  * A pause became visible to us. Two jobs, both best-effort:
