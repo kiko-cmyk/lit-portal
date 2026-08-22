@@ -49,8 +49,8 @@ const V = {
   SL30: "63887092154717", SL60: "64629025341789", SL90: "63887092220253",
   W30: "65046727459165", W60: "65046727491933", W90: "65046727524701",
 };
-// Precio del tramo por nº de cajas (= precio de la variante pack pura).
-const TIER_TOTAL = { 1: 2835, 2: 5670, 3: 6793, 4: 9057, 5: 10395, 6: 12474 };
+// Escalera web 2026-08-22 (antes: precio de la variante por tramo — 6793/9057/…).
+const TIER_TOTAL = { 1: 2835, 2: 5670, 3: 8505, 4: 8505, 5: 11340, 6: 14175 };
 // Selling plan canónico de "2 meses" (el intervalo actual de la sub de pruebas).
 const PLAN_2MO = "691259900253";
 const PLAN_45D = "691259867485";

@@ -32,7 +32,7 @@ import {
   type FlavorComposition,
 } from "../src/lib/mix";
 import { getChargeTotalCents, getLines, getNextBillingAttempt, seal } from "../src/lib/seal";
-import { priceForBoxCount } from "../src/lib/pricing";
+import { getLadderPrices } from "../src/lib/pricing";
 import { shopifyAdmin } from "../src/lib/shopify-admin";
 import { supabaseAdmin } from "../src/lib/supabase";
 
@@ -124,9 +124,13 @@ async function main() {
       }
     }
 
+    // OJO (escalera web 2026-08-22): planTargetLines ahora genera el modelo NUEVO
+    // (pack 3+1 + sueltas a catálogo). Usar este script sobre una sub de la
+    // escalera vieja la REPRECIA — es un script del incidente de mixes de 2026-07
+    // y quedó obsoleto; no reusar sin pensarlo dos veces.
     const target: FlavorComposition[] = [{ flavor: dominant, boxes }];
-    const tier = Math.round((await priceForBoxCount(boxes, dominant)) * 100);
-    const plan = planTargetLines(target, tier);
+    const prices = await getLadderPrices(dominant);
+    const plan = planTargetLines(target, prices);
     const diff = diffLines(lines, plan.lines);
 
     console.log(`  -> ${plan.shape} ${plan.lines.map((l) => `${l.sku}x${l.quantity}@${eur(l.unitPriceCents)}`).join(" + ")} = ${eur(plan.totalCents)}`);
@@ -179,9 +183,9 @@ async function main() {
       const afterDiff = after ? diffLines(afterLines, plan.lines) : null;
       const money = after ? getChargeTotalCents(after) : -1;
       const okLines = !!afterDiff?.noop && afterLines.length === 1;
-      const okMoney = Math.abs(money - tier) <= 1;
+      const okMoney = Math.abs(money - plan.tierTotalCents) <= 1;
       console.log(`  ${okLines ? "OK  " : "FALLO"} queda 1 linea packed`);
-      console.log(`  ${okMoney ? "OK  " : "FALLO"} cobra ${eur(money)} == tramo ${eur(tier)}`);
+      console.log(`  ${okMoney ? "OK  " : "FALLO"} cobra ${eur(money)} == tramo ${eur(plan.tierTotalCents)}`);
       if (okLines && okMoney) converted++;
       else failed++;
     } catch (e) {

@@ -5,7 +5,12 @@
  * route: `scripts/verify-confirmation-props.ts` runs these against real production
  * orders as fixtures.
  */
-import { BOX_COUNT_BY_VARIANT, type FlavorKey, flavorKeyForVariant } from "@/lib/seal-plans";
+import {
+  BOX_COUNT_BY_VARIANT,
+  PACK4_BY_VARIANT,
+  type FlavorKey,
+  flavorKeyForVariant,
+} from "@/lib/seal-plans";
 
 /** A line item in the shape this module and the confirmation event speak. */
 export type OrderLine = {
@@ -26,6 +31,15 @@ export function compositionFromOrderLines(
   const byFlavor = new Map<FlavorKey, number>();
   for (const li of lines) {
     const vid = String(li.variant_id ?? "");
+    // Una línea PACK4 (suscripción o compra única) aporta la composición de su
+    // variante de mezcla — no tiene UN sabor.
+    const pack = PACK4_BY_VARIANT[vid];
+    if (pack) {
+      for (const c of pack.composition) {
+        byFlavor.set(c.flavor, (byFlavor.get(c.flavor) ?? 0) + c.boxes * (li.quantity ?? 1));
+      }
+      continue;
+    }
     const boxesPerUnit = BOX_COUNT_BY_VARIANT[vid];
     const flavor = flavorKeyForVariant(vid);
     if (boxesPerUnit === undefined || !flavor) continue;
@@ -60,5 +74,17 @@ export function boxCountFromOrderLines(lines: OrderLine[]): number {
   // Non-registry subscription lines (B2B, a retired variant): fall back to the old
   // quantity sum rather than reporting 0.
   if (subLines.length > 0) return subLines.reduce((s, li) => s + (li.quantity ?? 0), 0);
+  // Pedido SIN líneas de suscripción (compra única): las variantes del registro
+  // saben sus cajas (un pack de compra única son 4, un SL90 son 3 — el fallback
+  // por cantidad decía 1 para ambos).
+  const knownAll = lines.filter(
+    (li) => BOX_COUNT_BY_VARIANT[String(li.variant_id)] !== undefined,
+  );
+  if (knownAll.length > 0) {
+    return knownAll.reduce(
+      (s, li) => s + BOX_COUNT_BY_VARIANT[String(li.variant_id)]! * (li.quantity ?? 1),
+      0,
+    );
+  }
   return main?.quantity ?? 1;
 }

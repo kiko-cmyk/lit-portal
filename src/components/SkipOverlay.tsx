@@ -457,6 +457,29 @@ export function SkipOverlay({
                   )}
                 </div>
               )}
+              {/* Pack 3+1 (escalera web): recordatorio compacto — esto es retención,
+                  una línea basta. */}
+              {offerBoxes === 3 && (
+                <div className="mt-1 text-[11px] opacity-60">
+                  <T
+                    en="Add 1 more box and it's free: 4 boxes for the price of 3."
+                    es="Añade 1 caja más y te sale gratis: 4 cajas al precio de 3."
+                  />
+                </div>
+              )}
+              {offerBoxes === 4 && (
+                <div className="mt-1 text-[11px] opacity-60">
+                  <T en="PACK 3+1 · 1 free box." es="PACK 3+1 · 1 caja gratis." />
+                </div>
+              )}
+              {offerBoxes >= 5 && (
+                <div className="mt-1 text-[11px] opacity-60">
+                  <T
+                    en="Includes the 3+1 pack (1 free box)."
+                    es="Incluye el pack 3+1 (1 caja gratis)."
+                  />
+                </div>
+              )}
             </div>
 
             {error && (

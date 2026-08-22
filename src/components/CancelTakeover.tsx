@@ -433,7 +433,14 @@ function Solucion({
   // boxes you pay less per shipment", so letting the customer pick MORE boxes
   // (a price increase) from here was misleading (audit 2026-07-08). Customers
   // already at 1 box never reach this screen (handleReasonContinue skips it).
-  const fewerBoxOptions = BOX_OPTIONS.filter((n) => n < boxCount);
+  // Escalera web: 3 y 4 cajas cuestan lo mismo (pack 3+1), así que a un sub de
+  // 4 no se le ofrece bajar a 3 con ahorro 0,00 € — misma promesa de la
+  // pantalla, mismo filtro: solo tramos que de verdad pagan menos.
+  const fewerBoxOptions = BOX_OPTIONS.filter(
+    (n) =>
+      n < boxCount &&
+      (!pricing || pricing.perBox[n - 1] < pricing.perBox[boxCount - 1]),
+  );
   const [offerBoxes, setOfferBoxes] = useState<number>(1);
   const curPrice = pricing ? pricing.perBox[boxCount - 1] ?? null : null;
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
@@ -676,6 +683,14 @@ function Solucion({
             </button>
           ))}
         </div>
+        {boxCount === 4 && (
+          <p className="mt-3 text-[11px] opacity-60">
+            <T
+              en="You already get 1 free box with the 3+1 pack."
+              es="Ya tienes 1 caja gratis con el pack 3+1."
+            />
+          </p>
+        )}
         {newPrice !== null && (
           <div className="mt-4 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
             <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">

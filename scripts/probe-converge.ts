@@ -38,9 +38,11 @@ if (FORBIDDEN.has(SUB_ID)) {
   process.exit(1);
 }
 
-/** Precio del tramo (céntimos). En producción sale de priceForBoxCount (precios vivos
- *  de Shopify); aquí se fija para que la prueba sea sobre el diff, no sobre pricing. */
-const TIER: Record<number, number> = { 1: 2835, 2: 5670, 3: 6793, 4: 9057, 5: 10395, 6: 12474 };
+/** Escalera web (céntimos). En producción sale de getLadderPrices (precios vivos de
+ *  Shopify); aquí se fija para que la prueba sea sobre el diff, no sobre pricing.
+ *  1-3 = n × 28,35 · 4 = pack 85,05 · 5-6 = pack + sueltas. */
+const LADDER = { oneBoxCents: 2835, pack4Cents: 8505 };
+const TIER: Record<number, number> = { 1: 2835, 2: 5670, 3: 8505, 4: 8505, 5: 11340, 6: 14175 };
 
 const CODE_TO_FLAVOR: Record<string, FlavorKey> = { L: "salty-lemon", W: "salty-watermelon" };
 
@@ -80,7 +82,7 @@ async function main() {
 
   console.log(`objetivo: ${compositionLabel(target)}  (${boxes} cajas, tramo ${eur(tier)})`);
 
-  const plan = planTargetLines(target, tier);
+  const plan = planTargetLines(target, LADDER);
   console.log(`\nplan (${plan.shape}):`);
   for (const l of plan.lines) {
     console.log(`  ${l.sku} x${l.quantity} @${eur(l.unitPriceCents)}  = ${l.boxes} cajas`);

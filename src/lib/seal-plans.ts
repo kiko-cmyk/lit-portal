@@ -44,13 +44,16 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     key: "salty-lemon",
     label: "Salty Lemon",
     productId: "16008517550429",
+    // Las variantes 2-6 son la ESCALERA VIEJA: solo lectura (subs existentes las
+    // conservan y deben seguir leyéndose igual). Desde la escalera web 2026-08-22
+    // planTargetLines solo escribe la variante de 1 caja y el PACK4 de abajo.
     variantByBoxCount: {
       1: "63887092154717",  // SL30  €28.35 (compare €37.80, -25%)
-      2: "64629025341789",  // SL60  €56.70 (compare €75.60, -25%)
-      3: "63887092220253",  // SL90  €67.93 (compare €113.40, -40%)
-      4: "64629029077341",  // SL120 €90.57 (compare €151.20, -40%)
-      5: "64629160477021",  // SL150 €103.95 (compare €189.00, -45%)
-      6: "64629047624029",  // SL180 €124.74 (compare €226.80, -45%)
+      2: "64629025341789",  // SL60  €56.70 (escalera vieja, solo lectura)
+      3: "63887092220253",  // SL90  €67.93 (escalera vieja, solo lectura)
+      4: "64629029077341",  // SL120 €90.57 (escalera vieja, solo lectura)
+      5: "64629160477021",  // SL150 €103.95 (escalera vieja, solo lectura)
+      6: "64629047624029",  // SL180 €124.74 (escalera vieja, solo lectura)
     },
   },
   "salty-watermelon": {
@@ -59,11 +62,11 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     productId: "16272445112669",
     variantByBoxCount: {
       1: "65046727459165",  // W30  €28.35 (compare €37.80, -25%)
-      2: "65046727491933",  // W60  €56.70 (compare €75.60, -25%)
-      3: "65046727524701",  // W90  €67.93 (compare €113.40, -40%)
-      4: "65046727557469",  // W120 €90.57 (compare €151.20, -40%)
-      5: "65046727590237",  // W150 €103.95 (compare €189.00, -45%)
-      6: "65046727623005",  // W180 €124.74 (compare €226.80, -45%)
+      2: "65046727491933",  // W60  €56.70 (escalera vieja, solo lectura)
+      3: "65046727524701",  // W90  €67.93 (escalera vieja, solo lectura)
+      4: "65046727557469",  // W120 €90.57 (escalera vieja, solo lectura)
+      5: "65046727590237",  // W150 €103.95 (escalera vieja, solo lectura)
+      6: "65046727623005",  // W180 €124.74 (escalera vieja, solo lectura)
     },
   },
 };
@@ -84,19 +87,104 @@ export const LIT_PRODUCT_ID = FLAVORS[DEFAULT_FLAVOR].productId;
 export const VARIANT_BY_BOX_COUNT: Record<BoxCount, string> =
   FLAVORS[DEFAULT_FLAVOR].variantByBoxCount;
 
+// ─── PACK 3+1 (escalera web, 2026-08-22) ────────────────────────────────────────
+//
+// El pack de 4 cajas (pagas 3, la 4ª gratis) es UN producto cuyas variantes son
+// las combinaciones de sabores. Una suscripción de 4 cajas es UNA línea de este
+// producto a 85,05 (precio de catálogo, nunca un descuento); 5-6 cajas = pack +
+// líneas de 1 caja a 28,35. IDs y SKUs copiados de Shopify Admin GraphQL el
+// 2026-08-22 (scripts/verify-pack-setup.ts los re-verifica contra la tienda).
+
+/** Cajas dentro del pack: pagas 3, recibes 4. */
+export const PACK4_BOXES = 4;
+
+/** Producto pack de SUSCRIPCIÓN — el asignado a los 8 selling plans de Seal.
+ *  Es el ÚNICO destino de escritura del pack. */
+export const PACK4_PRODUCT_ID = "16386839445853";
+
+/** Producto pack de COMPRA ÚNICA — aparece en pedidos web, jamás en contratos
+ *  de Seal. Solo lectura (emails de confirmación, Drops). */
+export const PACK4_OT_PRODUCT_ID = "16386839478621";
+
+export interface Pack4VariantDef {
+  variantId: string;
+  /** SKU real de la variante. Viaja verbatim Seal → pedido → Hive, que lo
+   *  descompone en cajas (Hive Bundle). */
+  sku: string;
+  /** Cajas por sabor dentro del pack, en orden canónico (más cajas primero,
+   *  empate → orden del registro). Suma exactamente PACK4_BOXES. */
+  composition: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>;
+}
+
+/** Variantes del pack de suscripción — destino de escritura de planTargetLines. */
+export const PACK4_VARIANTS: Pack4VariantDef[] = [
+  { variantId: "65636234625373", sku: "PACK4-4L",   composition: [{ flavor: "salty-lemon", boxes: 4 }] },
+  { variantId: "65636234658141", sku: "PACK4-3L1W", composition: [{ flavor: "salty-lemon", boxes: 3 }, { flavor: "salty-watermelon", boxes: 1 }] },
+  { variantId: "65636234690909", sku: "PACK4-2L2W", composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-watermelon", boxes: 2 }] },
+  { variantId: "65636234723677", sku: "PACK4-1L3W", composition: [{ flavor: "salty-watermelon", boxes: 3 }, { flavor: "salty-lemon", boxes: 1 }] },
+  { variantId: "65636234756445", sku: "PACK4-4W",   composition: [{ flavor: "salty-watermelon", boxes: 4 }] },
+];
+
+/** Variantes del pack de compra única — mismas mezclas y SKUs, solo lectura. */
+const PACK4_OT_VARIANTS: Pack4VariantDef[] = [
+  { variantId: "65636236788061", sku: "PACK4-4L",   composition: PACK4_VARIANTS[0].composition },
+  { variantId: "65636236820829", sku: "PACK4-3L1W", composition: PACK4_VARIANTS[1].composition },
+  { variantId: "65636236853597", sku: "PACK4-2L2W", composition: PACK4_VARIANTS[2].composition },
+  { variantId: "65636236886365", sku: "PACK4-1L3W", composition: PACK4_VARIANTS[3].composition },
+  { variantId: "65636236919133", sku: "PACK4-4W",   composition: PACK4_VARIANTS[4].composition },
+];
+
+/**
+ * variant id (sub O compra única) → definición del pack. Es el mapa de LECTURA:
+ * getLines y order-lines lo usan para traducir una línea pack a su composición
+ * multi-sabor. Sin él, la línea caería al fallback "variante desconocida = 1 caja
+ * Salty Lemon", que es exactamente cómo se leían mal los 35 contratos migrados.
+ */
+export const PACK4_BY_VARIANT: Record<string, Pack4VariantDef> = Object.fromEntries(
+  [...PACK4_VARIANTS, ...PACK4_OT_VARIANTS].map((v) => [v.variantId, v]),
+);
+
+/** Clave canónica de una composición: cuenta por sabor en orden de registro. */
+function pack4Key(mix: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>): string {
+  return FLAVOR_KEYS
+    .map((k) => `${k}:${mix.filter((c) => c.flavor === k).reduce((s, c) => s + c.boxes, 0)}`)
+    .join("|");
+}
+
+const PACK4_VARIANT_BY_KEY: Record<string, Pack4VariantDef> = Object.fromEntries(
+  PACK4_VARIANTS.map((v) => [pack4Key(v.composition), v]),
+);
+
+/**
+ * Variante del pack de SUSCRIPCIÓN para una composición que sume exactamente 4
+ * cajas. Null si no suma 4 o si la mezcla no tiene variante (p. ej. un tercer
+ * sabor futuro sin variantes de pack regeneradas).
+ */
+export function pack4VariantForComposition(
+  mix: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>,
+): Pack4VariantDef | null {
+  const total = mix.reduce((s, c) => s + c.boxes, 0);
+  if (total !== PACK4_BOXES) return null;
+  return PACK4_VARIANT_BY_KEY[pack4Key(mix)] ?? null;
+}
+
 /**
  * Reverse lookup — variant id → box count, UNIONED across every flavor. Critical:
  * getBoxCount() falls back to quantity=1 for an unmapped variant, which silently
  * breaks the box-count display AND the webhook/hub cache upserts (box_count CHECK
- * 1..6). Every flavor's variants must be here.
+ * 1..6). Every flavor's variants must be here — the PACK4 variants included
+ * (each pack unit counts 4 boxes).
  */
-export const BOX_COUNT_BY_VARIANT: Record<string, BoxCount> = Object.fromEntries(
-  ALL_FLAVORS.flatMap((f) =>
+export const BOX_COUNT_BY_VARIANT: Record<string, BoxCount> = Object.fromEntries([
+  ...ALL_FLAVORS.flatMap((f) =>
     (Object.entries(f.variantByBoxCount) as [string, string][]).map(
       ([boxes, variantId]) => [variantId, Number(boxes) as BoxCount],
     ),
   ),
-);
+  ...[...PACK4_VARIANTS, ...PACK4_OT_VARIANTS].map(
+    (v) => [v.variantId, PACK4_BOXES as BoxCount] as [string, BoxCount],
+  ),
+]);
 
 /** variant id → flavor key, unioned across every flavor. */
 export const FLAVOR_BY_VARIANT: Record<string, FlavorKey> = Object.fromEntries(
@@ -177,10 +265,10 @@ export const FREQUENCY_BY_SELLING_PLAN: Record<string, Frequency> = {
 };
 
 /**
- * The 6 box-count discount tiers — for UI display.
- *  1-2 boxes: 25%
- *  3-4 boxes: 40%
- *  5-6 boxes: 45%
+ * OBSOLETO con la escalera web 2026-08-22 (el descuento por cajas ya no existe:
+ * la suscripción es -25% sobre compra única en todos los tramos y el "descuento"
+ * de 4+ cajas es el pack 3+1, una caja gratis). Sin usos fuera de este fichero;
+ * se conserva solo como referencia de la escalera vieja.
  */
 export const DISCOUNT_BY_BOX_COUNT: Record<1 | 2 | 3 | 4 | 5 | 6, number> = {
   1: 0.25,

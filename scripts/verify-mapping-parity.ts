@@ -26,6 +26,7 @@ import {
 import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
+  PACK4_BY_VARIANT,
   flavorKeyForProductId,
   flavorKeyForVariant,
   flavorLabel,
@@ -82,7 +83,12 @@ let noRecurring = 0;
 
 for (const s of all) {
   const lines = getLines(s);
-  const isSimple = lines.length === 1 && lines[0].quantity === 1;
+  // Una sub con línea PACK4 es una DIFERENCIA ESPERADA aunque sea 1 línea × qty 1:
+  // que pase de "1 caja Salty Lemon" a 4 cajas con su mezcla es exactamente lo que
+  // el registro del pack (escalera web 2026-08-22) viene a arreglar. En un pack
+  // 1L+3W el sabor dominante correcto es Watermelon, no el fallback Lemon.
+  const hasPack = lines.some((l) => PACK4_BY_VARIANT[l.variantId]);
+  const isSimple = lines.length === 1 && lines[0].quantity === 1 && !hasPack;
   if (!lines.length) noRecurring++;
 
   const before = legacyRead(s);

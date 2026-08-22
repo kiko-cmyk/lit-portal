@@ -339,13 +339,26 @@ export function FlavorOverlay({
               </div>
             )}
 
-            {/* The obvious question a customer has about mixing: does it cost more? */}
+            {/* The obvious question a customer has about mixing: does it cost more?
+                Con 4+ cajas, además, recordar el pack 3+1 (escalera web 2026-08-22). */}
             {canMix && (
               <p className="mt-4 text-center text-[11px] opacity-55">
-                <T
-                  en={`${boxCount} boxes, same price however you mix them.`}
-                  es={`${boxCount} cajas, el mismo precio los mezcles como quieras.`}
-                />
+                {boxCount === 4 ? (
+                  <T
+                    en="PACK 3+1: you pay for 3 boxes and 1 is free, whatever mix you choose."
+                    es="PACK 3+1: pagas 3 cajas y 1 es gratis, elijas la mezcla que elijas."
+                  />
+                ) : boxCount >= 5 ? (
+                  <T
+                    en="Includes the 3+1 pack (1 free box), same price however you mix them."
+                    es="Incluye el pack 3+1 (1 caja gratis), el mismo precio los mezcles como quieras."
+                  />
+                ) : (
+                  <T
+                    en={`${boxCount} boxes, same price however you mix them.`}
+                    es={`${boxCount} cajas, el mismo precio los mezcles como quieras.`}
+                  />
+                )}
               </p>
             )}
 
