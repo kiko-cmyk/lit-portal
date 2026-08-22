@@ -53,8 +53,8 @@ import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
 import { runAsBackgroundJob } from "./http-timeout";
 import { klaviyo } from "./klaviyo";
-import { diffLines, type FlavorComposition, planTargetLines, shortLabel } from "./mix";
-import { priceForBoxCount } from "./pricing";
+import { diffLines, type FlavorComposition, ladderTotalCents, planTargetLines, shortLabel } from "./mix";
+import { getLadderPrices } from "./pricing";
 import {
   extractFlavorSummary,
   getBoxCount,
@@ -173,56 +173,79 @@ async function assertMixPrice(
   chargeDate: string,
 ): Promise<void> {
   try {
-    const expected = Math.round((await priceForBoxCount(boxCount, composition[0].flavor)) * 100);
+    const prices = await getLadderPrices(composition[0].flavor);
+    const expected = ladderTotalCents(boxCount, prices);
     const actual = getChargeTotalCents(s);
     const lines = getLines(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
     if (Math.abs(actual - expected) <= lines.length) return;
 
+    // ── GUARDA DE LA ESCALERA (2026-08-22) ──
+    //
+    // `expected` es ahora la escalera WEB (1-3: n×28,35 · 4: pack 85,05 · 5-6:
+    // pack+sueltas). Los contratos del modelo VIEJO (SL90 @67,93, splits con
+    // precio custom 22,64/22,65...) quedan POR DEBAJO de ella a propósito y solo
+    // se reprecian cuando su dueño edita cajas o mezcla (decisión de Juan). Por
+    // debajo de la escalera ya no es una anomalía: es el estado permanente de la
+    // escalera vieja, así que ni Slack ni heal — un warn en logs deja rastro.
+    //
+    // Limitación asumida: si Seal pisara los precios custom de un split viejo con
+    // el catálogo (28,35), el total aterriza exactamente en la escalera web y este
+    // check ya no puede distinguirlo de una sub nueva legítima. Esa protección
+    // murió con el reprecio; la mitigación real es que "propagate price changes"
+    // sigue apagado en Seal.
+    if (actual < expected) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: charge ${actual}c por debajo de la escalera web ` +
+          `(${expected}c para ${boxCount} cajas) — contrato de la escalera vieja o ajuste ` +
+          `manual; se deja tal cual`,
+      );
+      return;
+    }
+
+    // actual > expected: sobre-cobro respecto a la escalera web. Distinguir si el
+    // line-set vivo ya es del modelo nuevo (mismas variantes que el target: pack
+    // PACK4-* y/o cajas sueltas) — solo entonces curamos; un line-set del modelo
+    // viejo por encima de la escalera (SL120 @90,57 > 85,05) se deja tal cual.
+    const plan = planTargetLines(composition, prices);
+    const diff = diffLines(lines, plan.lines);
+    const isNewModelLineSet = !diff.adds.length && !diff.removes.length;
+    if (!isNewModelLineSet) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: charge ${actual}c > escalera web ${expected}c pero el ` +
+          `line-set es del modelo viejo (pre-2026-08-22) — no se toca; se repreciará al ` +
+          `pack cuando el cliente edite cajas o mezcla`,
+      );
+      return;
+    }
+
     console.error(`[${cfg.label}] mix price drift`, {
       sealId: s.id, actual, expected, boxCount, charge: chargeDate,
     });
 
-    // ── SELF-HEAL, only in the over-charge direction ──
+    // ── SELF-HEAL, only in the over-charge direction (aquí siempre lo es) ──
     //
-    // We never got to verify with a real charge that Seal preserves a custom per-unit
-    // price (that probe was declined, 2026-07-28), so this alert is the ONLY thing
-    // standing between a price refresh and a ~25% over-charge. An alert that nobody
-    // reads within 48h is not a control, so it repairs itself and then reports.
-    //
-    // Direction matters: only correct when the customer would be charged MORE than
-    // their tier. An amount BELOW the tier is either the known 1-cent rounding or
-    // something deliberate (a promo, a manual adjustment in Seal), and silently
-    // raising what someone pays is never a safe automated action.
-    //
-    // Safe to run from a cron: edit_items is idempotent, preserves item ids and does
-    // not touch billing_attempts (verified 2026-07-27). If the state already matches,
-    // diffLines is empty and nothing is sent.
+    // An alert that nobody reads within 48h is not a control, so it repairs itself
+    // and then reports. Safe to run from a cron: edit_items is idempotent, preserves
+    // item ids and does not touch billing_attempts (verified 2026-07-27). El diff es
+    // edits-only por construcción (la guarda de arriba ya filtró adds/removes).
     let healed: "not-attempted" | "healed" | "failed" = "not-attempted";
-    if (actual > expected) {
-      try {
-        const plan = planTargetLines(composition, expected);
-        const diff = diffLines(lines, plan.lines);
-        if (diff.adds.length || diff.removes.length) {
-          // Prices alone can't explain a different SET of lines; that is a different
-          // problem (a half-applied change) and belongs to the repair cron, not here.
-          console.warn(`[${cfg.label}] sub ${s.id}: drift needs add/remove, leaving to mix-repair-drain`);
-        } else if (diff.edits.length) {
-          await seal.editItems(
-            s.id,
-            diff.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
-          );
-          await new Promise<void>((r) => setTimeout(r, 1200));
-          // Verify by reading back, never by trusting the mutation response.
-          const after = await seal.getSubscriptionById(s.id);
-          const now = after ? getChargeTotalCents(after) : -1;
-          healed = Math.abs(now - expected) <= lines.length ? "healed" : "failed";
-        }
-      } catch (e) {
-        healed = "failed";
-        console.error(`[${cfg.label}] self-heal failed for sub ${s.id}:`, e);
+    try {
+      if (diff.edits.length) {
+        await seal.editItems(
+          s.id,
+          diff.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
+        );
+        await new Promise<void>((r) => setTimeout(r, 1200));
+        // Verify by reading back, never by trusting the mutation response.
+        const after = await seal.getSubscriptionById(s.id);
+        const now = after ? getChargeTotalCents(after) : -1;
+        healed = Math.abs(now - expected) <= lines.length ? "healed" : "failed";
       }
+    } catch (e) {
+      healed = "failed";
+      console.error(`[${cfg.label}] self-heal failed for sub ${s.id}:`, e);
     }
 
     await alertSlackErrorAwaited({
@@ -234,9 +257,7 @@ async function assertMixPrice(
             `the per-unit prices were REPAIRED automatically and verified. Charge lands ` +
             `${chargeDate.slice(0, 10)}. Worth checking why Seal dropped them.`
           : `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
-            (actual > expected
-              ? `Automatic repair ${healed === "failed" ? "FAILED" : "was not possible"}. `
-              : `Charging BELOW the tier, so not touched automatically. `) +
+            `Automatic repair ${healed === "failed" ? "FAILED" : "was not possible"}. ` +
             `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
     });
   } catch (e) {

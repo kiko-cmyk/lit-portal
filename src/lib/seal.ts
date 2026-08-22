@@ -1269,6 +1269,7 @@ import { CUTOFF_HOURS, cutoffEndsAt, isWithinCutoff } from "./cutoff";
 import { mixEnabledForCustomer } from "./flags";
 import {
   DEFAULT_FLAVOR,
+  PACK4_BY_VARIANT,
   flavorKeyForProductId,
   flavorKeyForVariant,
   flavorLabel,
@@ -1340,6 +1341,12 @@ export function getLines(s: SealSubscription): SubscriptionLine[] {
   return getRecurringItems(s)
     .map((it) => {
       const quantity = Math.max(1, Number(it.quantity) || 1);
+      // Una línea PACK4 es multi-sabor: su verdad vive en `composition` (la de la
+      // variante × quantity) y `flavor` queda como dominante para el back-compat.
+      // Sin este reconocimiento, los contratos migrados al pack se leían como
+      // "1 caja Salty Lemon" (fallback de variante desconocida) y cualquier
+      // edición razonaba sobre esa mentira.
+      const pack = PACK4_BY_VARIANT[String(it.variant_id)];
       return {
         itemId: it.id,
         productId: String(it.product_id),
@@ -1347,6 +1354,7 @@ export function getLines(s: SealSubscription): SubscriptionLine[] {
         // Legacy/manual/bundle variants aren't in the registry; attribute them to the
         // product's flavor, then to the default, exactly as extractFlavor always did.
         flavor:
+          pack?.composition[0].flavor ??
           flavorKeyForVariant(String(it.variant_id)) ??
           flavorKeyForProductId(String(it.product_id)) ??
           DEFAULT_FLAVOR,
@@ -1354,6 +1362,14 @@ export function getLines(s: SealSubscription): SubscriptionLine[] {
         quantity,
         unitPrice: String(it.price ?? "0"),
         sellingPlanId: String(it.selling_plan_id ?? ""),
+        ...(pack
+          ? {
+              composition: pack.composition.map((c) => ({
+                flavor: c.flavor,
+                boxes: c.boxes * quantity,
+              })),
+            }
+          : {}),
       } satisfies SubscriptionLine;
     })
     .sort((a, b) => b.boxes - a.boxes || a.itemId - b.itemId);

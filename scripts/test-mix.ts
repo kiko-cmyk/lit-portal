@@ -3,10 +3,14 @@
  *
  *   npx tsx scripts/test-mix.ts
  *
- * El bloque importante es el exhaustivo del reparto de precio: para CADA número de
- * cajas 1..6 y CADA partición posible entre 2, 3 y 4 sabores, comprueba que
- * Σ qty×unit nunca supera el total del tramo. Es la propiedad que protege el dinero
- * del cliente, así que se verifica por enumeración, no con ejemplos.
+ * ESCALERA WEB (2026-08-22): 1-3 cajas = n × 28,35 · 4 = pack 3+1 a 85,05 ·
+ * 5-6 = pack + sueltas (113,40 / 141,75). Todo a precio de catálogo. El bloque
+ * importante es el exhaustivo de planTargetLines: para CADA composición alcanzable
+ * de 1-2 sabores y 1-6 cajas comprueba que las líneas cuadran el tramo exacto, que
+ * el pack lleva la variante de mezcla correcta y que las sueltas salen del sabor
+ * con más cajas (empate → Lemon). Los modelos VIEJOS (variante por tramo, split
+ * con precio custom) se siguen probando como LECTURA: contratos vivos los llevan
+ * y solo se reprecian cuando su dueño edita.
  */
 
 import {
@@ -17,19 +21,37 @@ import {
   diffLines,
   distributeUnitPrices,
   isMixed,
+  ladderTotalCents,
+  type LadderPrices,
   mixBoxCount,
+  packSplit,
+  planFromCurrentLines,
   planTargetLines,
   resplitOnBoxChange,
+  sameComposition,
   shapeFor,
   shortLabel,
   validateMix,
   type FlavorComposition,
   type SubscriptionLine,
+  type TargetLine,
 } from "../src/lib/mix";
-import { FLAVORS, type FlavorKey } from "../src/lib/seal-plans";
+import {
+  FLAVORS,
+  PACK4_BY_VARIANT,
+  PACK4_PRODUCT_ID,
+  PACK4_VARIANTS,
+  pack4VariantForComposition,
+  type FlavorKey,
+} from "../src/lib/seal-plans";
+import { boxCountFromOrderLines, compositionFromOrderLines } from "../src/lib/order-lines";
 
-/** Precio del tramo por nº de cajas = precio de la variante pack pura (céntimos). */
-const TIER: Record<number, number> = { 1: 2835, 2: 5670, 3: 6793, 4: 9057, 5: 10395, 6: 12474 };
+/** La escalera web, en céntimos. 4 cajas cuestan lo mismo que 3: la 4ª es gratis. */
+const LADDER: LadderPrices = { oneBoxCents: 2835, pack4Cents: 8505 };
+const TIER_NEW: Record<number, number> = { 1: 2835, 2: 5670, 3: 8505, 4: 8505, 5: 11340, 6: 14175 };
+
+/** La escalera VIEJA (variantes por tramo), solo para fixtures de lectura legacy. */
+const TIER_OLD: Record<number, number> = { 1: 2835, 2: 5670, 3: 6793, 4: 9057, 5: 10395, 6: 12474 };
 
 const L: FlavorKey = "salty-lemon";
 const W: FlavorKey = "salty-watermelon";
@@ -61,72 +83,152 @@ function partitions(n: number, k: number): number[][] {
   return out;
 }
 
-// ── 1. Reparto de precio: exhaustivo ─────────────────────────────────────────
-console.log("\n=== reparto de precio (exhaustivo) ===");
-// Sólo las particiones de k>=2 son alcanzables por planTargetLines: un solo sabor va
-// por la rama `packed`, que cobra el precio de catálogo exacto y no reparte nada.
-const inexactSplit: string[] = [];
+/** Composición agregada de un array de TargetLine (el pack aporta su composition). */
+function targetComposition(lines: TargetLine[]): FlavorComposition[] {
+  const byFlavor = new Map<FlavorKey, number>();
+  for (const l of lines) {
+    const parts = l.composition ?? [{ flavor: l.flavor, boxes: l.boxes }];
+    for (const p of parts) byFlavor.set(p.flavor, (byFlavor.get(p.flavor) ?? 0) + p.boxes);
+  }
+  return [...byFlavor].map(([flavor, boxes]) => ({ flavor, boxes }));
+}
+
+/** Simula el estado vivo tras aplicar un target (para probar idempotencia). */
+function appliedLines(lines: TargetLine[], firstItemId = 900): SubscriptionLine[] {
+  return lines.map((l, i) => ({
+    itemId: firstItemId + i,
+    productId: l.productId,
+    variantId: l.variantId,
+    flavor: l.flavor,
+    boxes: l.boxes,
+    quantity: l.quantity,
+    unitPrice: (l.unitPriceCents / 100).toFixed(2),
+    sellingPlanId: "691259900253",
+    ...(l.composition ? { composition: l.composition.map((c) => ({ ...c })) } : {}),
+  }));
+}
+
+// ── 0. ladderTotalCents: LA escalera, en un solo sitio ───────────────────────
+console.log("\n=== ladderTotalCents (escalera web) ===");
+for (let n = 1; n <= 6; n++) {
+  eq(ladderTotalCents(n, LADDER), TIER_NEW[n], `escalera ${n} cajas = ${TIER_NEW[n]}c`);
+}
+eq(ladderTotalCents(3, LADDER), ladderTotalCents(4, LADDER), "3 y 4 cajas cuestan lo mismo: la 4ª es gratis");
+throws(() => ladderTotalCents(0, LADDER), "0 cajas lanza");
+throws(() => ladderTotalCents(7, LADDER), "7 cajas lanza");
+throws(() => ladderTotalCents(3, { oneBoxCents: 28.35, pack4Cents: 8505 }), "céntimos no enteros lanzan");
+throws(() => ladderTotalCents(3, { oneBoxCents: 0, pack4Cents: 8505 }), "precio 0 lanza");
+
+// ── 1. packSplit: reparto canónico pack ↔ sueltas ────────────────────────────
+console.log("\n=== packSplit (reparto canónico) ===");
+eq(packSplit([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 2 }]),
+   { pack: [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], singles: [{ flavor: L, boxes: 1 }] },
+   "3L+2W → pack 2L+2W + 1 suelta de Lemon (el sabor con más cajas)");
+eq(packSplit([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 3 }]),
+   { pack: [{ flavor: W, boxes: 3 }, { flavor: L, boxes: 1 }], singles: [{ flavor: L, boxes: 2 }] },
+   "3L+3W → empate: las sueltas salen de Lemon → pack 1L+3W + SL30×2");
+eq(packSplit([{ flavor: L, boxes: 6 }]),
+   { pack: [{ flavor: L, boxes: 4 }], singles: [{ flavor: L, boxes: 2 }] },
+   "6L → pack 4L + SL30×2");
+eq(packSplit([{ flavor: L, boxes: 1 }, { flavor: W, boxes: 4 }]),
+   { pack: [{ flavor: W, boxes: 3 }, { flavor: L, boxes: 1 }], singles: [{ flavor: W, boxes: 1 }] },
+   "1L+4W → pack 1L+3W + W30×1");
+eq(packSplit([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }]),
+   { pack: [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], singles: [] },
+   "4 cajas exactas → todo al pack, sin sueltas");
+eq(packSplit([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }]),
+   { pack: [], singles: [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }] },
+   "menos de 4 cajas → sin pack");
+// Propiedad de estabilidad: pasar de 5 a 6 manteniendo el dominante conserva la
+// variante del pack (el cambio será un edit de cantidad, no un swap).
+eq(packSplit([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 2 }]).pack,
+   packSplit([{ flavor: L, boxes: 4 }, { flavor: W, boxes: 2 }]).pack,
+   "5→6 con el mismo dominante: misma variante de pack");
+
+// ── 2. planTargetLines: exhaustivo sobre la escalera web ─────────────────────
+console.log("\n=== planTargetLines (exhaustivo, escalera web) ===");
+const allCompositions: FlavorComposition[][] = [];
+for (let n = 1; n <= 6; n++) {
+  allCompositions.push([{ flavor: L, boxes: n }], [{ flavor: W, boxes: n }]);
+  for (const [a, b] of partitions(n, 2)) {
+    allCompositions.push([{ flavor: L, boxes: a }, { flavor: W, boxes: b }]);
+  }
+}
+for (const mix of allCompositions) {
+  const n = mixBoxCount(mix);
+  const label = mix.map((c) => `${c.boxes}${c.flavor === L ? "L" : "W"}`).join("+");
+  const plan = planTargetLines(mix, LADDER);
+  eq(plan.totalCents, TIER_NEW[n], `${label}: cobra el tramo exacto ${TIER_NEW[n]}c`);
+  eq(plan.residualCents, 0, `${label}: residual 0 (todo catálogo)`);
+  ok(plan.lines.every((l) => Number.isInteger(l.unitPriceCents) && l.unitPriceCents > 0),
+     `${label}: precios enteros positivos`);
+  ok(sameComposition(targetComposition(plan.lines), mix),
+     `${label}: las líneas reconstruyen la composición pedida`);
+  const packLines = plan.lines.filter((l) => l.productId === PACK4_PRODUCT_ID);
+  if (n < 4) {
+    eq(packLines.length, 0, `${label}: sin pack por debajo de 4 cajas`);
+    ok(plan.lines.every((l) => l.variantId === FLAVORS[l.flavor].variantByBoxCount[1]),
+       `${label}: solo variantes de 1 caja`);
+    ok(plan.lines.every((l) => l.unitPriceCents === LADDER.oneBoxCents),
+       `${label}: 1 caja a 28,35 de catálogo`);
+  } else {
+    eq(packLines.length, 1, `${label}: exactamente UNA línea de pack`);
+    const pk = packLines[0];
+    eq(pk.quantity, 1, `${label}: pack qty 1`);
+    eq(pk.unitPriceCents, LADDER.pack4Cents, `${label}: pack a 85,05`);
+    eq(mixBoxCount(pk.composition ?? []), 4, `${label}: la composición del pack suma 4`);
+    const def = pack4VariantForComposition(pk.composition ?? []);
+    eq(def?.variantId, pk.variantId, `${label}: variante de mezcla correcta`);
+    eq(def?.sku, pk.sku, `${label}: SKU PACK4-* real (Hive lo descompone)`);
+    const singles = plan.lines.filter((l) => l.productId !== PACK4_PRODUCT_ID);
+    eq(singles.reduce((s, l) => s + l.boxes, 0), n - 4, `${label}: sueltas = n − 4`);
+    ok(singles.every((l) => l.variantId === FLAVORS[l.flavor].variantByBoxCount[1]),
+       `${label}: sueltas en variante de 1 caja`);
+  }
+  // Idempotencia del retry: aplicar el target y volver a diffear es noop.
+  ok(diffLines(appliedLines(plan.lines), plan.lines).noop, `${label}: retry = noop`);
+}
+console.log(`  ${allCompositions.length} composiciones, todas cuadran el tramo con residual 0`);
+
+// Casos con nombre (los del reparto canónico).
+const p32 = planTargetLines([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 2 }], LADDER);
+eq(p32.lines.map((l) => `${l.sku}x${l.quantity}@${(l.unitPriceCents / 100).toFixed(2)}`),
+   ["PACK4-2L2W" + "x1@85.05", "SL30x1@28.35"], "3L+2W → pack 2L+2W + SL30×1 = 113,40");
+const p22 = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], LADDER);
+eq(p22.lines[0].variantId, "65636234690909", "2L+2W → variante 65636234690909 a 85,05");
+const p4L = planTargetLines([{ flavor: L, boxes: 4 }], LADDER);
+eq(p4L.lines.map((l) => `${l.sku}x${l.quantity}`), ["PACK4-4Lx1"], "4L → una línea PACK4-4L");
+eq(p4L.shape, "packed", "4 cajas de un sabor: shape packed (sin migración de BD)");
+eq(p22.shape, "split", "4 cajas mezcladas: shape split (una línea, dos sabores)");
+const p3L = planTargetLines([{ flavor: L, boxes: 3 }], LADDER);
+eq(p3L.lines.map((l) => `${l.sku}x${l.quantity}@${(l.unitPriceCents / 100).toFixed(2)}`),
+   ["SL30x3@28.35"], "3 limón ya NO es SL90: es SL30×3 a 28,35 = 85,05");
+const p21 = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }], LADDER);
+eq(p21.lines.map((l) => `${l.sku}x${l.quantity}@${(l.unitPriceCents / 100).toFixed(2)}`),
+   ["SL30x2@28.35", "W30x1@28.35"], "2L+1W → catálogo puro (desaparecen 22,64/22,65)");
+
+throws(() => planTargetLines([{ flavor: L, boxes: 9 }], LADDER), "9 cajas lanza");
+throws(() => planTargetLines([{ flavor: L, boxes: 3 }], { oneBoxCents: 0, pack4Cents: 8505 }),
+       "precios inválidos lanzan");
+
+// ── 3. distributeUnitPrices (LEGACY, solo lectura de splits viejos) ──────────
+console.log("\n=== distributeUnitPrices (legacy, propiedad del dinero) ===");
 let splitCases = 0;
 for (let boxes = 1; boxes <= 6; boxes++) {
   for (let k = 1; k <= 4; k++) {
     for (const part of partitions(boxes, k)) {
-      const { units, chargedCents, residualCents } = distributeUnitPrices(TIER[boxes], part);
+      const { units, chargedCents, residualCents } = distributeUnitPrices(TIER_OLD[boxes], part);
       const label = `${boxes} cajas ${part.join("+")}`;
-      // LA propiedad que protege el dinero del cliente.
-      ok(chargedCents <= TIER[boxes], `${label}: cobra ${chargedCents} > tramo ${TIER[boxes]}`);
+      ok(chargedCents <= TIER_OLD[boxes], `${label}: cobra ${chargedCents} > tramo ${TIER_OLD[boxes]}`);
       ok(residualCents >= 0, `${label}: residuo negativo ${residualCents}`);
-      ok(residualCents < boxes, `${label}: residuo ${residualCents} >= cajas ${boxes}`);
       ok(units.every((u) => u > 0), `${label}: unidad no positiva`);
-      eq(chargedCents, TIER[boxes] - residualCents, `${label}: cobrado + residuo == tramo`);
-      if (k >= 2) {
-        splitCases++;
-        if (residualCents > 0) inexactSplit.push(`${label} → ${(residualCents / 100).toFixed(2)}€ menos`);
-      }
+      if (k >= 2) splitCases++;
     }
   }
 }
-console.log(`  ${splitCases} particiones de mezcla (k>=2), todas con Σ qty×unit <= tramo`);
-// El único caso inexacto del catálogo es 4 cajas en 2+2, y es IMPOSIBLE de cuadrar:
-// 2·u1 + 2·u2 siempre es par y el tramo de 4 cajas (9057c) es impar. Haría falta una
-// tercera línea (MIX_EXACT_CENTS), que está apagado por defecto.
-eq(inexactSplit, ["4 cajas 2+2 → 0.01€ menos"],
-   "el ÚNICO reparto de mezcla inexacto del catálogo es 4 cajas 2+2");
-console.log(`  casos de mezcla inexactos: ${inexactSplit.length} (${inexactSplit.join(", ") || "ninguno"})`);
-ok(TIER[4] % 2 === 1, "y es inevitable: el tramo de 4 cajas es impar, 2+2 solo produce pares");
+console.log(`  ${splitCases} particiones legacy, todas con Σ qty×unit <= tramo`);
 
-// ── 2. planTargetLines ────────────────────────────────────────────────────────
-console.log("\n=== planTargetLines ===");
-
-// packed: un solo sabor se queda en la variante pack, qty 1, precio de catálogo.
-const pure3 = planTargetLines([{ flavor: L, boxes: 3 }], TIER[3]);
-eq(pure3.shape, "packed", "3 limón: shape packed");
-eq(pure3.lines.length, 1, "3 limón: una línea");
-eq(pure3.lines[0].variantId, FLAVORS[L].variantByBoxCount[3], "3 limón: variante SL90");
-eq(pure3.lines[0].quantity, 1, "3 limón: quantity 1");
-eq(pure3.lines[0].unitPriceCents, TIER[3], "3 limón: precio de catálogo (sin custom)");
-eq(pure3.lines[0].sku, "SL90", "3 limón: sku SL90");
-eq(pure3.residualCents, 0, "3 limón: sin residuo");
-
-// split: el caso verificado en Seal (P1/P2).
-const mix3 = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }], TIER[3]);
-eq(mix3.shape, "split", "2L+1W: shape split");
-eq(mix3.lines.map((l) => `${l.sku}x${l.quantity}@${(l.unitPriceCents / 100).toFixed(2)}`),
-   ["SL30x2@22.64", "W30x1@22.65"], "2L+1W: líneas exactas como en el sondeo P1");
-eq(mix3.totalCents, TIER[3], "2L+1W: cobra exactamente el tramo (67.93)");
-eq(mix3.boxCount, 3, "2L+1W: 3 cajas");
-ok(mix3.lines.every((l) => l.variantId === FLAVORS[l.flavor].variantByBoxCount[1]),
-   "2L+1W: todas las líneas usan la variante de 1 caja");
-
-// el único caso inexacto del catálogo
-const mix22 = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], TIER[4]);
-eq(mix22.totalCents, 9056, "2L+2W: cobra 90.56");
-eq(mix22.residualCents, 1, "2L+2W: 1 céntimo de residuo (a favor del cliente)");
-ok(mix22.totalCents < TIER[4], "2L+2W: nunca por encima del tramo");
-
-throws(() => planTargetLines([{ flavor: L, boxes: 3 }], 0), "tierTotal 0 lanza");
-throws(() => planTargetLines([{ flavor: L, boxes: 9 }], TIER[6]), "9 cajas sin variante lanza");
-
-// ── 3. Etiquetas ──────────────────────────────────────────────────────────────
+// ── 4. Etiquetas ──────────────────────────────────────────────────────────────
 console.log("\n=== etiquetas ===");
 eq(compositionLabel([{ flavor: L, boxes: 3 }]), "Salty Lemon",
    "un solo sabor devuelve la etiqueta EXACTA de hoy (sin prefijo 3×)");
@@ -135,10 +237,12 @@ eq(compositionLabel([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }]),
    "2× Lemon · 1× Watermelon", "mezcla: etiqueta compuesta");
 eq(compositionLabel([{ flavor: W, boxes: 1 }, { flavor: L, boxes: 2 }]),
    "2× Lemon · 1× Watermelon", "mezcla: el orden de entrada no cambia la etiqueta");
+eq(compositionLabel([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 1 }]),
+   "3× Lemon · 1× Watermelon", "mezcla del pack 3L+1W: etiqueta compuesta");
 eq(shortLabel(L), "Lemon", "shortLabel quita el prefijo Salty");
 eq(shortLabel(W), "Watermelon", "shortLabel sandía");
 
-// ── 4. validateMix ────────────────────────────────────────────────────────────
+// ── 5. validateMix ────────────────────────────────────────────────────────────
 console.log("\n=== validateMix ===");
 const okMix = validateMix([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }]);
 ok(okMix.ok && mixBoxCount(okMix.mix) === 3, "mezcla válida");
@@ -158,11 +262,10 @@ eq((validateMix([{ flavor: L, boxes: 4 }, { flavor: W, boxes: 3 }]) as { code: s
 const dropped = validateMix([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 0 }]);
 ok(dropped.ok && dropped.mix.length === 1 && !isMixed(dropped.mix),
    "un cero se descarta y queda composición pura");
-// __proto__ no puede llegar a la salida: se construye solo con claves del registro
 const hostile = JSON.parse('[{"flavor":"__proto__","boxes":2}]');
 ok(!validateMix(hostile).ok, "__proto__ como sabor rechazado");
 
-// ── 5. resplitOnBoxChange ─────────────────────────────────────────────────────
+// ── 6. resplitOnBoxChange ─────────────────────────────────────────────────────
 console.log("\n=== resplitOnBoxChange ===");
 const base: FlavorComposition[] = [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }];
 for (let target = 1; target <= 6; target++) {
@@ -175,12 +278,11 @@ for (let target = 1; target <= 6; target++) {
 eq(resplitOnBoxChange(base, 1), [{ flavor: L, boxes: 1 }], "resplit → 1 caja queda puro (limón, el mayoritario)");
 eq(resplitOnBoxChange(base, 6), [{ flavor: L, boxes: 4 }, { flavor: W, boxes: 2 }], "resplit 2L+1W → 6 = 4L+2W");
 eq(resplitOnBoxChange(base, 3), base, "resplit al mismo total es identidad");
-// tres sabores bajando a dos cajas: se quedan los dos mayores
 const three: FlavorComposition[] = [{ flavor: L, boxes: 3 }, { flavor: W, boxes: 2 }];
 eq(mixBoxCount(resplitOnBoxChange(three, 2)), 2, "resplit 3L+2W → 2 suma 2");
 
-// ── 6. diffLines ──────────────────────────────────────────────────────────────
-console.log("\n=== diffLines ===");
+// ── 7. diffLines: transiciones de la escalera web ─────────────────────────────
+console.log("\n=== diffLines (transiciones con pack) ===");
 const line = (itemId: number, flavor: FlavorKey, boxCountOfVariant: number, qty: number, price: string): SubscriptionLine => ({
   itemId,
   productId: FLAVORS[flavor].productId,
@@ -191,66 +293,108 @@ const line = (itemId: number, flavor: FlavorKey, boxCountOfVariant: number, qty:
   unitPrice: price,
   sellingPlanId: "691259900253",
 });
+const packLine = (itemId: number, variantId: string, qty: number, price: string): SubscriptionLine => {
+  const def = PACK4_BY_VARIANT[variantId];
+  return {
+    itemId,
+    productId: PACK4_PRODUCT_ID,
+    variantId,
+    flavor: def.composition[0].flavor,
+    boxes: 4 * qty,
+    quantity: qty,
+    unitPrice: price,
+    sellingPlanId: "691259900253",
+    composition: def.composition.map((c) => ({ flavor: c.flavor, boxes: c.boxes * qty })),
+  };
+};
 
-// (a) cambiar el reparto sin cambiar el total = SOLO edits (el gran hallazgo de P3)
-const cur2L1W = [line(1, L, 1, 2, "22.64"), line(2, W, 1, 1, "22.65")];
-const tgt1L2W = planTargetLines([{ flavor: L, boxes: 1 }, { flavor: W, boxes: 2 }], TIER[3]);
-const d1 = diffLines(cur2L1W, tgt1L2W.lines);
-eq(d1.adds.length, 0, "2L+1W → 1L+2W: sin adds");
-eq(d1.removes.length, 0, "2L+1W → 1L+2W: sin removes");
-eq(d1.edits.length, 2, "2L+1W → 1L+2W: dos edits en sitio");
-// El orden de los edits lo marca el orden del objetivo (cajas desc), así que se
-// compara como conjunto: lo que importa es que reutiliza los ids 1 y 2.
-eq(d1.edits.map((e) => `${e.itemId}:${e.quantity}@${e.unitPrice}`).sort(),
-   ["1:1@22.65", "2:2@22.64"], "2L+1W → 1L+2W: ids de item preservados");
+// (a) 3 cajas modelo nuevo → 4: un add (pack) + remove de las 1-caja.
+const cur3new = appliedLines(planTargetLines([{ flavor: L, boxes: 3 }], LADDER).lines, 100);
+const to4 = planTargetLines([{ flavor: L, boxes: 4 }], LADDER);
+const dA = diffLines(cur3new, to4.lines);
+eq(dA.adds.map((a) => a.sku), ["PACK4-4L"], "3→4: un add del pack");
+eq(dA.removes, [100], "3→4: remove de la línea de 1 caja");
+eq(dA.edits.length, 0, "3→4: sin edits (cambia el producto)");
 
-// (b) cambiar el número de cajas manteniendo sabores = SOLO edits
-const d2 = diffLines(cur2L1W, planTargetLines([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 1 }], TIER[4]).lines);
-eq(d2.adds.length + d2.removes.length, 0, "3 → 4 cajas mezcladas: sin add/remove");
-ok(d2.edits.length > 0, "3 → 4 cajas mezcladas: solo edits");
+// (b) cambio de mezcla DENTRO del pack: variante distinta → add + remove, nunca edit.
+const cur3L1W = [packLine(200, "65636234658141", 1, "85.05")];
+const to2L2W = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], LADDER);
+const dB = diffLines(cur3L1W, to2L2W.lines);
+eq(dB.adds.map((a) => a.sku), ["PACK4-2L2W"], "mezcla del pack: un add");
+eq(dB.removes, [200], "mezcla del pack: un remove");
+eq(dB.edits.length, 0, "mezcla del pack: sin edits (edit_items no cambia variante)");
 
-// (c) puro → mezcla = add + remove (cambia el conjunto de variantes)
-const curPure = [line(9, L, 3, 1, "67.93")];
-const d3 = diffLines(curPure, tgt1L2W.lines);
-eq(d3.adds.length, 2, "puro → mezcla: dos adds");
-eq(d3.removes, [9], "puro → mezcla: quita la línea de pack");
-eq(d3.edits.length, 0, "puro → mezcla: sin edits");
+// (c) 5 → 6 manteniendo el dominante: SOLO edits (estabilidad del reparto canónico).
+const cur5 = appliedLines(planTargetLines([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 2 }], LADDER).lines, 300);
+const to6 = planTargetLines([{ flavor: L, boxes: 4 }, { flavor: W, boxes: 2 }], LADDER);
+const dC = diffLines(cur5, to6.lines);
+eq(dC.adds.length + dC.removes.length, 0, "5→6 mismo dominante: sin add/remove");
+eq(dC.edits.map((e) => `${e.itemId}:${e.quantity}`), ["301:2"], "5→6: solo sube la cantidad de la suelta");
 
-// (d) mezcla → puro
-const d4 = diffLines(cur2L1W, planTargetLines([{ flavor: L, boxes: 3 }], TIER[3]).lines);
-eq(d4.adds.length, 1, "mezcla → puro: un add (SL90)");
-eq(d4.removes.sort(), [1, 2], "mezcla → puro: quita las dos de componente");
+// (d) split viejo con precio custom + el cliente EDITA (mismas variantes) → reprecia a catálogo.
+const curOldSplit = [line(1, L, 1, 2, "22.64"), line(2, W, 1, 1, "22.65")];
+const dD = diffLines(curOldSplit, p21.lines);
+eq(dD.adds.length + dD.removes.length, 0, "split viejo editado: mismas variantes, sin add/remove");
+eq(dD.edits.map((e) => `${e.itemId}@${e.unitPrice}`).sort(), ["1@28.35", "2@28.35"],
+   "split viejo editado: reprecia a catálogo 28,35 (solo con intención del cliente)");
 
-// (e) sin cambios = noop
-eq(diffLines(cur2L1W, planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }], TIER[3]).lines).noop,
-   true, "misma composición = noop");
+// (e) variante por tramo vieja → pack (el cliente pasa de SL120 a editar): add + remove.
+const curSL120 = [line(9, L, 4, 1, "90.57")];
+const dE = diffLines(curSL120, to4.lines);
+eq(dE.adds.map((a) => a.sku), ["PACK4-4L"], "SL120 → pack: un add");
+eq(dE.removes, [9], "SL120 → pack: remove de la variante vieja");
 
-// (f) líneas DUPLICADAS (las subs corruptas) se curan: la extra va a removes
-const dupes = [line(11, L, 4, 1, "90.57"), line(12, L, 4, 1, "90.57")];
-const d5 = diffLines(dupes, planTargetLines([{ flavor: L, boxes: 4 }], TIER[4]).lines);
-eq(d5.removes, [12], "sub duplicada: la línea extra se elimina");
-eq(d5.adds.length, 0, "sub duplicada: la primera línea se reutiliza");
-eq(d5.edits.length, 0, "sub duplicada: la primera ya está correcta");
+// (f) líneas DUPLICADAS se curan: la extra va a removes.
+const dupes = [packLine(11, "65636234625373", 1, "85.05"), packLine(12, "65636234625373", 1, "85.05")];
+const dF = diffLines(dupes, to4.lines);
+eq(dF.removes, [12], "pack duplicado: la línea extra se elimina");
+eq(dF.adds.length, 0, "pack duplicado: la primera se reutiliza");
 
-// ── 7. Lectura de las cuatro formas reales de producción ──────────────────────
-console.log("\n=== boxesForVariantQuantity: las 4 formas de producción ===");
+// ── 8. planFromCurrentLines: el contrato del camino solo-frecuencia ──────────
+console.log("\n=== planFromCurrentLines (solo-frecuencia = espejo, diff noop) ===");
+const freqOnlyFixtures: Array<[string, SubscriptionLine[]]> = [
+  ["legacy packed SL90 @67.93", [line(21, L, 3, 1, "67.93")]],
+  ["legacy split custom 22.64/22.65", [line(22, L, 1, 2, "22.64"), line(23, W, 1, 1, "22.65")]],
+  ["legacy SL120 @90.57", [line(24, L, 4, 1, "90.57")]],
+  ["PACK4 migrado 3L+1W @85.05", [packLine(25, "65636234658141", 1, "85.05")]],
+  ["modelo nuevo 5 cajas (pack+suelta)", cur5],
+];
+for (const [label, lines] of freqOnlyFixtures) {
+  const mirror = planFromCurrentLines(lines);
+  ok(diffLines(lines, mirror.lines).noop, `${label}: diff contra el espejo es noop`);
+  eq(mirror.totalCents, chargeTotalCents(lines), `${label}: tier del espejo = cobro vivo`);
+}
+
+// ── 9. sameComposition (la condición del cortocircuito) ───────────────────────
+console.log("\n=== sameComposition ===");
+ok(sameComposition([{ flavor: L, boxes: 3 }], [{ flavor: L, boxes: 3 }]), "idéntica → true");
+ok(sameComposition(
+  [{ flavor: W, boxes: 1 }, { flavor: L, boxes: 3 }],
+  [{ flavor: L, boxes: 3 }, { flavor: W, boxes: 1 }],
+), "el orden no importa");
+ok(!sameComposition([{ flavor: L, boxes: 3 }], [{ flavor: L, boxes: 4 }]), "distinto nº de cajas → false");
+ok(!sameComposition([{ flavor: L, boxes: 3 }], [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }]),
+   "distinta mezcla → false");
+
+// ── 10. Lectura: las formas de producción, PACK4 incluido ─────────────────────
+console.log("\n=== lectura: boxesForVariantQuantity y fixtures reales ===");
 const V = FLAVORS;
 eq(boxesForVariantQuantity(V[L].variantByBoxCount[3], 1), 3, "pack + qty 1 (sub pura SL90) = 3 cajas");
 eq(boxesForVariantQuantity(V[L].variantByBoxCount[1], 2), 2, "1-caja + qty 2 (mezcla del checkout) = 2 cajas");
 eq(boxesForVariantQuantity(V[L].variantByBoxCount[3], 2), 6, "pack + qty 2 (SL90 ×2, 90 subs activas) = 6 cajas");
 eq(boxesForVariantQuantity("999999999", 3), 3, "variante legacy sin mapear cae a quantity");
+eq(boxesForVariantQuantity("65636234658141", 1), 4, "variante PACK4 = 4 cajas");
+eq(boxesForVariantQuantity("65636236853597", 2), 8, "PACK4 compra única × 2 = 8 cajas (lectura de pedidos)");
 
-// Fixtures de subs reales del escaneo del libro de Seal
-console.log("\n=== fixtures de subs reales ===");
+// Fixtures de subs reales del escaneo del libro de Seal (LECTURA legacy intacta).
 // 14978152: SL30 x2 + W30 x1 = 3 cajas mezcladas (creada en el checkout)
 const f14978152 = [line(30559851, L, 1, 2, "28.35"), line(30559852, W, 1, 1, "28.35")];
 eq(compositionFromLines(f14978152), [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }],
    "sub 14978152 (checkout): 2 limón + 1 sandía");
-eq(mixBoxCount(compositionFromLines(f14978152)), 3, "sub 14978152: 3 cajas (el portal dice 1 hoy)");
-eq(chargeTotalCents(f14978152), 8505, "sub 14978152: cobra 85.05 (sin descuento de tramo)");
+eq(chargeTotalCents(f14978152), 8505, "sub 14978152: cobra 85.05");
 eq(shapeFor(compositionFromLines(f14978152)), "split", "sub 14978152: shape split");
 
-// 14924018: W90 + SL90 = 6 cajas
+// 14924018: W90 + SL90 = 6 cajas (escalera vieja, se sigue leyendo igual)
 const f14924018 = [line(30473518, W, 3, 1, "67.93"), line(30473519, L, 3, 1, "67.93")];
 eq(mixBoxCount(compositionFromLines(f14924018)), 6, "sub 14924018: 6 cajas");
 eq(compositionLabel(compositionFromLines(f14924018)), "3× Lemon · 3× Watermelon",
@@ -259,98 +403,99 @@ eq(compositionLabel(compositionFromLines(f14924018)), "3× Lemon · 3× Watermel
 // 12918887: SL120 duplicado = corrupta, 8 cajas > 6
 const f12918887 = [line(30774797, L, 4, 1, "90.57"), line(30774811, L, 4, 1, "90.57")];
 eq(mixBoxCount(compositionFromLines(f12918887)), 8, "sub 12918887 (corrupta): suma 8 cajas, fuera de rango");
-eq(compositionFromLines(f12918887).length, 1, "sub 12918887: un solo sabor pese a las 2 líneas");
 eq(chargeTotalCents(f12918887), 18114, "sub 12918887: cobra 181.14 (el doble de 90.57)");
 
-// 15090042: W30 + SL30 = 2 cajas
-const f15090042 = [line(30761197, W, 1, 1, "28.35"), line(30761198, L, 1, 1, "28.35")];
-eq(mixBoxCount(compositionFromLines(f15090042)), 2, "sub 15090042: 2 cajas");
-eq(chargeTotalCents(f15090042), 5670, "sub 15090042: 56.70 = el tramo de 2 cajas (aquí sí coincide)");
+// PACK4 migrado (los 35 contratos): UNA línea de la variante de mezcla a 85,05.
+const fPack = [packLine(31000001, "65636234658141", 1, "85.05")];
+eq(compositionFromLines(fPack), [{ flavor: L, boxes: 3 }, { flavor: W, boxes: 1 }],
+   "sub PACK4 migrada: composición 3 limón + 1 sandía (no '4 del dominante')");
+eq(mixBoxCount(compositionFromLines(fPack)), 4, "sub PACK4: 4 cajas (el portal decía 1)");
+eq(chargeTotalCents(fPack), 8505, "sub PACK4: cobra 85.05");
+eq(compositionLabel(compositionFromLines(fPack)), "3× Lemon · 1× Watermelon",
+   "sub PACK4: etiqueta de mezcla");
+eq(shapeFor(compositionFromLines(fPack)), "split",
+   "sub PACK4 mixta: shape split (una línea, dos sabores — el CHECK de BD no cambia)");
+const fPack4W = [packLine(31000002, "65636234756445", 1, "85.05")];
+eq(compositionLabel(compositionFromLines(fPack4W)), "Salty Watermelon",
+   "sub PACK4 de un solo sabor: etiqueta plana byte-idéntica (Klaviyo intacto)");
+eq(shapeFor(compositionFromLines(fPack4W)), "packed", "sub PACK4 4W: shape packed");
 
-// 14692586 tras el sondeo: SL30 x1 @22.65 + W30 x2 @22.64
-const f14692586 = [line(30833792, L, 1, 1, "22.65"), line(30833794, W, 1, 2, "22.64")];
-eq(mixBoxCount(compositionFromLines(f14692586)), 3, "sub de pruebas: 3 cajas");
-eq(chargeTotalCents(f14692586), TIER[3], "sub de pruebas: cobra 67.93 = tramo de 3 cajas");
-eq(compositionLabel(compositionFromLines(f14692586)), "2× Watermelon · 1× Lemon",
-   "sub de pruebas: 2 sandía + 1 limón");
+// ── 11. Deriva de precios (el cron 48h, semántica nueva) ─────────────────────
+console.log("\n=== deriva de precios (cron 48h) ===");
+// (a) Legacy split de 3 cajas a 67,93 vs escalera nueva 85,05: actual < expected →
+// la rama below-tier NO toca ni alerta (estado permanente de la escalera vieja).
+const legacySplit = [line(501, L, 1, 2, "22.64"), line(502, W, 1, 1, "22.65")];
+ok(chargeTotalCents(legacySplit) < TIER_NEW[3], "legacy 3 cajas queda POR DEBAJO de la escalera web: no se toca");
+// (b) Legacy SL120 a 90,57 > 85,05: por encima, pero el target nuevo (pack) exige
+// add/remove → el heal se abstiene (line-set del modelo viejo).
+const legacy120 = [line(511, L, 4, 1, "90.57")];
+ok(chargeTotalCents(legacy120) > TIER_NEW[4], "legacy SL120 queda por encima de la escalera web");
+const heal120 = diffLines(legacy120, planTargetLines(compositionFromLines(legacy120), LADDER).lines);
+ok(heal120.adds.length > 0 || heal120.removes.length > 0,
+   "…pero su reparación exigiría add/remove → el self-heal se abstiene");
+// (c) Sub del modelo nuevo con el precio pisado por Seal: edits-only y cura a 85,05.
+const stompedPack = [packLine(521, "65636234658141", 1, "90.57")];
+const healPack = diffLines(stompedPack, planTargetLines(compositionFromLines(stompedPack), LADDER).lines);
+eq(healPack.adds.length + healPack.removes.length, 0, "pack pisado: sin add/remove");
+eq(healPack.edits.map((e) => `${e.itemId}@${e.unitPrice}`), ["521@85.05"],
+   "pack pisado: un edit que restaura 85,05");
 
-// ── 7.bis Auto-reparación del precio: la deriva es SOLO de precios ────────────
-// Si Seal refresca los precios de los items, sustituye el precio por unidad custom
-// (22,64) por el de catálogo (28,35) pero NO toca variantes ni cantidades. Esa es la
-// propiedad que permite repararlo con un solo edit_items, sin add/remove, que es lo que
-// hace seguro hacerlo desde un cron. Es la compensación de no haber podido verificar el
-// precio con un cobro real.
-console.log("\n=== auto-reparación del precio (deriva solo de precios) ===");
-const drifted = [
-  line(501, L, 1, 2, "28.35"), // Seal "refrescó" el precio: 22.64 -> 28.35
-  line(502, W, 1, 1, "28.35"), //                            22.65 -> 28.35
-];
-eq(chargeTotalCents(drifted), 8505, "deriva: cobraría 85.05 en vez de 67.93 (+25%)");
-const healPlan = planTargetLines([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 1 }], TIER[3]);
-const healDiff = diffLines(drifted, healPlan.lines);
-eq(healDiff.adds.length, 0, "reparación: sin adds");
-eq(healDiff.removes.length, 0, "reparación: sin removes");
-eq(healDiff.edits.length, 2, "reparación: 2 edits en sitio");
-eq(healDiff.edits.map((e) => `${e.itemId}@${e.unitPrice}`).sort(), ["501@22.64", "502@22.65"],
-   "reparación: mismos ids de item, precios restaurados");
-// Y aplicar el plan reparado deja el cobro exacto.
-eq(healPlan.totalCents, TIER[3], "reparación: vuelve a cobrar 67.93");
-// Dirección: por debajo del tramo NO se toca (podría ser una promo deliberada).
-const below = [line(601, L, 1, 2, "20.00"), line(602, W, 1, 1, "20.00")];
-ok(chargeTotalCents(below) < TIER[3], "por debajo del tramo se detecta pero no se repara sola");
+// ── 12. Downstream: pedidos web (email de confirmación y Drops) ───────────────
+console.log("\n=== downstream: order-lines y Drops ===");
+const PLAN = "691259900253";
+const orderLine = (variantId: string, qty: number, plan: string | null) => ({
+  title: "LIT",
+  quantity: qty,
+  variant_id: Number(variantId),
+  ...(plan ? { selling_plan_allocation: { selling_plan: { id: plan } } } : {}),
+});
+// Pedido web del pack (suscripción): 4 cajas, composición poblada.
+eq(boxCountFromOrderLines([orderLine("65636234658141", 1, PLAN)]), 4,
+   "pedido pack sub ×1 → 4 cajas (el email decía 1)");
+eq(compositionFromOrderLines([{ variant_id: 65636234658141, quantity: 1 }]),
+   [{ flavor: L, boxes: 3 }, { flavor: W, boxes: 1 }],
+   "pedido pack sub: composición 3L+1W (flavor_mix poblado)");
+// Pedido del pack de COMPRA ÚNICA (producto OT, solo lectura).
+eq(boxCountFromOrderLines([orderLine("65636236853597", 1, null)]), 4,
+   "pedido pack compra única ×1 → 4 cajas");
+eq(compositionFromOrderLines([{ variant_id: 65636236853597, quantity: 1 }]),
+   [{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }],
+   "pedido pack OT: composición 2L+2W");
+// Pack ×2 = 8 cajas.
+eq(boxCountFromOrderLines([orderLine("65636234625373", 2, PLAN)]), 8,
+   "pedido pack ×2 → 8 cajas");
+// Pack + 2 sueltas (una sub de 6 cajas renovando).
+eq(boxCountFromOrderLines([
+     orderLine("65636234690909", 1, PLAN),
+     orderLine(V[L].variantByBoxCount[1], 2, PLAN),
+   ]), 6, "pedido pack + SL30×2 → 6 cajas");
 
-// ── 8. Downstream: Drops por ENVÍO y box_count del email ─────────────────────
-console.log("\n=== downstream: Drops y box_count del email ===");
-
-const V2 = FLAVORS;
 /** Réplica de la cuenta de Drops del webhook fulfillments/create: una unidad por
  *  selling plan distinto entre las líneas del registro, más la cantidad para el
- *  resto. Los Drops son por ENVÍO, no por caja (el comentario del código miente). */
+ *  resto. Los Drops son por ENVÍO, no por caja. */
+const ALL_VARIANTS = new Set([
+  ...[L, W].flatMap((f) => Object.values(V[f].variantByBoxCount)),
+  ...PACK4_VARIANTS.map((v) => v.variantId),
+]);
 function dropsUnits(lines: Array<{ variantId?: string; qty: number; plan: string | null }>): number {
   const sub = lines.filter((l) => l.plan);
-  const inReg = sub.filter((l) => l.variantId && boxesForVariantQuantity(l.variantId, 1) > 0 && BOX_IN_REGISTRY(l.variantId));
-  const other = sub.filter((l) => !(l.variantId && BOX_IN_REGISTRY(l.variantId)));
+  const inReg = sub.filter((l) => l.variantId && ALL_VARIANTS.has(l.variantId));
+  const other = sub.filter((l) => !(l.variantId && ALL_VARIANTS.has(l.variantId)));
   return new Set(inReg.map((l) => l.plan!)).size + other.reduce((s, l) => s + l.qty, 0);
 }
-function BOX_IN_REGISTRY(variantId: string): boolean {
-  return ALL_VARIANTS.has(variantId);
-}
-const ALL_VARIANTS = new Set(
-  [L, W].flatMap((f) => Object.values(V2[f].variantByBoxCount)),
-);
-const PLAN = "691259900253";
-
-// La propiedad crítica: una mezcla NO puede inflar los Drops.
-eq(dropsUnits([{ variantId: V2[L].variantByBoxCount[3], qty: 1, plan: PLAN }]), 1,
+eq(dropsUnits([{ variantId: V[L].variantByBoxCount[3], qty: 1, plan: PLAN }]), 1,
    "sub pura de 3 cajas -> 1 unidad (100 Drops), igual que hoy");
 eq(dropsUnits([
-     { variantId: V2[L].variantByBoxCount[1], qty: 2, plan: PLAN },
-     { variantId: V2[W].variantByBoxCount[1], qty: 1, plan: PLAN },
+     { variantId: "65636234690909", qty: 1, plan: PLAN },
+     { variantId: V[L].variantByBoxCount[1], qty: 2, plan: PLAN },
    ]), 1,
-   "mezcla 2L+1W -> 1 unidad (100 Drops), SIN inflación 3x");
+   "pack + 2 sueltas en el mismo plan -> 1 unidad (100 Drops), SIN inflación");
 eq(dropsUnits([{ variantId: "999", qty: 4, plan: null }]), 0, "B2B / una sola compra -> 0 Drops");
-eq(dropsUnits([{ variantId: "extra-999", qty: 2, plan: null }]), 0, "solo extras -> 0 Drops");
 eq(dropsUnits([
-     { variantId: V2[L].variantByBoxCount[1], qty: 1, plan: PLAN },
-     { variantId: V2[L].variantByBoxCount[1], qty: 1, plan: "691259834717" },
+     { variantId: V[L].variantByBoxCount[1], qty: 1, plan: PLAN },
+     { variantId: V[L].variantByBoxCount[1], qty: 1, plan: "691259834717" },
    ]), 2,
    "dos subs con cadencias distintas en un pedido -> 2 unidades (como hoy)");
-
-/** Réplica del box_count del email: cajas de la variante × cantidad. */
-function emailBoxCount(lines: Array<{ variantId: string; qty: number }>): number {
-  return lines.reduce((s, l) => s + boxesForVariantQuantity(l.variantId, l.qty), 0);
-}
-eq(emailBoxCount([{ variantId: V2[L].variantByBoxCount[3], qty: 1 }]), 3,
-   "email: SL90 x1 -> 3 cajas (antes decia 1, para TODOS los suscriptores)");
-eq(emailBoxCount([{ variantId: V2[L].variantByBoxCount[6], qty: 1 }]), 6,
-   "email: SL180 x1 -> 6 cajas (antes decia 1)");
-eq(emailBoxCount([
-     { variantId: V2[L].variantByBoxCount[1], qty: 2 },
-     { variantId: V2[W].variantByBoxCount[1], qty: 1 },
-   ]), 3,
-   "email: mezcla 2L+1W -> 3 cajas");
-eq(emailBoxCount([{ variantId: V2[L].variantByBoxCount[1], qty: 1 }]), 1,
-   "email: SL30 x1 -> 1 caja (sin cambio)");
 
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);

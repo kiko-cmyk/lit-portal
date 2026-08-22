@@ -256,6 +256,34 @@ export function PlanOverlay({
               </div>
             </div>
 
+            {/* Upsell del pack 3+1: con 3 cajas, la 4ª es gratis (escalera web
+                2026-08-22). El importe sale SIEMPRE de pricing (nunca hardcodeado);
+                mientras pricing es null se muestra la variante sin cifra. */}
+            {boxCount === 3 && (
+              <div className="mt-4 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-bold-yellow)]/25 px-5 py-4">
+                <p className="text-xs font-bold text-[color:var(--color-lit-grey)]">
+                  {pricing ? (
+                    <T
+                      en={`Add 1 more box and it's FREE: 4 boxes for €${pricing.perBox[3].toFixed(2)} (the price of 3).`}
+                      es={`Añade 1 caja más y te sale GRATIS: 4 cajas por €${pricing.perBox[3].toFixed(2)} (el precio de 3).`}
+                    />
+                  ) : (
+                    <T
+                      en="Add 1 more box and it's free: 4 boxes for the price of 3."
+                      es="Añade 1 caja más y te sale gratis: 4 cajas al precio de 3."
+                    />
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setBoxCount(4)}
+                  className="mt-2 rounded-full border border-[color:var(--color-lit-grey)] px-4 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+                >
+                  <T en="Take 4" es="Llevarme 4" />
+                </button>
+              </div>
+            )}
+
             {/* Mixed sub + box change: show the resulting split BEFORE confirming.
                 The server never rebalances a mix on its own, so what's shown here is
                 literally what gets sent. */}
@@ -304,8 +332,15 @@ export function PlanOverlay({
             {/* Price preview */}
             {pricing && newPrice !== null && (
               <div className="mt-5 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:rounded-[22px]">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
-                  <T en="Per shipment" es="Por envío" />
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+                    <T en="Per shipment" es="Por envío" />
+                  </div>
+                  {boxCount === 4 && (
+                    <span className="rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1 text-[9px] font-black uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]">
+                      <T en="PACK 3+1 · 1 FREE BOX" es="PACK 3+1 · 1 CAJA GRATIS" />
+                    </span>
+                  )}
                 </div>
                 <div className="mt-1 flex items-baseline gap-3">
                   <span className="font-display text-4xl font-black text-[color:var(--color-lit-grey)]">
@@ -317,12 +352,28 @@ export function PlanOverlay({
                     </span>
                   )}
                 </div>
+                {boxCount === 4 && (
+                  <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
+                    <T
+                      en="You pay for 3 boxes and the fourth ships free."
+                      es="Pagas 3 cajas y la cuarta te la enviamos gratis."
+                    />
+                  </p>
+                )}
                 {currentPrice !== null && newPrice !== currentPrice && (
                   <div className="mt-1 text-[11px] uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
                     <T en="Was" es="Antes" /> €{currentPrice.toFixed(2)} {" "}
                     {newPrice > currentPrice ? "↑" : "↓"} €
                     {Math.abs(newPrice - currentPrice).toFixed(2)}
                   </div>
+                )}
+                {boxCount >= 5 && (
+                  <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
+                    <T
+                      en="Includes the 3+1 pack (1 free box in every shipment)."
+                      es="Incluye el pack 3+1 (1 caja gratis en cada envío)."
+                    />
+                  </p>
                 )}
               </div>
             )}

@@ -1,88 +1,136 @@
 /**
- * Pricing — dynamic from Shopify variants.
+ * Pricing — dynamic from Shopify, computed on the ESCALERA WEB (2026-08-22).
  *
- * As of 2026-05-06, prices are read from Shopify variant prices (with bulk
- * discount baked in). Cached in-memory for 5 minutes to avoid hitting
- * Shopify Admin on every Plan overlay open.
+ * La escalera ya NO se lee de las variantes por tramo (SL60..SL180 conservan sus
+ * precios viejos en Shopify como solo-lectura para contratos existentes): se
+ * COMPUTA desde dos precios de catálogo vivos — la variante de 1 caja (28,35) y
+ * el producto PACK4 (85,05, pagas 3 y la 4ª gratis) — con la misma fórmula
+ * (`ladderTotalCents`) que usa planTargetLines. Un solo origen: si el tier y las
+ * líneas divergieran un céntimo, cada edición fallaría con mix_price_mismatch.
  *
- * Frequency does NOT affect per-shipment price (LIT-Portal-Master-Spec § 4) —
- * cadence is independent. Discount is per variant (1-2: -25%, 3-4: -40%, 5-6: -45%).
+ *   perBox        = [28.35, 56.70, 85.05, 85.05, 113.40, 141.75]
+ *   compareAtPerBox = tachado coherente con la web: n × compareAt de 1 caja
+ *                   (37,80) para 1-3, compareAt del pack (113,40) para 4, y
+ *                   pack + (n−4) × 37,80 para 5-6.
+ *
+ * Cached in-memory for 5 minutes to avoid hitting Shopify Admin on every Plan
+ * overlay open. Frequency does NOT affect per-shipment price — cadence is
+ * independent.
  */
 
-import { DEFAULT_FLAVOR, FLAVORS, type FlavorKey } from "./seal-plans";
+import { DEFAULT_FLAVOR, FLAVORS, PACK4_PRODUCT_ID, type FlavorKey } from "./seal-plans";
+import { ladderTotalCents, MAX_BOXES, type LadderPrices } from "./mix";
 import { shopifyAdmin } from "./shopify-admin";
 
 export const CURRENCY = "EUR" as const;
-export const PRICING_LAST_UPDATED = "2026-05-06";
+export const PRICING_LAST_UPDATED = "2026-08-22";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-interface PricingCache {
-  perBox: number[];
-  compareAtPerBox: (number | null)[];
+interface LadderCache {
+  prices: LadderPrices;
+  oneBoxCompareCents: number | null;
+  pack4CompareCents: number | null;
   fetchedAt: number;
 }
 
-// Cache is per flavor: each flavor is its own Shopify product with its own 6
-// variant prices (identical across flavors today, but priced independently so
-// a future price change on one flavor doesn't mislead the other).
-const _cache = new Map<FlavorKey, PricingCache>();
+// Cache is per flavor: each flavor is its own Shopify product with its own 1-box
+// price (identical across flavors today, but priced independently). El precio del
+// pack es común, pero cachearlo por sabor mantiene la invalidación simple.
+const _cache = new Map<FlavorKey, LadderCache>();
 
-/**
- * Fetch the 6 variant prices for a flavor from Shopify Admin GraphQL. Returns an
- * array indexed by box count (index 0 = 1 box, index 5 = 6 boxes).
- */
-async function fetchPrices(
-  flavor: FlavorKey,
-): Promise<{ perBox: number[]; compareAtPerBox: (number | null)[] }> {
-  const def = FLAVORS[flavor];
+interface VariantPrice {
+  priceCents: number;
+  compareAtCents: number | null;
+}
+
+const PRODUCT_PRICES_QUERY = `query litPricing($id: ID!) {
+  product(id: $id) {
+    variants(first: 50) {
+      edges { node { id price compareAtPrice } }
+    }
+  }
+}`;
+
+async function fetchVariantPrices(productId: string): Promise<Map<string, VariantPrice>> {
   const data = await shopifyAdmin.graphql<{
     product: {
       variants: {
-        edges: Array<{
-          node: { id: string; price: string; compareAtPrice: string | null };
-        }>;
+        edges: Array<{ node: { id: string; price: string; compareAtPrice: string | null } }>;
       };
     } | null;
-  }>(
-    `query litPricing($id: ID!) {
-       product(id: $id) {
-         variants(first: 50) {
-           edges { node { id price compareAtPrice } }
-         }
-       }
-     }`,
-    { id: `gid://shopify/Product/${def.productId}` },
-  );
+  }>(PRODUCT_PRICES_QUERY, { id: `gid://shopify/Product/${productId}` });
 
-  if (!data.product) throw new Error(`Product ${def.productId} (${flavor}) not found`);
+  if (!data.product) throw new Error(`Product ${productId} not found`);
 
-  // Map by variant ID, ordered by box count (1..6)
-  const variantPrice = new Map<string, { price: number; compareAtPrice: number | null }>();
+  const out = new Map<string, VariantPrice>();
   for (const { node } of data.product.variants.edges) {
     const numericId = node.id.replace(/^gid:\/\/shopify\/ProductVariant\//, "");
-    variantPrice.set(numericId, {
-      price: parseFloat(node.price),
-      compareAtPrice: node.compareAtPrice ? parseFloat(node.compareAtPrice) : null,
+    out.set(numericId, {
+      priceCents: Math.round(parseFloat(node.price) * 100),
+      compareAtCents: node.compareAtPrice ? Math.round(parseFloat(node.compareAtPrice) * 100) : null,
     });
   }
+  return out;
+}
 
-  const perBox: number[] = [];
-  const compareAtPerBox: (number | null)[] = [];
-  for (let boxes = 1; boxes <= 6; boxes++) {
-    const variantId = def.variantByBoxCount[boxes as 1 | 2 | 3 | 4 | 5 | 6];
-    const v = variantPrice.get(variantId);
-    if (!v) {
-      throw new Error(`Variant for ${boxes} box(es) not found: ${variantId} (${flavor})`);
-    }
-    perBox.push(v.price);
-    compareAtPerBox.push(v.compareAtPrice);
+/** Los dos precios vivos de los que se deriva toda la escalera, en céntimos. */
+async function fetchLadder(flavor: FlavorKey): Promise<LadderCache> {
+  const def = FLAVORS[flavor];
+  const [flavorPrices, packPrices] = await Promise.all([
+    fetchVariantPrices(def.productId),
+    fetchVariantPrices(PACK4_PRODUCT_ID),
+  ]);
+
+  const oneBox = flavorPrices.get(def.variantByBoxCount[1]);
+  if (!oneBox) {
+    throw new Error(`1-box variant not found: ${def.variantByBoxCount[1]} (${flavor})`);
   }
-  return { perBox, compareAtPerBox };
+
+  // Las 5 variantes de mezcla del pack deben costar lo mismo; si alguien las
+  // desalinea en Shopify, cobramos la MÁS BARATA (el redondeo solo puede
+  // favorecer al cliente) y dejamos rastro.
+  const packValues = [...packPrices.values()];
+  if (!packValues.length) throw new Error(`PACK4 product ${PACK4_PRODUCT_ID} has no variants`);
+  const pack4Cents = Math.min(...packValues.map((v) => v.priceCents));
+  if (packValues.some((v) => v.priceCents !== pack4Cents)) {
+    console.warn(
+      `[pricing] PACK4 variants have diverging prices (${packValues.map((v) => v.priceCents).join(", ")}c) — using ${pack4Cents}c`,
+    );
+  }
+  const pack4CompareCents = packValues
+    .map((v) => v.compareAtCents)
+    .filter((v): v is number => v !== null)
+    .reduce<number | null>((m, v) => (m === null ? v : Math.max(m, v)), null);
+
+  return {
+    prices: { oneBoxCents: oneBox.priceCents, pack4Cents },
+    oneBoxCompareCents: oneBox.compareAtCents,
+    pack4CompareCents,
+    fetchedAt: Date.now(),
+  };
+}
+
+async function getLadder(flavor: FlavorKey): Promise<LadderCache> {
+  const cached = _cache.get(flavor);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached;
+  const fresh = await fetchLadder(flavor);
+  _cache.set(flavor, fresh);
+  return fresh;
+}
+
+/**
+ * Los precios de catálogo (céntimos enteros) que planTargetLines necesita para
+ * generar líneas. MISMO origen que getPricing/priceForBoxCount.
+ */
+export async function getLadderPrices(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<LadderPrices> {
+  return (await getLadder(flavor)).prices;
 }
 
 /**
  * Get pricing for all box counts of a flavor. Uses in-memory cache (5 min TTL).
+ * `perBox[n-1]` es SIEMPRE la escalera web computada, nunca el precio crudo de
+ * una variante por tramo.
  */
 export async function getPricing(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<{
   perBox: number[];
@@ -90,30 +138,32 @@ export async function getPricing(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<{
   isPlaceholder: boolean;
   lastUpdated: string;
 }> {
-  const cached = _cache.get(flavor);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return {
-      perBox: cached.perBox,
-      compareAtPerBox: cached.compareAtPerBox,
-      isPlaceholder: false,
-      lastUpdated: PRICING_LAST_UPDATED,
-    };
+  const { prices, oneBoxCompareCents, pack4CompareCents } = await getLadder(flavor);
+
+  const perBox: number[] = [];
+  const compareAtPerBox: (number | null)[] = [];
+  for (let boxes = 1; boxes <= MAX_BOXES; boxes++) {
+    perBox.push(ladderTotalCents(boxes, prices) / 100);
+    let compareCents: number | null = null;
+    if (boxes < 4) {
+      compareCents = oneBoxCompareCents !== null ? boxes * oneBoxCompareCents : null;
+    } else if (pack4CompareCents !== null && oneBoxCompareCents !== null) {
+      compareCents = pack4CompareCents + (boxes - 4) * oneBoxCompareCents;
+    }
+    compareAtPerBox.push(compareCents !== null ? compareCents / 100 : null);
   }
-  const { perBox, compareAtPerBox } = await fetchPrices(flavor);
-  _cache.set(flavor, { perBox, compareAtPerBox, fetchedAt: Date.now() });
   return { perBox, compareAtPerBox, isPlaceholder: false, lastUpdated: PRICING_LAST_UPDATED };
 }
 
 /**
- * Get total per shipment for a given box count + flavor. (Variant price already
- * includes the bulk discount — no extra math needed.)
+ * Get total per shipment for a given box count + flavor, en la escalera web.
  */
 export async function priceForBoxCount(
   boxCount: number,
   flavor: FlavorKey = DEFAULT_FLAVOR,
 ): Promise<number> {
-  if (boxCount < 1 || boxCount > 6) {
-    throw new Error(`Invalid box count ${boxCount} — must be 1..6`);
+  if (boxCount < 1 || boxCount > MAX_BOXES) {
+    throw new Error(`Invalid box count ${boxCount} — must be 1..${MAX_BOXES}`);
   }
   const { perBox } = await getPricing(flavor);
   return perBox[boxCount - 1];

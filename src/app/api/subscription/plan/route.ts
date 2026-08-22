@@ -11,16 +11,20 @@ import {
   compositionLabel,
   diffLines,
   type FlavorComposition,
+  ladderTotalCents,
+  type LadderPrices,
   type MixPlan,
   mixBoxCount,
+  planFromCurrentLines,
   planTargetLines,
   priceToCents,
   resplitOnBoxChange,
+  sameComposition,
   shapeFor,
   type SubscriptionLine,
   validateMix,
 } from "@/lib/mix";
-import { priceForBoxCount } from "@/lib/pricing";
+import { getLadderPrices } from "@/lib/pricing";
 import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
@@ -453,31 +457,47 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     throw new ApiHttpError(500, "selling_plan_not_mapped", `No selling plan for ${targetFrequency}`);
   }
 
-  // Tier price for the TARGET box count, from live Shopify prices (5-min cache), so a
-  // marketing price change propagates to mixes with no code change. Taken from the
-  // dominant flavor's ladder; verify-flavor-setup asserts every flavor shares one
-  // ladder, so this is exact.
-  let tierTotalCents: number;
-  try {
-    const tier = await priceForBoxCount(targetBoxCount, targetComposition[0].flavor);
-    tierTotalCents = Math.round(tier * 100);
-  } catch (e) {
-    throw new ApiHttpError(
-      500,
-      "pricing_unavailable",
-      `Could not price ${targetBoxCount} box(es): ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (!Number.isFinite(tierTotalCents) || tierTotalCents <= 0) {
-    throw new ApiHttpError(500, "pricing_unavailable", `Bad tier price ${tierTotalCents}`);
-  }
+  // ¿Cambió de verdad la composición? SEMÁNTICO, nunca por presencia de campos en
+  // el body: PlanOverlay envía `boxCount` SIEMPRE, así que un cambio de solo
+  // frecuencia llega con boxCount incluido. Si la composición objetivo es la misma
+  // que la viva, el target es un ESPEJO de las líneas actuales (planFromCurrentLines)
+  // y el diff es noop estructural: tocar la cadencia no puede repreciar ni reescribir
+  // items — ni una SL90 vieja a 67,93, ni un split custom, ni una línea PACK4.
+  // (Antes de la escalera web esto se cumplía de carambola porque regenerar el
+  // target producía los mismos precios; ahora está garantizado por código.)
+  const compositionChanged =
+    currentLines.length === 0 || !sameComposition(targetComposition, currentComposition);
 
-  // Target lines + the minimal set of Seal writes to get there. `diffLines` prefers
-  // in-place edit_items, so changing the split of the same total, or the box count
-  // while keeping flavors, needs NO add/remove at all — which is what makes this
-  // idempotent: a retry sees the target already present and converges instead of
-  // adding a second line. That failure mode overcharged 7 subs in June-July 2026.
-  const targetPlan = planTargetLines(targetComposition, tierTotalCents);
+  let tierTotalCents: number;
+  let targetPlan: MixPlan;
+  if (!compositionChanged) {
+    targetPlan = planFromCurrentLines(currentLines);
+    tierTotalCents = targetPlan.tierTotalCents;
+  } else {
+    // Escalera web para el TARGET box count, desde precios vivos de Shopify (caché
+    // 5 min): 1-3 = n × 1 caja, 4 = pack 3+1, 5-6 = pack + sueltas. planTargetLines
+    // comparte los MISMOS LadderPrices, así que tier y líneas no pueden divergir.
+    let prices: LadderPrices;
+    try {
+      prices = await getLadderPrices(targetComposition[0].flavor);
+    } catch (e) {
+      throw new ApiHttpError(
+        500,
+        "pricing_unavailable",
+        `Could not price ${targetBoxCount} box(es): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    tierTotalCents = ladderTotalCents(targetBoxCount, prices);
+    if (!Number.isFinite(tierTotalCents) || tierTotalCents <= 0) {
+      throw new ApiHttpError(500, "pricing_unavailable", `Bad tier price ${tierTotalCents}`);
+    }
+    // Target lines + the minimal set of Seal writes to get there. `diffLines` prefers
+    // in-place edit_items, so changing the split of the same total, or the box count
+    // while keeping flavors, needs NO add/remove at all — which is what makes this
+    // idempotent: a retry sees the target already present and converges instead of
+    // adding a second line. That failure mode overcharged 7 subs in June-July 2026.
+    targetPlan = planTargetLines(targetComposition, prices);
+  }
   const diff = diffLines(currentLines, targetPlan.lines);
 
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;

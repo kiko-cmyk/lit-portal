@@ -1,23 +1,30 @@
 /**
  * Flavor MIX — pure model for splitting a subscription's boxes across flavors.
  *
- * A LIT subscription used to be ONE recurring Seal line with `quantity: 1`, the
- * variant encoding both box count and flavor (SL90 = 3 boxes of lemon). A mix needs
- * one recurring line PER FLAVOR, so this module owns two shapes:
+ * ESCALERA WEB (2026-08-22, decisión de Juan: "los precios de la web mandan"):
+ * todo a PRECIO DE CATÁLOGO, nunca precios custom por línea.
  *
- *   packed  1 flavor  → the pack variant, quantity 1, catalogue price
- *                       (SL90 ×1 @67.93). What every single-flavor sub uses, so
- *                       1560 of 1571 active subs need no migration and carry NO
- *                       custom price.
- *   split   2+ flavors → the 1-BOX variant per flavor, quantity = that flavor's
- *                       boxes, with a per-unit `price` that distributes the tier
- *                       total (SL30 ×2 @22.64 + W30 ×1 @22.65 = 67.93 = SL90).
+ *   1-3 cajas → una línea de la variante de 1 CAJA por sabor, quantity = cajas
+ *               de ese sabor, a 28,35 catálogo (n × 28,35: 28,35 / 56,70 / 85,05).
+ *   4 cajas   → UNA línea del producto PACK4 (pagas 3, la 4ª gratis) con la
+ *               variante de la mezcla (PACK4-4L … PACK4-4W) a 85,05 catálogo.
+ *   5-6 cajas → la línea del pack + líneas de 1 caja para el resto. Reparto
+ *               canónico: las sueltas salen del sabor con MÁS cajas (empate →
+ *               orden del registro, Lemon primero). 5 = 113,40 · 6 = 141,75.
+ *
+ * Los modelos VIEJOS siguen siendo legibles y diff-noop mientras el cliente no
+ * edite: la variante-por-tramo (SL90 ×1 @67.93) y el split con precio custom
+ * (SL30 ×2 @22.64 + W30 ×1 @22.65) existen en contratos vivos y solo se
+ * reescriben al nuevo modelo cuando el cliente cambia cajas, sabor o mezcla.
+ * Un cambio de SOLO frecuencia usa planFromCurrentLines (espejo de las líneas
+ * vivas) y no toca nada.
  *
  * Verified E2E against Seal 2026-07-27 (scripts/probe-mix.mjs on sub 14692586):
  * add_items creates N lines in one call, honours a custom per-unit `price`, and
  * `edit_items` changes quantity+price in place WITHOUT changing item ids — which is
  * why `diffLines` prefers edits and only falls back to add/remove when the set of
- * variants actually changes.
+ * variants actually changes. edit_items NO puede cambiar la variante: un cambio
+ * de mezcla dentro del pack es siempre add+remove (el route añade ANTES de quitar).
  *
  * NO I/O in this file: it is imported by client components so the mix preview the
  * customer sees and the mix the server applies come from the SAME function.
@@ -27,6 +34,9 @@ import {
   BOX_COUNT_BY_VARIANT,
   FLAVOR_KEYS,
   FLAVORS,
+  PACK4_BOXES,
+  PACK4_PRODUCT_ID,
+  pack4VariantForComposition,
   type BoxCount,
   type FlavorKey,
   isFlavorKey,
@@ -49,6 +59,7 @@ export interface SubscriptionLine {
   itemId: number;
   productId: string;
   variantId: string;
+  /** Dominant flavor (back-compat display). A PACK4 line's truth is `composition`. */
   flavor: FlavorKey;
   /** Boxes this line contributes = variant's box count × quantity. */
   boxes: number;
@@ -56,6 +67,9 @@ export interface SubscriptionLine {
   /** Per-unit price exactly as Seal has it, for drift detection. */
   unitPrice: string;
   sellingPlanId: string;
+  /** Multi-flavor contribution of a PACK4 line (boxes per flavor, quantity
+   *  included). Absent on single-flavor lines — `flavor`+`boxes` suffice. */
+  composition?: FlavorComposition[];
 }
 
 /** A line we intend to create or edit. */
@@ -68,6 +82,8 @@ export interface TargetLine {
   /** Boxes this line contributes. */
   boxes: number;
   sku: string;
+  /** Multi-flavor contribution of a PACK4 line. Absent on single-flavor lines. */
+  composition?: FlavorComposition[];
 }
 
 export type SubscriptionShape = "packed" | "split";
@@ -166,11 +182,25 @@ export function boxesForVariantQuantity(variantId: string, quantity: number): nu
 /** Aggregate recurring lines into a composition, summing MANY lines of the same
  *  flavor. Duplicate-flavor lines are legitimate output of a partial failure or a
  *  repair, and are exactly how the corrupted subs look, so this must never assume
- *  one line per flavor. */
+ *  one line per flavor. A PACK4 line contributes its multi-flavor `composition`
+ *  (a 3L+1W pack adds 3 lemon + 1 watermelon, not "4 of the dominant"). */
 export function compositionFromLines(lines: SubscriptionLine[]): FlavorComposition[] {
   const byFlavor = new Map<FlavorKey, number>();
-  for (const l of lines) byFlavor.set(l.flavor, (byFlavor.get(l.flavor) ?? 0) + l.boxes);
+  for (const l of lines) {
+    const parts = l.composition ?? [{ flavor: l.flavor, boxes: l.boxes }];
+    for (const p of parts) byFlavor.set(p.flavor, (byFlavor.get(p.flavor) ?? 0) + p.boxes);
+  }
   return sortMix([...byFlavor].map(([flavor, boxes]) => ({ flavor, boxes })));
+}
+
+/** True when two compositions are the same multiset of (flavor, boxes). The plan
+ *  route uses this to detect a frequency-only change: PlanOverlay always sends
+ *  `boxCount`, so "did the items change" must be answered semantically, never by
+ *  which body fields are present. */
+export function sameComposition(a: FlavorComposition[], b: FlavorComposition[]): boolean {
+  const sa = sortMix(a);
+  const sb = sortMix(b);
+  return sa.length === sb.length && sa.every((c, i) => c.flavor === sb[i].flavor && c.boxes === sb[i].boxes);
 }
 
 /**
@@ -198,13 +228,17 @@ export function shortLabel(flavor: FlavorKey): string {
 // ─── precio ───────────────────────────────────────────────────────────────────
 
 /**
+ * LEGACY — reparto de precios custom del modelo viejo (splits 2026). Ya no lo usa
+ * ninguna escritura nueva (la escalera web es todo catálogo, residual 0), pero se
+ * conserva: los tests documentan el comportamiento y las líneas con precio custom
+ * siguen vivas en contratos que solo se reescriben cuando su dueño edita.
+ *
  * Split `tierTotalCents` across lines so the customer pays exactly the pure-plan
  * price. Largest-remainder: floor the per-box unit, then hand the leftover cents to
  * the SMALLEST lines (cheapest way to place them without exceeding the tier).
  *
  * Guarantee asserted here, not just tested: Σ quantity × unit <= tierTotal. Rounding
- * can only ever favour the customer. Over the live catalogue the only inexact case is
- * 4 boxes split 2+2 → €90.56 vs €90.57 (one cent down).
+ * can only ever favour the customer.
  */
 export function distributeUnitPrices(
   tierTotalCents: number,
@@ -235,65 +269,167 @@ export function distributeUnitPrices(
 }
 
 /**
- * Turn a composition + the tier price into the exact lines Seal should hold.
- *
- * `tierTotalCents` must be the price of the PURE pack variant for this box count
- * (from pricing.ts, i.e. live Shopify prices), so a marketing price change
- * propagates to mixes with no code change.
+ * Los dos precios de catálogo de los que se deriva TODA la escalera web. Siempre
+ * en céntimos ENTEROS: 3 × 28.35 en float es 85.05000000000001 y un céntimo de
+ * divergencia entre el tier y las líneas dispara mix_price_mismatch en cada edición.
+ */
+export interface LadderPrices {
+  /** Variante de 1 caja, catálogo (2835 = 28,35 €). */
+  oneBoxCents: number;
+  /** Variante del PACK4, catálogo (8505 = 85,05 €). */
+  pack4Cents: number;
+}
+
+/**
+ * LA escalera web, en un único sitio (pricing.ts y planTargetLines la comparten):
+ *   1-3 cajas → n × 1 caja        (28,35 / 56,70 / 85,05)
+ *   4 cajas   → el pack           (85,05 — mismo total que 3: la 4ª es gratis)
+ *   5-6 cajas → pack + (n−4) × 1  (113,40 / 141,75)
+ */
+export function ladderTotalCents(boxCount: number, prices: LadderPrices): number {
+  assertLadderPrices(prices);
+  if (!Number.isInteger(boxCount) || boxCount < 1 || boxCount > MAX_BOXES) {
+    throw new Error(`ladderTotalCents: boxCount inválido (${boxCount})`);
+  }
+  if (boxCount < PACK4_BOXES) return boxCount * prices.oneBoxCents;
+  return prices.pack4Cents + (boxCount - PACK4_BOXES) * prices.oneBoxCents;
+}
+
+function assertLadderPrices(prices: LadderPrices): void {
+  if (
+    !Number.isInteger(prices.oneBoxCents) || prices.oneBoxCents <= 0 ||
+    !Number.isInteger(prices.pack4Cents) || prices.pack4Cents <= 0
+  ) {
+    throw new Error(
+      `LadderPrices inválido (oneBox ${prices.oneBoxCents}, pack4 ${prices.pack4Cents})`,
+    );
+  }
+}
+
+/**
+ * Reparto canónico pack ↔ sueltas para 4-6 cajas. Las sueltas (n − 4) salen del
+ * sabor con MÁS cajas mientras pueda cederlas (con ≤ 2 sabores siempre puede);
+ * empate → orden del registro (Lemon primero). Determinista, y diseñado para la
+ * estabilidad de líneas: 3L+2W → pack 2L+2W + 1×SL30 y 4L+2W → pack 2L+2W +
+ * 2×SL30, así que pasar de 5 a 6 cajas es un edit de cantidad, no un swap.
+ */
+export function packSplit(
+  mix: FlavorComposition[],
+): { pack: FlavorComposition[]; singles: FlavorComposition[] } {
+  const normalized = sortMix(mix);
+  const total = mixBoxCount(normalized);
+  if (total < PACK4_BOXES) return { pack: [], singles: normalized };
+
+  let singlesLeft = total - PACK4_BOXES;
+  const remaining = normalized.map((c) => ({ ...c }));
+  const singles = new Map<FlavorKey, number>();
+  while (singlesLeft > 0) {
+    remaining.sort(
+      (a, b) => b.boxes - a.boxes || FLAVOR_KEYS.indexOf(a.flavor) - FLAVOR_KEYS.indexOf(b.flavor),
+    );
+    const donor = remaining[0];
+    const take = Math.min(singlesLeft, donor.boxes);
+    donor.boxes -= take;
+    singles.set(donor.flavor, (singles.get(donor.flavor) ?? 0) + take);
+    singlesLeft -= take;
+  }
+  return {
+    pack: sortMix(remaining.filter((c) => c.boxes > 0)),
+    singles: sortMix([...singles].map(([flavor, boxes]) => ({ flavor, boxes }))),
+  };
+}
+
+/**
+ * Turn a composition into the exact lines Seal should hold — escalera web, todo
+ * a precio de catálogo (residual 0 estructural). Los precios llegan como
+ * LadderPrices desde pricing.ts (precios vivos de Shopify), así que un cambio de
+ * precio de marketing se propaga sin tocar código.
  */
 export function planTargetLines(
   mix: FlavorComposition[],
-  tierTotalCents: number,
+  prices: LadderPrices,
 ): MixPlan {
+  assertLadderPrices(prices);
   const normalized = sortMix(mix);
   const boxCount = mixBoxCount(normalized);
-  if (!Number.isFinite(tierTotalCents) || tierTotalCents <= 0) {
-    throw new Error(`planTargetLines: tierTotalCents inválido (${tierTotalCents})`);
+  const tierTotalCents = ladderTotalCents(boxCount, prices);
+
+  const lines: TargetLine[] = [];
+  if (boxCount >= PACK4_BOXES) {
+    const { pack, singles } = packSplit(normalized);
+    const packVariant = pack4VariantForComposition(pack);
+    if (!packVariant) {
+      throw new Error(
+        `sin variante de pack para ${pack.map((c) => `${c.boxes}×${c.flavor}`).join(" + ")}`,
+      );
+    }
+    lines.push({
+      productId: PACK4_PRODUCT_ID,
+      variantId: packVariant.variantId,
+      flavor: pack[0].flavor, // dominante, solo display back-compat
+      quantity: 1,
+      unitPriceCents: prices.pack4Cents,
+      boxes: PACK4_BOXES,
+      sku: packVariant.sku,
+      composition: pack.map((c) => ({ ...c })),
+    });
+    for (const c of singles) lines.push(oneBoxLine(c, prices.oneBoxCents));
+  } else {
+    for (const c of normalized) lines.push(oneBoxLine(c, prices.oneBoxCents));
   }
 
-  // ── packed: one flavor keeps today's pack variant at the catalogue price, so no
-  // custom price and nothing to migrate for the 1560 single-flavor subs.
-  if (!isMixed(normalized)) {
-    const { flavor } = normalized[0];
-    const variantId = variantForFlavorBox(flavor, boxCount);
-    if (!variantId) throw new Error(`sin variante para ${flavor} × ${boxCount} cajas`);
-    return {
-      shape: "packed",
-      lines: [{
-        productId: FLAVORS[flavor].productId,
-        variantId,
-        flavor,
-        quantity: 1,
-        unitPriceCents: tierTotalCents,
-        boxes: boxCount,
-        sku: skuFor(flavor, boxCount),
-      }],
-      totalCents: tierTotalCents,
-      tierTotalCents,
-      residualCents: 0,
-      boxCount,
-    };
+  const totalCents = lines.reduce((s, l) => s + l.quantity * l.unitPriceCents, 0);
+  // Por construcción total == tier; si divergen es un bug de esta función y vale
+  // más reventar aquí que dejar que la verificación del route lo convierta en 502.
+  if (totalCents !== tierTotalCents) {
+    throw new Error(`planTargetLines: total ${totalCents} != tier ${tierTotalCents}`);
   }
+  return { shape: shapeFor(normalized), lines, totalCents, tierTotalCents, residualCents: 0, boxCount };
+}
 
-  // ── split: the 1-box variant per flavor, quantity = that flavor's boxes.
-  const boxesPerLine = normalized.map((c) => c.boxes);
-  const { units, chargedCents, residualCents } = distributeUnitPrices(tierTotalCents, boxesPerLine);
+function oneBoxLine(c: FlavorComposition, oneBoxCents: number): TargetLine {
+  const variantId = variantForFlavorBox(c.flavor, 1);
+  if (!variantId) throw new Error(`sin variante de 1 caja para ${c.flavor}`);
+  return {
+    productId: FLAVORS[c.flavor].productId,
+    variantId,
+    flavor: c.flavor,
+    quantity: c.boxes,
+    unitPriceCents: oneBoxCents,
+    boxes: c.boxes,
+    sku: skuFor(c.flavor, 1),
+  };
+}
 
-  const lines: TargetLine[] = normalized.map((c, i) => {
-    const variantId = variantForFlavorBox(c.flavor, 1);
-    if (!variantId) throw new Error(`sin variante de 1 caja para ${c.flavor}`);
-    return {
-      productId: FLAVORS[c.flavor].productId,
-      variantId,
-      flavor: c.flavor,
-      quantity: c.boxes,
-      unitPriceCents: units[i],
-      boxes: c.boxes,
-      sku: skuFor(c.flavor, 1),
-    };
-  });
-
-  return { shape: "split", lines, totalCents: chargedCents, tierTotalCents, residualCents, boxCount };
+/**
+ * Target plan that MIRRORS the live lines byte for byte. El camino de
+ * solo-frecuencia usa esto: diffLines contra él es noop ESTRUCTURAL para
+ * cualquier sub — escalera vieja (SL90 @67,93), split con precio custom
+ * (22,64/22,65) o PACK4 — así que tocar la cadencia no puede repreciar ni
+ * reescribir líneas jamás. tierTotalCents = el total vivo, para que la money
+ * assertion del route cuadre contra lo que el contrato ya cobra.
+ */
+export function planFromCurrentLines(lines: SubscriptionLine[]): MixPlan {
+  const targets: TargetLine[] = lines.map((l) => ({
+    productId: l.productId,
+    variantId: l.variantId,
+    flavor: l.flavor,
+    quantity: l.quantity,
+    unitPriceCents: priceToCents(l.unitPrice),
+    boxes: l.boxes,
+    sku: "", // solo los adds necesitan SKU y este plan no genera adds
+    composition: l.composition?.map((c) => ({ ...c })),
+  }));
+  const totalCents = targets.reduce((s, l) => s + l.quantity * l.unitPriceCents, 0);
+  const composition = compositionFromLines(lines);
+  return {
+    shape: shapeFor(composition),
+    lines: targets,
+    totalCents,
+    tierTotalCents: totalCents,
+    residualCents: 0,
+    boxCount: mixBoxCount(composition),
+  };
 }
 
 /** SKU we send to Seal. Seal stores it verbatim on the line and it reaches the

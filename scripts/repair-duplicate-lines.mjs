@@ -35,7 +35,8 @@ const BOX_BY_VARIANT = {
   "65046727459165": 1, "65046727491933": 2, "65046727524701": 3,
   "65046727557469": 4, "65046727590237": 5, "65046727623005": 6,
 };
-/** Precio del tramo por nº de cajas = precio de la variante pack pura. */
+/** OBSOLETO (escalera vieja, pre-2026-08-22). Script del incidente de líneas
+ *  duplicadas de jul-2026: NO reusar con la escalera web sin actualizarlo. */
 const TIER = { 1: 28.35, 2: 56.70, 3: 67.93, 4: 90.57, 5: 103.95, 6: 124.74 };
 
 /**
