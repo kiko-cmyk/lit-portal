@@ -13,6 +13,7 @@ import {
   type FlavorComposition,
   ladderTotalCents,
   type LadderPrices,
+  MAX_BOXES,
   type MixPlan,
   mixBoxCount,
   planFromCurrentLines,
@@ -438,6 +439,18 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       return [{ flavor: body.flavor, boxes: body.boxCount ?? currentBoxCount! }];
     }
     if (body.boxCount !== undefined) {
+      // GUARDA >6 CAJAS (aviso de Kiko, 23-ago-2026): getBoxCount clampa a 6 para
+      // la UI y la caché, así que PlanOverlay/SkipOverlay envían 6 para las subs
+      // fuera de rango (13007758 = SL90×4 = 12 cajas, 12752359 = SL90×3 = 9). Un
+      // cambio de solo-frecuencia desde esa UI llegaría como boxCount=6 y le
+      // partiría el envío (y el cobro) por la mitad con la verificación en verde.
+      // Si la composición real supera MAX_BOXES y el body pide exactamente el
+      // clamp, se trata como "sin cambio de cajas" (composición intacta → el
+      // cortocircuito del espejo hace el diff noop). Pedir 1-5 sigue siendo una
+      // reducción real y pasa por el camino normal.
+      if (mixBoxCount(currentComposition) > MAX_BOXES && body.boxCount === MAX_BOXES) {
+        return currentComposition;
+      }
       // Box-count-only change. resplitOnBoxChange is identity for a single flavor and
       // proportional (largest remainder, deterministic) for a mix, so a legacy client
       // can move boxes without destroying the customer's split.

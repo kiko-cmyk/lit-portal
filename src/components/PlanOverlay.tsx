@@ -48,7 +48,16 @@ export function PlanOverlay({
   const newPrice = pricing ? pricing.perBox[boxCount - 1] : null;
   const newCompare =
     pricing && pricing.compareAtPerBox ? pricing.compareAtPerBox[boxCount - 1] : null;
-  const currentPrice = pricing ? pricing.perBox[subscription.boxCount - 1] : null;
+  // Lo que el cliente paga HOY sale del CONTRATO (chargeTotalCents), nunca del
+  // catálogo: un trimestral legacy paga 67,93 y el catálogo ya dice 85,05
+  // (escalera web 2026-08-22) — usar el catálogo como "precio actual" falseaba
+  // el delta en las dos direcciones y el badge de caja gratis tapaba una subida
+  // real de 17,12 €/ciclo (aviso de Kiko, 23-ago-2026).
+  const realCurrent = subscription.chargeTotalCents
+    ? subscription.chargeTotalCents / 100
+    : null;
+  const currentPrice =
+    realCurrent ?? (pricing ? pricing.perBox[subscription.boxCount - 1] : null);
 
   const hasChange =
     boxCount !== subscription.boxCount || frequency !== subscription.frequency;
@@ -63,6 +72,14 @@ export function PlanOverlay({
   const boxesChanged = boxCount !== subscription.boxCount;
   const projectedMix = isMixed && boxesChanged ? resplitOnBoxChange(currentMix, boxCount) : null;
   const mixCollapses = !!projectedMix && projectedMix.length < currentMix.length;
+
+  // Sin cambio de cajas, el número grande es lo que el cliente PAGA; al mover
+  // cajas, el precio de catálogo del destino. El tachado, el badge del pack y la
+  // nota 5-6 solo aplican cuando lo mostrado ES el precio de catálogo (un legacy
+  // a 90,57 con 4 cajas no tiene el pack y no debe ver "1 caja gratis").
+  const displayPrice = !boxesChanged && realCurrent !== null ? realCurrent : newPrice;
+  const atCatalog =
+    displayPrice !== null && newPrice !== null && Math.abs(displayPrice - newPrice) < 0.005;
 
   const handleConfirm = async () => {
     if (!hasChange) return;
@@ -258,8 +275,10 @@ export function PlanOverlay({
 
             {/* Upsell del pack 3+1: con 3 cajas, la 4ª es gratis (escalera web
                 2026-08-22). El importe sale SIEMPRE de pricing (nunca hardcodeado);
-                mientras pricing es null se muestra la variante sin cifra. */}
-            {boxCount === 3 && (
+                mientras pricing es null se muestra la variante sin cifra.
+                NO se enseña a un legacy en reposo que paga menos que el catálogo
+                (trimestral a 67,93): para él pasar a 4 NO es gratis, es +17,12. */}
+            {boxCount === 3 && (boxesChanged || atCatalog) && (
               <div className="mt-4 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-bold-yellow)]/25 px-5 py-4">
                 <p className="text-xs font-bold text-[color:var(--color-lit-grey)]">
                   {pricing ? (
@@ -336,7 +355,7 @@ export function PlanOverlay({
                   <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                     <T en="Per shipment" es="Por envío" />
                   </div>
-                  {boxCount === 4 && (
+                  {boxCount === 4 && atCatalog && (
                     <span className="rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1 text-[9px] font-black uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]">
                       <T en="PACK 3+1 · 1 FREE BOX" es="PACK 3+1 · 1 CAJA GRATIS" />
                     </span>
@@ -344,15 +363,15 @@ export function PlanOverlay({
                 </div>
                 <div className="mt-1 flex items-baseline gap-3">
                   <span className="font-display text-4xl font-black text-[color:var(--color-lit-grey)]">
-                    €{newPrice.toFixed(2)}
+                    €{(displayPrice ?? newPrice).toFixed(2)}
                   </span>
-                  {newCompare && newCompare > newPrice && (
+                  {newCompare && atCatalog && displayPrice !== null && newCompare > displayPrice && (
                     <span className="text-sm line-through text-[color:var(--color-warm-gray)]">
                       €{newCompare.toFixed(2)}
                     </span>
                   )}
                 </div>
-                {boxCount === 4 && (
+                {boxCount === 4 && atCatalog && (
                   <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
                     <T
                       en="You pay for 3 boxes and the fourth ships free."
@@ -360,14 +379,17 @@ export function PlanOverlay({
                     />
                   </p>
                 )}
-                {currentPrice !== null && newPrice !== currentPrice && (
+                {boxesChanged &&
+                  currentPrice !== null &&
+                  newPrice !== null &&
+                  Math.abs(newPrice - currentPrice) > 0.004 && (
                   <div className="mt-1 text-[11px] uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
-                    <T en="Was" es="Antes" /> €{currentPrice.toFixed(2)} {" "}
+                    <T en="Now you pay" es="Ahora pagas" /> €{currentPrice.toFixed(2)} {" "}
                     {newPrice > currentPrice ? "↑" : "↓"} €
                     {Math.abs(newPrice - currentPrice).toFixed(2)}
                   </div>
                 )}
-                {boxCount >= 5 && (
+                {boxCount >= 5 && atCatalog && (
                   <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
                     <T
                       en="Includes the 3+1 pack (1 free box in every shipment)."

@@ -124,7 +124,17 @@ export function SkipOverlay({
 
   const freqOptions: Frequency[] = [subscription.frequency, ...longer];
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
-  const currentPrice = pricing ? pricing.perBox[subscription.boxCount - 1] ?? null : null;
+  // Lo que paga HOY sale del CONTRATO, no del catálogo: un trimestral legacy paga
+  // 67,93 y el catálogo ya dice 85,05 (escalera web) — el delta se falseaba en las
+  // dos direcciones (aviso de Kiko, 23-ago-2026).
+  const realCurrent = subscription.chargeTotalCents
+    ? subscription.chargeTotalCents / 100
+    : null;
+  const currentPrice =
+    realCurrent ?? (pricing ? pricing.perBox[subscription.boxCount - 1] ?? null : null);
+  const displayPrice = !boxesChanged && realCurrent !== null ? realCurrent : newPrice;
+  const atCatalog =
+    displayPrice !== null && newPrice !== null && Math.abs(displayPrice - newPrice) < 0.005;
 
   const freqLabel = (f: Frequency) =>
     (FREQUENCIES.find((x) => x.value === f)?.[t({ en: "en", es: "es" }) as "en" | "es"] ?? f)
@@ -445,10 +455,13 @@ export function SkipOverlay({
                   </button>
                 ))}
               </div>
-              {pricing && newPrice !== null && (
+              {pricing && displayPrice !== null && (
                 <div className="mt-2 text-[11px] uppercase tracking-[0.12em] opacity-60">
-                  €{newPrice.toFixed(2)} <T en="per shipment" es="por envío" />
-                  {currentPrice !== null && newPrice !== currentPrice && (
+                  €{displayPrice.toFixed(2)} <T en="per shipment" es="por envío" />
+                  {boxesChanged &&
+                    currentPrice !== null &&
+                    newPrice !== null &&
+                    Math.abs(newPrice - currentPrice) > 0.004 && (
                     <>
                       {" "}
                       ({newPrice > currentPrice ? "↑" : "↓"} €
@@ -458,8 +471,9 @@ export function SkipOverlay({
                 </div>
               )}
               {/* Pack 3+1 (escalera web): recordatorio compacto — esto es retención,
-                  una línea basta. */}
-              {offerBoxes === 3 && (
+                  una línea basta. Solo cuando lo mostrado es precio de catálogo:
+                  a un legacy que paga menos no se le promete "gratis". */}
+              {offerBoxes === 3 && (boxesChanged || atCatalog) && (
                 <div className="mt-1 text-[11px] opacity-60">
                   <T
                     en="Add 1 more box and it's free: 4 boxes for the price of 3."
@@ -467,12 +481,12 @@ export function SkipOverlay({
                   />
                 </div>
               )}
-              {offerBoxes === 4 && (
+              {offerBoxes === 4 && atCatalog && (
                 <div className="mt-1 text-[11px] opacity-60">
                   <T en="PACK 3+1 · 1 free box." es="PACK 3+1 · 1 caja gratis." />
                 </div>
               )}
-              {offerBoxes >= 5 && (
+              {offerBoxes >= 5 && atCatalog && (
                 <div className="mt-1 text-[11px] opacity-60">
                   <T
                     en="Includes the 3+1 pack (1 free box)."

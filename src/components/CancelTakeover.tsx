@@ -433,17 +433,24 @@ function Solucion({
   // boxes you pay less per shipment", so letting the customer pick MORE boxes
   // (a price increase) from here was misleading (audit 2026-07-08). Customers
   // already at 1 box never reach this screen (handleReasonContinue skips it).
-  // Escalera web: 3 y 4 cajas cuestan lo mismo (pack 3+1), así que a un sub de
-  // 4 no se le ofrece bajar a 3 con ahorro 0,00 € — misma promesa de la
-  // pantalla, mismo filtro: solo tramos que de verdad pagan menos.
+  // Lo que paga HOY sale del CONTRATO, no del catálogo (un trimestral legacy paga
+  // 67,93 y el catálogo dice 85,05 — aviso de Kiko, 23-ago-2026).
+  const curPrice = subscription?.chargeTotalCents
+    ? subscription.chargeTotalCents / 100
+    : pricing ? pricing.perBox[boxCount - 1] ?? null : null;
+  // Escalera web: solo se ofrecen tramos que de verdad cuestan menos que lo que
+  // el cliente PAGA (a un pack de 4 a 85,05 no se le ofrece bajar a 3 con ahorro
+  // 0,00 €; a un legacy SL120 a 90,57 sí, porque 3 cajas a 85,05 le ahorra) —
+  // misma promesa de la pantalla ("pagas menos"), medida contra su precio real.
   const fewerBoxOptions = BOX_OPTIONS.filter(
     (n) =>
       n < boxCount &&
-      (!pricing || pricing.perBox[n - 1] < pricing.perBox[boxCount - 1]),
+      (!pricing || curPrice === null || pricing.perBox[n - 1] < curPrice),
   );
   const [offerBoxes, setOfferBoxes] = useState<number>(1);
-  const curPrice = pricing ? pricing.perBox[boxCount - 1] ?? null : null;
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
+  const hasPackPrice =
+    curPrice !== null && !!pricing && Math.abs(curPrice - (pricing.perBox[3] ?? -1)) < 0.005;
 
   // Saltar (Me tomo un descanso): next order moves forward one cycle.
   const skipShip = currentShip ? addCycle(currentShip, freq) : null;
@@ -683,7 +690,7 @@ function Solucion({
             </button>
           ))}
         </div>
-        {boxCount === 4 && (
+        {boxCount === 4 && hasPackPrice && (
           <p className="mt-3 text-[11px] opacity-60">
             <T
               en="You already get 1 free box with the 3+1 pack."
