@@ -123,6 +123,12 @@ export function SkipOverlay({
   const hasOfferChange = freqChanged || boxesChanged;
 
   const freqOptions: Frequency[] = [subscription.frequency, ...longer];
+  // Solo tramos que NO suban de cajas. Esta pantalla es retención: se entra a saltar un
+  // envío (y se llega sin pulsar nada desde el deep-link ?action=skip del email de 48 h),
+  // así que ofrecer 6 cajas a quien tiene 2 es ofrecer una subida de importe donde el
+  // cliente venía a frenar. Misma corrección que ya se hizo en la oferta de "menos cajas"
+  // de CancelTakeover en el audit de 2026-07-08. (24-ago-2026)
+  const boxOptions = BOX_OPTIONS.filter((n) => n <= subscription.boxCount);
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
   // Lo que paga HOY sale del CONTRATO, no del catálogo: un trimestral legacy paga
   // 67,93 y el catálogo ya dice 85,05 (escalera web) — el delta se falseaba en las
@@ -434,13 +440,16 @@ export function SkipOverlay({
               </div>
             )}
 
-            {/* Box count */}
+            {/* Box count. Oculto cuando no hay nada que ofrecer: con 1 caja el único
+                tramo posible es el que ya tiene, y un selector de una sola opción
+                inerte solo estorba en una pantalla de retención. */}
+            {boxOptions.length > 1 && (
             <div className="mt-5">
               <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                 <T en="Boxes per shipment" es="Cajas por envío" />
               </div>
               <div className="grid grid-cols-6 gap-2">
-                {BOX_OPTIONS.map((n) => (
+                {boxOptions.map((n) => (
                   <button
                     key={n}
                     type="button"
@@ -495,6 +504,7 @@ export function SkipOverlay({
                 </div>
               )}
             </div>
+            )}
 
             {error && (
               <div className="mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]">{error}</div>

@@ -1051,6 +1051,67 @@ export class SealClient {
   }
 
   /**
+   * Undo a `reset_schedule` that shouldn't have stuck: pull the pending schedule
+   * BACK so the first attempt lands on `targetYYYYMMDD` again.
+   *
+   * The mirror image of `reanchorCadence`, which deliberately only ever moves
+   * FORWARD. This one only ever moves BACKWARD, and only to a date the customer
+   * already had: it exists because `chargeNow(resetSchedule: true)` re-anchors the
+   * whole cadence on today the moment Seal accepts the call, and Seal does NOT put
+   * it back when the card is declined. A customer whose charge failed was left with
+   * her order pushed a full cycle out: no box, no charge (13-sep → 24-nov on sub
+   * 14245323, 24-ago-2026).
+   *
+   * Refuses to move anything into the past, and refuses to pull a charge earlier
+   * than the target, so the worst case is "no change". Nearest-first so a move never
+   * collides with an attempt that hasn't moved yet. Idempotent: once the first
+   * pending equals the target the offset is 0 and it's a no-op.
+   *
+   * Returns the number of attempts moved.
+   */
+  async pullCadenceBackTo(
+    subscriptionId: number,
+    targetYYYYMMDD: string,
+  ): Promise<number> {
+    const sub = await this.getSubscriptionById(subscriptionId);
+    if (!sub) return 0;
+
+    const pending = (sub.billing_attempts ?? [])
+      .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (pending.length === 0) return 0;
+
+    const firstDay = pending[0].date.slice(0, 10);
+    // Only act when Seal anchored LATER than where the customer was.
+    if (firstDay <= targetYYYYMMDD) return 0;
+
+    // Never resurrect a date that has already passed: if the target is behind us
+    // the charge is simply gone and support has to decide, not this function.
+    const todayYYYYMMDD = new Date().toISOString().slice(0, 10);
+    if (targetYYYYMMDD < todayYYYYMMDD) return 0;
+
+    const offsetDays = daysBetween(firstDay, targetYYYYMMDD); // < 0
+    if (offsetDays >= 0) return 0;
+
+    const moves = pending
+      .map((ba) => ({
+        id: ba.id,
+        cur: ba.date.slice(0, 10),
+        tgt: addDaysYYYYMMDD(ba.date.slice(0, 10), offsetDays),
+      }))
+      .filter((m) => m.cur !== m.tgt && m.tgt >= todayYYYYMMDD)
+      .sort((a, b) => a.tgt.localeCompare(b.tgt));
+
+    let moved = 0;
+    for (const m of moves) {
+      await this.rescheduleBillingAttempt(m.id, subscriptionId, m.tgt);
+      moved++;
+      await sleep(SEAL_BACKOFF_MS);
+    }
+    return moved;
+  }
+
+  /**
    * Charge the subscription's next order RIGHT NOW ("adelantar pedido").
    *
    * Hits Seal's dedicated `/subscription-create-charge-now` endpoint, which

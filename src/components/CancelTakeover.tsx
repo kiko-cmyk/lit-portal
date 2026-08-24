@@ -471,6 +471,14 @@ function Solucion({
       return t({ en: "Too late, your next box ships within 24h.", es: "Demasiado tarde, tu próxima caja se envía en 24h." });
     if (code === "box_count_unknown")
       return t({ en: "We couldn't switch your flavor automatically. Please contact us.", es: "No pudimos cambiar el sabor automáticamente. Escríbenos." });
+    // Retención + contrato de la escalera vieja: la oferta subiría el importe, que es lo
+    // último que quieres hacerle a alguien que se está yendo. El backend lo rechaza y aquí
+    // se le ofrece la vía humana, que además es la que retiene. (24-ago-2026)
+    if (code === "price_would_increase" || code === "box_count_out_of_range")
+      return t({
+        en: "We can't apply this from here without changing your price, and it shouldn't change. Write to us and we'll set it up keeping what you pay today.",
+        es: "No podemos aplicarlo desde aquí sin tocarte el precio, y no debería cambiar. Escríbenos y te lo dejamos con lo que pagas hoy.",
+      });
     if (code === "gateway_timeout" || status === 504)
       return t({ en: "The service is taking longer than usual. Try again in a moment.", es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento." });
     return t({ en: "Couldn't update your plan. Try again or contact us.", es: "No se pudo cambiar el plan. Inténtalo de nuevo o escríbenos." });
@@ -880,7 +888,15 @@ function Descuento({
   const [unavailable, setUnavailable] = useState(false);
 
   const boxCount = subscription?.boxCount ?? null;
-  const current = pricing && boxCount ? pricing.perBox[boxCount - 1] ?? null : null;
+  // El 15% se calcula sobre lo que el cliente PAGA (chargeTotalCents), nunca sobre el
+  // catálogo. a76c07d arregló PlanOverlay, SkipOverlay y la oferta de menos cajas, pero
+  // esta pantalla se quedó fuera: a un trimestral de la escalera vieja que paga 67,93 le
+  // ofrecía "85,05 → 72,29", o sea 4,36 MÁS de lo que ya paga, como oferta para que no
+  // se fuera. Su descuento real es 57,74. (24-ago-2026)
+  const current =
+    subscription?.chargeTotalCents
+      ? subscription.chargeTotalCents / 100
+      : pricing && boxCount ? pricing.perBox[boxCount - 1] ?? null : null;
   const discounted = current !== null ? current * 0.85 : null;
 
   const handleKeep = async () => {
