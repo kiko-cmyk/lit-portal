@@ -1286,6 +1286,13 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       );
     }
 
+    // Seal SÍ tiene lo que le pedimos. Fila propia porque "applied" se escribe antes
+    // de llegar aquí y por tanto NUNCA significó "Seal cumplió", solo "acabamos de
+    // mandarlo": un 502 de verificación deja también su fila "applied". Cualquier
+    // detector que cruce el ledger contra Seal necesita esta distinción, o marca como
+    // descuadre todo lo que se quedó a medias. (24-ago-2026)
+    await writeAudit("verified");
+
     // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
     //
     // ONLY a frequency change regenerates the schedule. A box-count change
@@ -1343,6 +1350,9 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     );
     log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
   }
+  // No hemos podido leer Seal de vuelta (timeout o error), así que NO sabemos si
+  // cumplió. Queda escrito para que el detector no lo confunda con un "verified".
+  await writeAudit(`verify_${verifyOutcome}`);
   log("done-unverified", {
     sealSubscriptionId,
     verifyOutcome,
