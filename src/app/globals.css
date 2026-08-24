@@ -62,7 +62,7 @@
 
 :root {
   /* Default text + bg for the portal — overridden per page color zone */
-  --background: var(--color-sharp-white);
+  --background: var(--color-brisky-cream);
   --foreground: var(--color-lit-grey);
 }
 
@@ -121,7 +121,7 @@ button:disabled,
 
 /* ─── Color-zone helpers (apply on page wrappers) ─── */
 .zone-cream {
-  --background: var(--color-sharp-white);
+  --background: var(--color-brisky-cream);
   --foreground: var(--color-lit-grey);
 }
 .zone-retro {
