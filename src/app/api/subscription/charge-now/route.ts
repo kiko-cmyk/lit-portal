@@ -1,3 +1,4 @@
+import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
@@ -118,10 +119,57 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     console.error("[charge-now] lock error, proceeding (fail-open):", e);
   }
 
+  // La fecha que el cliente tenía ANTES de adelantar. Es el punto de rescate: Seal
+  // aplica `reset_schedule` en cuanto acepta la llamada y NO lo deshace si la tarjeta
+  // declina, así que sin esto un cobro fallido deja al cliente sin caja y sin cobro,
+  // con el pedido empujado un ciclo entero (13-sep → 24-nov en la 14245323, aviso de
+  // Kiko 24-ago-2026). (2026-08-24)
+  const preChargeDate = getNextBillingAttempt(sub)?.date?.slice(0, 10) ?? null;
+
   // Charge now + reset the schedule so the cadence re-anchors on today.
   try {
     await seal.chargeNow(sub.id, { resetSchedule: true });
   } catch (err) {
+    // El cobro no ha entrado, pero el calendario YA está reanclado. Devolverlo a su
+    // sitio antes de propagar el error: pullCadenceBackTo solo mueve hacia atrás y
+    // nunca a una fecha pasada, así que el peor caso es que no haga nada. Best effort,
+    // el error original manda.
+    if (preChargeDate && !isChargeAlreadyScheduledError(err)) {
+      try {
+        const moved = await seal.pullCadenceBackTo(sub.id, preChargeDate);
+        console.log("[charge-now] schedule restored after failed charge", {
+          sealSubscriptionId: sub.id,
+          preChargeDate,
+          moved,
+        });
+        if (moved === 0) {
+          // No se ha podido devolver (la fecha ya pasó, o Seal no tenía pendientes):
+          // el cliente se queda sin ese envío y alguien tiene que llamarle.
+          alertSlackError({
+            path: "/api/subscription/charge-now",
+            code: "charge_now_schedule_not_restored",
+            msg:
+              `sub ${sub.id}: el cobro adelantado falló y no se ha podido devolver el ` +
+              `calendario a ${preChargeDate}. Revisar a mano: puede haberse quedado sin envío.`,
+            customerId: ctx.customerId,
+          });
+        }
+      } catch (restoreErr) {
+        console.error("[charge-now] schedule restore FAILED", {
+          sealSubscriptionId: sub.id,
+          preChargeDate,
+          msg: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+        });
+        alertSlackError({
+          path: "/api/subscription/charge-now",
+          code: "charge_now_schedule_not_restored",
+          msg:
+            `sub ${sub.id}: el cobro adelantado falló y el intento de devolver el ` +
+            `calendario a ${preChargeDate} también falló. Revisar a mano.`,
+          customerId: ctx.customerId,
+        });
+      }
+    }
     // Seal refuses a second charge while one is already queued ("…already has
     // an attempt scheduled for processing. Try again in 15 minutes."). That's
     // an expected, transient condition — a charge is already in flight for

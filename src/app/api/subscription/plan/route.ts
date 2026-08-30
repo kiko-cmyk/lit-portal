@@ -7,6 +7,7 @@ import { alertSlackError } from "@/lib/alert";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
   centsToPrice,
+  chargeTotalCents,
   compositionFromLines,
   compositionLabel,
   diffLines,
@@ -481,6 +482,50 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const compositionChanged =
     currentLines.length === 0 || !sameComposition(targetComposition, currentComposition);
 
+  // ───── Guardas previas a cualquier cálculo de precio (2026-08-24) ─────
+  //
+  // Las tres cubren el mismo hueco: repreciar un contrato cuya composición viva no
+  // sabemos leer, o cuyo precio no deberíamos tocar. Van ANTES de getLadderPrices
+  // para que un contrato raro nunca llegue a la escalera. Ninguna se aplica cuando
+  // la composición no cambia: ese camino es el espejo de las líneas vivas y no
+  // reprecia nada (un cambio de solo frecuencia sobre una sub rara sigue pasando).
+  if (compositionChanged) {
+    // (1) FUERA DE RANGO. Σ cajas de las líneas vivas puede pasar de MAX_BOXES
+    // (13007758 = SL90×4 = 12 cajas, 12752359 = SL90×3 = 9). La escalera no sabe
+    // tarificar eso: ladderTotalCents LANZA, y hasta hoy el camino `flavor` moría
+    // en un 500 con alerta P0 mientras el camino `mix` (que llega con el boxCount
+    // ya clampado a 6 por getBoxCount) le reducía el envío a la mitad y lo llamaba
+    // cambio de mezcla. La guarda de route.ts:451 solo cubría el camino boxCount.
+    const liveBoxes = mixBoxCount(currentComposition);
+    if (liveBoxes > MAX_BOXES) {
+      log("box-count-out-of-range", { liveBoxes, currentComposition, targetComposition });
+      throw new ApiHttpError(
+        409,
+        "box_count_out_of_range",
+        `This subscription holds ${liveBoxes} boxes, above the ${MAX_BOXES} the catalogue can price. Contact support.`,
+      );
+    }
+
+    // (2) VARIANTES SIN MAPEAR. boxesForVariantQuantity cae a 1 caja por unidad para
+    // una variante fuera del registro, así que una sub del producto legacy de 96
+    // sobres se LEE como 1 caja: un cambio de sabor le quitaría 2 cajas de producto
+    // y bajaría el cobro, todo con la verificación en verde. El 409 box_count_unknown
+    // de arriba no lo caza porque solo salta con currentBoxCount == null, y aquí hay
+    // líneas. Mismo código de error: para el cliente el resultado es idéntico ("no
+    // podemos hacerlo automáticamente, escríbenos") y el front ya lo traduce.
+    const unmapped = currentLines
+      .map((l) => String(l.variantId))
+      .filter((v) => BOX_COUNT_BY_VARIANT[v] === undefined);
+    if (unmapped.length) {
+      log("variant-not-mapped", { unmapped, currentComposition });
+      throw new ApiHttpError(
+        409,
+        "box_count_unknown",
+        `Cannot change this subscription: variant(s) ${unmapped.join(", ")} are not in the box-count registry, so its real box count is unknown.`,
+      );
+    }
+  }
+
   let tierTotalCents: number;
   let targetPlan: MixPlan;
   if (!compositionChanged) {
@@ -511,6 +556,60 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     // adding a second line. That failure mode overcharged 7 subs in June-July 2026.
     targetPlan = planTargetLines(targetComposition, prices);
   }
+
+  // ───── CONTENCIÓN: nunca subir el precio en silencio (2026-08-24) ─────
+  //
+  // Un cambio de composición reprecia TODAS las líneas a la escalera web. Para quien
+  // ya está a catálogo eso es un no-op; para los 577 contratos de la escalera vieja es
+  // una subida (una trimestral de 3 cajas pasa de 67,93 a 85,05, +17,12 por cobro) que
+  // el cliente no ha pedido y que la pantalla de sabores le prometía por escrito que no
+  // iba a pasar.
+  //
+  // La línea la trazamos en el NÚMERO DE CAJAS, que es lo que el cliente recibe:
+  //   - Cambian las cajas → compra otra cantidad, el catálogo es el precio y PlanOverlay
+  //     ya le enseña el delta contra lo que paga de verdad (a76c07d). Pasa.
+  //   - NO cambian las cajas (sabor o mezcla) → recibe exactamente lo mismo, así que
+  //     cobrarle más no tiene defensa. Se niega y se le manda a soporte.
+  //
+  // Es contención deliberadamente NEUTRAL respecto a la decisión pendiente sobre la
+  // escalera vieja (migrar hablando con cada cliente vs congelar el precio del
+  // contrato): no congela nada ni reprecia nada, solo convierte una subida silenciosa
+  // en la conversación que las dos salidas necesitan igual. Cuando esa decisión esté
+  // tomada, aquí se preserva el importe o se pide confirmación explícita, pero el 409
+  // deja de ser el final del camino.
+  const liveChargeCents = chargeTotalCents(currentLines);
+  const boxCountUnchanged = currentLines.length > 0 && targetBoxCount === mixBoxCount(currentComposition);
+  if (compositionChanged && boxCountUnchanged && targetPlan.totalCents > liveChargeCents) {
+    log("price-would-increase-refused", {
+      liveChargeCents,
+      targetCents: targetPlan.totalCents,
+      deltaCents: targetPlan.totalCents - liveChargeCents,
+      targetBoxCount,
+      currentComposition,
+      targetComposition,
+    });
+    // No es un fallo del sistema, es un cliente que quería algo y se ha quedado sin
+    // hacerlo: cada aviso es una llamada pendiente, que es exactamente la cola de
+    // migración de la escalera vieja.
+    alertSlackError({
+      path: "/api/subscription/plan",
+      code: "price_would_increase",
+      msg:
+        `sub ${sealSubscriptionId}: cambio de ${compositionLabel(currentComposition)} a ` +
+        `${compositionLabel(targetComposition)} con las MISMAS ${targetBoxCount} cajas subiría de ` +
+        `${centsToPrice(liveChargeCents)} a ${centsToPrice(targetPlan.totalCents)} ` +
+        `(+${centsToPrice(targetPlan.totalCents - liveChargeCents)}). Rechazado, el cliente no lo pidió. ` +
+        `Contrato de la escalera vieja: toca llamarle.`,
+      customerId: ctx.customerId,
+    });
+    throw new ApiHttpError(
+      409,
+      "price_would_increase",
+      `This change keeps the same ${targetBoxCount} boxes but would raise the charge from ` +
+        `${centsToPrice(liveChargeCents)} to ${centsToPrice(targetPlan.totalCents)}. Refused.`,
+    );
+  }
+
   const diff = diffLines(currentLines, targetPlan.lines);
 
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
@@ -608,6 +707,46 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     log("variants-resolved", { skus: addDetails.map((a) => a.details.sku) });
   }
 
+  /**
+   * Audit breadcrumb. `subscription_changes` has existed since day one with ZERO
+   * writers, and its absence is exactly what hurt when investigating the duplicate-line
+   * incident: there was no record of what each customer asked for or when, and it had to
+   * be reconstructed from Seal's own `log` field.
+   *
+   * It also lets a rollback tell a mix the PORTAL created from one the customer bought
+   * at checkout — the latter must not be undone, it's what they chose.
+   *
+   * Best effort, never fatal: an audit row must not fail a plan change.
+   */
+  const writeAudit = async (outcome: string) => {
+    try {
+      const { error } = await supabaseAdmin().from("subscription_changes").insert({
+        customer_id: ctx.customerId,
+        change_type: targetPlan.shape === "split" || currentShape === "split" ? "mix" : "plan",
+        payload: {
+          sealSubscriptionId: String(sealSubscriptionId),
+          outcome,
+          from: { composition: currentComposition, shape: currentShape, frequency: currentFrequency },
+          to: { composition: targetComposition, shape: targetPlan.shape, frequency: targetFrequency },
+          tierTotalCents,
+          chargedCents: targetPlan.totalCents,
+          residualCents: targetPlan.residualCents,
+          diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
+          source: "portal",
+        },
+        applies_from: effectivePreserveYYYYMMDD,
+      });
+      if (error) log("audit-write-failed", { msg: error.message });
+    } catch (e) {
+      // "Best effort, never fatal" tiene que seguir siendo verdad ahora que la fila
+      // "intent" se escribe ANTES de mutar Seal: sin este catch, un fallo de red de
+      // Supabase dejaria de perder un apunte de auditoria y pasaria a bloquear TODOS
+      // los cambios de plan. El insert devuelve `error` en los fallos de la API, pero
+      // un fallo de transporte si lanza. (2026-08-30)
+      log("audit-write-threw", { msg: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   // Mutation order (REORDERED 2026-05-20 Juan):
   //   Before: add_items → remove_items → editSubscription
   //     Problem: when both vary, Seal often silently no-op'd the third
@@ -625,6 +764,17 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   // Plus: a 500 ms delay between each Seal mutation. Seal's billing_attempts
   // regenerator needs ~300-500 ms to settle between calls; without this
   // pause we've seen the third mutation get silently dropped.
+
+  // El breadcrumb va ANTES de tocar Seal (2026-08-24). Hasta hoy solo se escribía
+  // al final, con outcome "applied", así que toda petición que muriera DESPUÉS de
+  // mutar Seal (timeout de Vercel, crash) dejaba el contrato cambiado y el ledger
+  // vacío. Pasó de verdad: el segundo cambio de la 14317417 (23-ago 17:44, el que
+  // dejó la línea PACK4 duplicada con las 3 sueltas y la puso a cobrar 170,10) no
+  // dejó ni fila aquí ni intent de reparación, y solo lo delataba el log de Seal.
+  // Con la fila de intención, cualquier auditoría futura ve el hueco: intent sin
+  // applied = petición que se murió a medias.
+  await writeAudit("intent");
+
   // ───── Step 1: change delivery_interval FIRST (if needed) ─────
   //
   // Send ONLY delivery_interval. We used to send billing_interval too,
@@ -806,37 +956,6 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
         customerId: ctx.customerId,
       });
     }
-  };
-
-  /**
-   * Audit breadcrumb. `subscription_changes` has existed since day one with ZERO
-   * writers, and its absence is exactly what hurt when investigating the duplicate-line
-   * incident: there was no record of what each customer asked for or when, and it had to
-   * be reconstructed from Seal's own `log` field.
-   *
-   * It also lets a rollback tell a mix the PORTAL created from one the customer bought
-   * at checkout — the latter must not be undone, it's what they chose.
-   *
-   * Best effort, never fatal: an audit row must not fail a plan change.
-   */
-  const writeAudit = async (outcome: string) => {
-    const { error } = await supabaseAdmin().from("subscription_changes").insert({
-      customer_id: ctx.customerId,
-      change_type: targetPlan.shape === "split" || currentShape === "split" ? "mix" : "plan",
-      payload: {
-        sealSubscriptionId: String(sealSubscriptionId),
-        outcome,
-        from: { composition: currentComposition, shape: currentShape, frequency: currentFrequency },
-        to: { composition: targetComposition, shape: targetPlan.shape, frequency: targetFrequency },
-        tierTotalCents,
-        chargedCents: targetPlan.totalCents,
-        residualCents: targetPlan.residualCents,
-        diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
-        source: "portal",
-      },
-      applies_from: effectivePreserveYYYYMMDD,
-    });
-    if (error) log("audit-write-failed", { msg: error.message });
   };
 
   // ───── Step 2: converge the lines on the target (edits → adds → removes) ─────
@@ -1176,6 +1295,13 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       );
     }
 
+    // Seal SÍ tiene lo que le pedimos. Fila propia porque "applied" se escribe antes
+    // de llegar aquí y por tanto NUNCA significó "Seal cumplió", solo "acabamos de
+    // mandarlo": un 502 de verificación deja también su fila "applied". Cualquier
+    // detector que cruce el ledger contra Seal necesita esta distinción, o marca como
+    // descuadre todo lo que se quedó a medias. (24-ago-2026)
+    await writeAudit("verified");
+
     // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
     //
     // ONLY a frequency change regenerates the schedule. A box-count change
@@ -1233,6 +1359,9 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     );
     log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
   }
+  // No hemos podido leer Seal de vuelta (timeout o error), así que NO sabemos si
+  // cumplió. Queda escrito para que el detector no lo confunda con un "verified".
+  await writeAudit(`verify_${verifyOutcome}`);
   log("done-unverified", {
     sealSubscriptionId,
     verifyOutcome,
