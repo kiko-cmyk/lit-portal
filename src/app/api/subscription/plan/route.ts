@@ -719,23 +719,32 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
    * Best effort, never fatal: an audit row must not fail a plan change.
    */
   const writeAudit = async (outcome: string) => {
-    const { error } = await supabaseAdmin().from("subscription_changes").insert({
-      customer_id: ctx.customerId,
-      change_type: targetPlan.shape === "split" || currentShape === "split" ? "mix" : "plan",
-      payload: {
-        sealSubscriptionId: String(sealSubscriptionId),
-        outcome,
-        from: { composition: currentComposition, shape: currentShape, frequency: currentFrequency },
-        to: { composition: targetComposition, shape: targetPlan.shape, frequency: targetFrequency },
-        tierTotalCents,
-        chargedCents: targetPlan.totalCents,
-        residualCents: targetPlan.residualCents,
-        diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
-        source: "portal",
-      },
-      applies_from: effectivePreserveYYYYMMDD,
-    });
-    if (error) log("audit-write-failed", { msg: error.message });
+    try {
+      const { error } = await supabaseAdmin().from("subscription_changes").insert({
+        customer_id: ctx.customerId,
+        change_type: targetPlan.shape === "split" || currentShape === "split" ? "mix" : "plan",
+        payload: {
+          sealSubscriptionId: String(sealSubscriptionId),
+          outcome,
+          from: { composition: currentComposition, shape: currentShape, frequency: currentFrequency },
+          to: { composition: targetComposition, shape: targetPlan.shape, frequency: targetFrequency },
+          tierTotalCents,
+          chargedCents: targetPlan.totalCents,
+          residualCents: targetPlan.residualCents,
+          diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
+          source: "portal",
+        },
+        applies_from: effectivePreserveYYYYMMDD,
+      });
+      if (error) log("audit-write-failed", { msg: error.message });
+    } catch (e) {
+      // "Best effort, never fatal" tiene que seguir siendo verdad ahora que la fila
+      // "intent" se escribe ANTES de mutar Seal: sin este catch, un fallo de red de
+      // Supabase dejaria de perder un apunte de auditoria y pasaria a bloquear TODOS
+      // los cambios de plan. El insert devuelve `error` en los fallos de la API, pero
+      // un fallo de transporte si lanza. (2026-08-30)
+      log("audit-write-threw", { msg: e instanceof Error ? e.message : String(e) });
+    }
   };
 
   // Mutation order (REORDERED 2026-05-20 Juan):
