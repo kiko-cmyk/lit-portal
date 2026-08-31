@@ -482,48 +482,24 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   const compositionChanged =
     currentLines.length === 0 || !sameComposition(targetComposition, currentComposition);
 
-  // ───── Guardas previas a cualquier cálculo de precio (2026-08-24) ─────
+  // ───── Guarda previa a cualquier cálculo de precio (2026-08-24) ─────
   //
-  // Las tres cubren el mismo hueco: repreciar un contrato cuya composición viva no
-  // sabemos leer, o cuyo precio no deberíamos tocar. Van ANTES de getLadderPrices
-  // para que un contrato raro nunca llegue a la escalera. Ninguna se aplica cuando
-  // la composición no cambia: ese camino es el espejo de las líneas vivas y no
-  // reprecia nada (un cambio de solo frecuencia sobre una sub rara sigue pasando).
-  if (compositionChanged) {
-    // (1) FUERA DE RANGO. Σ cajas de las líneas vivas puede pasar de MAX_BOXES
-    // (13007758 = SL90×4 = 12 cajas, 12752359 = SL90×3 = 9). La escalera no sabe
-    // tarificar eso: ladderTotalCents LANZA, y hasta hoy el camino `flavor` moría
-    // en un 500 con alerta P0 mientras el camino `mix` (que llega con el boxCount
-    // ya clampado a 6 por getBoxCount) le reducía el envío a la mitad y lo llamaba
-    // cambio de mezcla. La guarda de route.ts:451 solo cubría el camino boxCount.
-    const liveBoxes = mixBoxCount(currentComposition);
-    if (liveBoxes > MAX_BOXES) {
-      log("box-count-out-of-range", { liveBoxes, currentComposition, targetComposition });
-      throw new ApiHttpError(
-        409,
-        "box_count_out_of_range",
-        `This subscription holds ${liveBoxes} boxes, above the ${MAX_BOXES} the catalogue can price. Contact support.`,
-      );
-    }
-
-    // (2) VARIANTES SIN MAPEAR. boxesForVariantQuantity cae a 1 caja por unidad para
-    // una variante fuera del registro, así que una sub del producto legacy de 96
-    // sobres se LEE como 1 caja: un cambio de sabor le quitaría 2 cajas de producto
-    // y bajaría el cobro, todo con la verificación en verde. El 409 box_count_unknown
-    // de arriba no lo caza porque solo salta con currentBoxCount == null, y aquí hay
-    // líneas. Mismo código de error: para el cliente el resultado es idéntico ("no
-    // podemos hacerlo automáticamente, escríbenos") y el front ya lo traduce.
-    const unmapped = currentLines
-      .map((l) => String(l.variantId))
-      .filter((v) => BOX_COUNT_BY_VARIANT[v] === undefined);
-    if (unmapped.length) {
-      log("variant-not-mapped", { unmapped, currentComposition });
-      throw new ApiHttpError(
-        409,
-        "box_count_unknown",
-        `Cannot change this subscription: variant(s) ${unmapped.join(", ")} are not in the box-count registry, so its real box count is unknown.`,
-      );
-    }
+  // FUERA DE RANGO. Σ cajas de las líneas vivas puede pasar de MAX_BOXES (13007758 =
+  // SL90×4 = 12 cajas, 12752359 = SL90×3 = 9). La escalera no sabe tarificar eso:
+  // ladderTotalCents LANZA, y hasta hoy el camino `flavor` moría en un 500 con alerta
+  // P0 mientras el camino `mix` (que llega con el boxCount ya clampado a 6 por
+  // getBoxCount) le reducía el envío a la mitad y lo llamaba cambio de mezcla. La
+  // guarda del camino boxCount no cubría ninguno de los dos. Solo aplica cuando la
+  // composición cambia: el espejo no consulta la escalera, así que un cambio de solo
+  // frecuencia sobre una de estas subs sigue pasando.
+  const liveBoxes = mixBoxCount(currentComposition);
+  if (compositionChanged && liveBoxes > MAX_BOXES) {
+    log("box-count-out-of-range", { liveBoxes, currentComposition, targetComposition });
+    throw new ApiHttpError(
+      409,
+      "box_count_out_of_range",
+      `This subscription holds ${liveBoxes} boxes, above the ${MAX_BOXES} the catalogue can price. Contact support.`,
+    );
   }
 
   let tierTotalCents: number;
@@ -611,6 +587,50 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   }
 
   const diff = diffLines(currentLines, targetPlan.lines);
+
+  // ───── LÍNEAS QUE NO SABEMOS LEER (31-ago-2026) ─────
+  //
+  // `boxesForVariantQuantity` cae a 1 caja por unidad para cualquier variante fuera
+  // del registro, y `flavorKeyForVariant` cae al sabor por defecto. O sea que una
+  // "LIT Caja Regalo" cuenta como una caja de limón: el portal cree que la sub tiene
+  // una caja más de las que paga, tarifica ese número, y el target que construye NO
+  // incluye la línea de regalo, así que el diff la RETIRA.
+  //
+  // Eso ya ha pasado dos veces y nadie lo vio, porque el daño no está en el precio
+  // sino en las cajas: la 15457363 pasó de 3 pagadas más 1 de regalo a 3, y la
+  // 15436072 de 1 más 1 de regalo a 1. Las dos pagan exactamente lo mismo y reciben
+  // un 25% y un 50% menos. Ningún detector de precio lo verá nunca (aviso de Kiko).
+  //
+  // Va DESPUÉS del diff y condicionado a `!diff.noop` a propósito: lo que no podemos
+  // permitir es ESCRIBIR items cuando hay una línea que no sabemos interpretar. Un
+  // cambio de solo frecuencia sobre una sub con caja de regalo da diff noop y sigue
+  // pasando, que es lo correcto. La guarda anterior solo miraba el camino de
+  // composición cambiada, y la 15457363 se colaba por el espejo.
+  const unmappedLines = currentLines
+    .map((l) => String(l.variantId))
+    .filter((v) => BOX_COUNT_BY_VARIANT[v] === undefined);
+  if (unmappedLines.length && !diff.noop) {
+    log("unmapped-line-blocks-item-write", {
+      unmapped: unmappedLines,
+      currentComposition,
+      targetComposition,
+      diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
+    });
+    alertSlackError({
+      path: "/api/subscription/plan",
+      code: "unmapped_line_blocks_write",
+      msg:
+        `sub ${sealSubscriptionId}: tiene la(s) variante(s) ${unmappedLines.join(", ")} fuera del ` +
+        `registro de cajas (caja de regalo o producto legacy). El cambio se ha rechazado porque ` +
+        `habría retirado esa línea sin bajarle el precio. Hay que mapear la variante o hacerlo a mano.`,
+      customerId: ctx.customerId,
+    });
+    throw new ApiHttpError(
+      409,
+      "box_count_unknown",
+      `Cannot change this subscription: variant(s) ${unmappedLines.join(", ")} are not in the box-count registry, so applying this change would silently drop that line.`,
+    );
+  }
 
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
   const itemsChanged = !diff.noop;
@@ -1178,7 +1198,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
 
   // Verify with strict 4 s budget
   let verified: SealSubscription | null = null;
-  let verifyOutcome: "ok" | "timeout" | "error" = "ok";
+  // "not_found" existe porque getSubscriptionById puede devolver null SIN lanzar, y
+  // entonces el outcome se quedaba en "ok": la fila del ledger salía como
+  // `verify_ok`, que se lee como éxito cuando en realidad no hemos verificado nada.
+  // (Aviso de Kiko, 31-ago-2026.)
+  let verifyOutcome: "ok" | "timeout" | "error" | "not_found" = "ok";
   const verifyController = new AbortController();
   const verifyTimer = setTimeout(() => verifyController.abort(), 4_000);
   try {
@@ -1187,6 +1211,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     // exactly while Seal regenerates attempts and the FE re-polls, i.e. the
     // remaining 429 stampede after the 2026-07-06 getSubscriptionsByEmail fix.
     verified = await seal.getSubscriptionById(sealSubscriptionId, verifyController.signal);
+    if (!verified) verifyOutcome = "not_found";
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") {
       verifyOutcome = "timeout";
@@ -1359,8 +1384,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     );
     log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
   }
-  // No hemos podido leer Seal de vuelta (timeout o error), así que NO sabemos si
-  // cumplió. Queda escrito para que el detector no lo confunda con un "verified".
+  // No hemos podido leer Seal de vuelta (timeout, error o null), así que NO sabemos
+  // si cumplió. Queda escrito para que el detector no lo confunda con un "verified".
+  // Los cuatro nombres posibles son verify_timeout, verify_error, verify_not_found y
+  // verify_ok; el último solo aparece si Seal devolvió algo pero la rama de
+  // verificación no llegó a correr, y también significa "sin verificar".
   await writeAudit(`verify_${verifyOutcome}`);
   log("done-unverified", {
     sealSubscriptionId,

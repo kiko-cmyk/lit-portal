@@ -155,6 +155,20 @@ export function PlanOverlay({
             es: "No pudimos aplicar tu plan al precio correcto. No se ha cobrado nada distinto, inténtalo de nuevo.",
           }),
         );
+      } else if (
+        err.code === "price_would_increase" ||
+        err.code === "box_count_out_of_range" ||
+        err.code === "box_count_unknown"
+      ) {
+        // Esta pantalla manda `mix` cuando la sub ya es split (projectedMix), así que
+        // sí puede disparar los 409 de la contención, y sin esta rama el cliente veía
+        // "no se pudo cambiar el plan" en vez del "escríbenos". (Aviso de Kiko, 31-ago)
+        setError(
+          t({
+            en: "We can't apply this from here without changing your price, and your price shouldn't change. Write to us and we'll do it for you, keeping what you pay today.",
+            es: "No podemos aplicarlo desde aquí sin tocarte el precio, y tu precio no debería cambiar. Escríbenos y lo hacemos nosotros, dejándote lo que pagas hoy.",
+          }),
+        );
       } else if (err.code === "mix_line_not_recurring") {
         setError(
           t({
