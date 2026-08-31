@@ -506,8 +506,22 @@ const rpSL60 = V[L].variantByBoxCount[2];
 const rpSL90 = V[L].variantByBoxCount[3];
 const rpPack2L2W = "65636234690909";
 
-const rpLine = (itemId: number, variantId: string, quantity: number, unitPrice: string, boxes: number) =>
-  ({ itemId, productId: "p", variantId, flavor: L, boxes, quantity, unitPrice, sellingPlanId: PLAN }) as any;
+const rpLine = (
+  itemId: number,
+  variantId: string,
+  quantity: number,
+  unitPrice: string,
+  boxes: number,
+): SubscriptionLine => ({
+  itemId,
+  productId: "p",
+  variantId,
+  flavor: L,
+  boxes,
+  quantity,
+  unitPrice,
+  sellingPlanId: PLAN,
+});
 
 // La 13089232 real: 2 SL30 @28,35 + 1 SL60 @56,70 = 4 cajas, 113,40 -> tramo 85,05.
 {
