@@ -566,10 +566,17 @@ export function diffLines(current: SubscriptionLine[], target: TargetLine[]): Li
  * PACK4 = 4). Repartir por caja y escribirlo como precio por unidad es el error que
  * cobraría 21,26 en vez de 85,05 en una línea de pack.
  *
- * Devuelve null y no propone nada si algo no cuadra: sin líneas, objetivo no
- * positivo, una línea cuyas cajas no son múltiplo de su quantity (no sabemos cuántas
- * cajas lleva cada unidad), o si a alguna línea le SUBIRÍA el precio. Ese último es
- * el invariante que pidió Kiko: esto solo puede bajar hacia el contrato.
+ * EL INVARIANTE DE DINERO, que es el que pidió Kiko: esto solo puede BAJAR hacia el
+ * contrato. Se comprueba sobre el TOTAL, no línea a línea: el total propuesto tiene
+ * que quedar en o por debajo del objetivo Y estrictamente por debajo de lo que se
+ * cobra hoy. Una línea suelta SÍ puede subir de precio unitario dentro de eso (una
+ * SL90 a 22,64 por caja junto a sueltas a 28,35 se promedia a 23,62 y esa línea sube
+ * mientras el total baja de 152,98 a 141,72), y eso es correcto: lo que el cliente
+ * paga es el total. Bloquearlo línea a línea dejaba sin curar a 1 de las 5.
+ *
+ * Devuelve null si algo no cuadra: sin líneas, objetivo no positivo, una línea cuyas
+ * cajas no son múltiplo de su quantity (no sabríamos cuántas cajas lleva cada unidad),
+ * o si el total no bajaría.
  */
 export interface InPlaceEdit {
   itemId: number;
@@ -580,7 +587,7 @@ export interface InPlaceEdit {
 export function repriceInPlace(
   lines: SubscriptionLine[],
   targetTotalCents: number,
-): { edits: InPlaceEdit[]; totalCents: number } | null {
+): { edits: InPlaceEdit[]; totalCents: number; raisesAnyLine: boolean } | null {
   if (!lines.length) return null;
   if (!Number.isInteger(targetTotalCents) || targetTotalCents <= 0) return null;
 
@@ -597,9 +604,6 @@ export function repriceInPlace(
     const boxesPerUnit = l.boxes / quantity;
     const unitPriceCents = perBoxCents * boxesPerUnit;
     if (unitPriceCents <= 0) return null;
-    // NUNCA subir: si el precio vivo ya es menor o igual, esta función no es la
-    // herramienta (o no hay nada que bajar).
-    if (unitPriceCents > priceToCents(l.unitPrice)) return null;
     proposed.push({ line: l, quantity, unitPriceCents });
   }
 
@@ -607,12 +611,17 @@ export function repriceInPlace(
   // El floor solo puede dejarlo por debajo del objetivo, nunca por encima; si sale
   // por encima es un bug de esta función y vale más no proponer nada.
   if (totalCents > targetTotalCents) return null;
+  // Y tiene que bajar de verdad: si no baja, esta función no es la herramienta.
+  const liveTotalCents = chargeTotalCents(lines);
+  if (totalCents >= liveTotalCents) return null;
+
+  const raisesAnyLine = proposed.some((p) => p.unitPriceCents > priceToCents(p.line.unitPrice));
 
   const edits = proposed
     .filter((p) => p.unitPriceCents !== priceToCents(p.line.unitPrice))
     .map((p) => ({ itemId: p.line.itemId, quantity: p.quantity, unitPriceCents: p.unitPriceCents }));
 
-  return { edits, totalCents };
+  return { edits, totalCents, raisesAnyLine };
 }
 
 /** Σ quantity × unit price over lines, in cents. The money assertion compares this

@@ -35,6 +35,7 @@ import {
   type FlavorComposition,
   type SubscriptionLine,
   type TargetLine,
+  repriceInPlace,
 } from "../src/lib/mix";
 import {
   FLAVORS,
@@ -496,6 +497,58 @@ eq(dropsUnits([
      { variantId: V[L].variantByBoxCount[1], qty: 1, plan: "691259834717" },
    ]), 2,
    "dos subs con cadencias distintas en un pedido -> 2 unidades (como hoy)");
+
+// ── repriceInPlace: bajar sin reestructurar (31-ago-2026) ────────────────────
+console.log("\n=== repriceInPlace ===");
+
+const rpSL30 = V[L].variantByBoxCount[1];
+const rpSL60 = V[L].variantByBoxCount[2];
+const rpSL90 = V[L].variantByBoxCount[3];
+const rpPack2L2W = "65636234690909";
+
+const rpLine = (itemId: number, variantId: string, quantity: number, unitPrice: string, boxes: number) =>
+  ({ itemId, productId: "p", variantId, flavor: L, boxes, quantity, unitPrice, sellingPlanId: PLAN }) as any;
+
+// La 13089232 real: 2 SL30 @28,35 + 1 SL60 @56,70 = 4 cajas, 113,40 -> tramo 85,05.
+{
+  const r = repriceInPlace([rpLine(1, rpSL30, 2, "28.35", 2), rpLine(2, rpSL60, 1, "56.70", 2)], 8505);
+  eq(r !== null, true, "13089232: propone reparto");
+  eq(r!.totalCents, 8504, "13089232: total 85,04 (un centimo a favor del cliente)");
+  eq(r!.edits.length, 2, "13089232: 2 edits, cero adds y cero removes");
+  eq(r!.raisesAnyLine, false, "13089232: ninguna linea sube");
+  // per-UNIDAD, no per-caja: la SL60 lleva 2 cajas por unidad
+  eq(r!.edits.find((e) => e.itemId === 1)!.unitPriceCents, 2126, "13089232: SL30 a 21,26 por unidad");
+  eq(r!.edits.find((e) => e.itemId === 2)!.unitPriceCents, 4252, "13089232: SL60 a 42,52 por unidad (2 cajas)");
+}
+
+// LA TRAMPA DEL PACK: quantity 1 con 4 cajas. Repartir per-caja y escribirlo como
+// precio de unidad cobraria 21,26 en vez de 85,05.
+{
+  const r = repriceInPlace([rpLine(1, rpPack2L2W, 1, "113.40", 4)], 8505);
+  eq(r !== null, true, "PACK4: propone reparto");
+  eq(r!.totalCents, 8504, "PACK4: el total sigue siendo el del tramo, no un cuarto");
+  eq(r!.edits[0].unitPriceCents, 8504, "PACK4: precio de LINEA 85,04, no 21,26");
+}
+
+// El total tiene que bajar. Una sub ya en el tramo no se toca.
+eq(repriceInPlace([rpLine(1, rpSL30, 3, "28.35", 3)], 8505), null,
+   "ya al tramo: no propone nada (el total no bajaria)");
+eq(repriceInPlace([rpLine(1, rpSL90, 1, "67.93", 3)], 8505), null,
+   "escalera vieja por DEBAJO: no propone nada, nunca sube");
+
+// Una linea puede subir de unitario si el TOTAL baja (la 14682293 real).
+{
+  const r = repriceInPlace([rpLine(1, rpSL30, 3, "28.35", 3), rpLine(2, rpSL90, 1, "67.93", 3)], 14175);
+  eq(r !== null, true, "14682293: propone reparto");
+  eq(r!.totalCents < 15298, true, "14682293: el total baja de 152,98");
+  eq(r!.raisesAnyLine, true, "14682293: avisa de que una linea sube de unitario");
+}
+
+// Basura: nunca proponer nada.
+eq(repriceInPlace([], 8505), null, "sin lineas: null");
+eq(repriceInPlace([rpLine(1, rpSL30, 1, "28.35", 1)], 0), null, "objetivo 0: null");
+eq(repriceInPlace([rpLine(1, rpSL30, 2, "28.35", 3)], 8505), null,
+   "cajas no multiplo de quantity: null (no sabemos cajas por unidad)");
 
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);

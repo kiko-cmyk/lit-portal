@@ -72,7 +72,6 @@ import {
   getComposition,
   getLines,
   getNextBillingAttempt,
-  getShape,
   mapStatus,
   normalizeFrequency,
   seal,
@@ -290,6 +289,15 @@ async function assertMixPrice(
         return;
       }
       healStrategy = "en-sitio";
+      if (inPlace.raisesAnyLine) {
+        // El total baja, que es lo que paga el cliente, pero alguna línea sube de
+        // precio unitario al promediar por caja. Queda dicho en el log para que no
+        // sorprenda a quien mire el contrato después.
+        console.warn(
+          `[${cfg.label}] sub ${s.id}: el reparto en sitio baja el total a ` +
+            `${inPlace.totalCents}c pero sube el precio unitario de alguna línea`,
+        );
+      }
       editsToApply = inPlace.edits.map((e) => ({
         itemId: e.itemId,
         quantity: e.quantity,
