@@ -269,6 +269,15 @@ async function assertMixPrice(
       price: e.unitPrice,
     }));
     let healStrategy: "catalogo" | "en-sitio" = "catalogo";
+    // El total que de verdad vamos a dejar escrito. Por el camino del catálogo es el
+    // tramo exacto (planTargetLines lo garantiza con un assert interno); por el
+    // camino en sitio queda hasta `cajas − 1` céntimos por debajo, porque el reparto
+    // por caja usa floor. Verificar contra `expected` en vez de contra esto daba un
+    // "FAILED" falso justo en las subs de más cajas: la 14682293 aterriza 3 céntimos
+    // por debajo del tramo con solo 2 líneas, y la tolerancia era de 1 céntimo por
+    // línea. Un aviso de fallo sobre una cura correcta es la clase de ruido que hace
+    // que se dejen de leer los avisos.
+    let intendedTotalCents = plan.totalCents;
 
     if (!isNewModelLineSet) {
       const inPlace = repriceInPlace(lines, expected);
@@ -298,6 +307,7 @@ async function assertMixPrice(
             `${inPlace.totalCents}c pero sube el precio unitario de alguna línea`,
         );
       }
+      intendedTotalCents = inPlace.totalCents;
       editsToApply = inPlace.edits.map((e) => ({
         itemId: e.itemId,
         quantity: e.quantity,
@@ -323,7 +333,9 @@ async function assertMixPrice(
         // Verify by reading back, never by trusting the mutation response.
         const after = await seal.getSubscriptionById(s.id);
         const now = after ? getChargeTotalCents(after) : -1;
-        healed = Math.abs(now - expected) <= lines.length ? "healed" : "failed";
+        // Contra lo que pretendíamos escribir, no contra el tramo: la tolerancia de
+        // un céntimo por línea absorbe el redondeo de Seal, no el del reparto.
+        healed = Math.abs(now - intendedTotalCents) <= lines.length ? "healed" : "failed";
       }
     } catch (e) {
       healed = "failed";
