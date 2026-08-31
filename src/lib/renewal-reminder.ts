@@ -174,16 +174,18 @@ function addressOf(s: SealSubscription): ReminderAddress {
  * there is still time to fix it before the card is hit. Deliberately NOT run by
  * the 7d bucket — it would only double the Slack alerts for the same drift.
  */
+type PriceCheckOutcome = "ok" | "por-debajo" | "no-comparable" | "sobre-cobro";
+
 async function assertMixPrice(
   s: SealSubscription,
   cfg: RenewalReminderConfig,
   boxCount: number,
   composition: FlavorComposition[],
   chargeDate: string,
-): Promise<void> {
+): Promise<PriceCheckOutcome> {
   try {
     const lines = getLines(s);
-    if (!lines.length) return;
+    if (!lines.length) return "no-comparable";
 
     // ── DOS GUARDAS ANTES DE COMPARAR NADA (31-ago-2026) ──
     //
@@ -197,7 +199,7 @@ async function assertMixPrice(
         `[${cfg.label}] sub ${s.id}: ${realBoxes} cajas reales frente a ${boxCount} leídas ` +
           `(clamp de getBoxCount) — fuera de lo que la escalera sabe tarificar, no se compara`,
       );
-      return;
+      return "no-comparable";
     }
     // Una variante fuera del registro cuenta como 1 caja del sabor por defecto (las
     // "LIT Caja Regalo"), así que el número de cajas es una suposición y el precio
@@ -210,7 +212,7 @@ async function assertMixPrice(
         `[${cfg.label}] sub ${s.id}: variante(s) ${unmapped.join(", ")} fuera del registro ` +
           `de cajas — su número de cajas no es fiable, no se compara`,
       );
-      return;
+      return "no-comparable";
     }
 
     const prices = await getLadderPrices(composition[0].flavor);
@@ -218,7 +220,7 @@ async function assertMixPrice(
     const actual = getChargeTotalCents(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
-    if (Math.abs(actual - expected) <= lines.length) return;
+    if (Math.abs(actual - expected) <= lines.length) return "ok";
 
     // ── GUARDA DE LA ESCALERA (2026-08-22) ──
     //
@@ -234,14 +236,12 @@ async function assertMixPrice(
     // check ya no puede distinguirlo de una sub nueva legítima. Esa protección
     // murió con el reprecio; la mitigación real es que "propagate price changes"
     // sigue apagado en Seal.
-    if (actual < expected) {
-      console.warn(
-        `[${cfg.label}] sub ${s.id}: charge ${actual}c por debajo de la escalera web ` +
-          `(${expected}c para ${boxCount} cajas) — contrato de la escalera vieja o ajuste ` +
-          `manual; se deja tal cual`,
-      );
-      return;
-    }
+    // Por debajo de la escalera es el estado PERMANENTE de ~560 contratos de la
+    // escalera vieja, así que ya no se imprime uno por sub: en el pico de fin de mes
+    // caen 91 en la misma ventana y 91 líneas esperadas entierran las de verdad. Se
+    // cuenta y runBucket saca una sola línea con el total. El censo
+    // (scripts/audit-ladder-drift.ts) es la herramienta para mirar esa población.
+    if (actual < expected) return "por-debajo";
 
     // actual > expected: sobre-cobro respecto a la escalera web. Distinguir si el
     // line-set vivo ya es del modelo nuevo (mismas variantes que el target: pack
@@ -295,7 +295,7 @@ async function assertMixPrice(
             `se puede bajar en sitio sin reestructurar líneas. A mano. EL COBRO ENTRA ` +
             `${chargeDate.slice(0, 10)}.`,
         });
-        return;
+        return "sobre-cobro";
       }
       healStrategy = "en-sitio";
       if (inPlace.raisesAnyLine) {
@@ -354,9 +354,11 @@ async function assertMixPrice(
             `Automatic repair ${healed === "failed" ? "FAILED" : "was not possible"}. ` +
             `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
     });
+    return "sobre-cobro";
   } catch (e) {
     // Never let the price check stop the reminder from going out.
     console.warn(`[${cfg.label}] price check failed for sub ${s.id}:`, e);
+    return "no-comparable";
   }
 }
 
@@ -412,6 +414,12 @@ async function runBucket(
   const subs = await seal.listAllSubscriptions();
 
   const candidates: Candidate[] = [];
+  const priceCheck: Record<PriceCheckOutcome, number> = {
+    "ok": 0,
+    "por-debajo": 0,
+    "no-comparable": 0,
+    "sobre-cobro": 0,
+  };
   for (const s of subs) {
     if (mapStatus(s) !== "active") continue; // skips paused / post_cancel / cancelled
     const next = getNextBillingAttempt(s);
@@ -428,7 +436,7 @@ async function runBucket(
     // nuevo. Por eso ninguna de las 5 que cobran de más se curaba nunca: todas son
     // de un solo sabor. (Aviso de Kiko, 31-ago-2026.)
     if (cfg.checkMixPrice) {
-      await assertMixPrice(s, cfg, boxCount, composition, next.date);
+      priceCheck[await assertMixPrice(s, cfg, boxCount, composition, next.date)]++;
     }
 
     candidates.push({
@@ -445,6 +453,14 @@ async function runBucket(
       composition,
       shippingAddress: addressOf(s),
     });
+  }
+
+  if (cfg.checkMixPrice) {
+    console.log(
+      `[${cfg.label}] precios: ${priceCheck.ok} al tramo · ${priceCheck["por-debajo"]} por debajo ` +
+        `(escalera vieja, no se tocan) · ${priceCheck["no-comparable"]} no comparables · ` +
+        `${priceCheck["sobre-cobro"]} con sobre-cobro`,
+    );
   }
 
   if (candidates.length === 0) {
