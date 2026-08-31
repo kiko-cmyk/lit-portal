@@ -16,7 +16,7 @@ import {
   PACK4_BY_VARIANT, pack4VariantForComposition, variantForFlavorBox,
   BOX_COUNT_BY_VARIANT, FLAVOR_BY_VARIANT, type FlavorKey,
 } from "../src/lib/seal-plans";
-import { planTargetLines } from "../src/lib/mix";
+import { planTargetLines, ladderTotalCents, MAX_BOXES } from "../src/lib/mix";
 
 let fails = 0;
 function check(cond: boolean, msg: string) {
@@ -78,6 +78,33 @@ for (const v of PACK4_VARIANTS) {
 for (const f of ALL_FLAVORS) {
   const vid = f.variantByBoxCount[1];
   check(FLAVOR_BY_VARIANT[vid] === f.key, `${f.key}: la variante de 1 caja se lee de vuelta a su sabor`);
+}
+
+
+// 6) TODAS las mezclas posibles de 1..MAX_BOXES cajas resuelven por el camino real
+//    y cuadran con la escalera. Con 3 sabores son C(n+2,2) por tamaño = 83 en total.
+//    Es la red que caza "he añadido un sabor pero falta una variante de pack".
+{
+  const prices = { oneBoxCents: 2835, pack4Cents: 8505 };
+  let probadas = 0, malas = 0;
+  const [a, b, c] = FLAVOR_KEYS;
+  for (let n = 1; n <= MAX_BOXES; n++) {
+    for (let x = n; x >= 0; x--) for (let y = n - x; y >= 0; y--) {
+      const mix = [
+        { flavor: a, boxes: x }, { flavor: b, boxes: y }, { flavor: c, boxes: n - x - y },
+      ].filter((v) => v.boxes > 0);
+      probadas++;
+      try {
+        const plan = planTargetLines(mix, prices);
+        const suma = plan.lines.reduce((s, l) => s + l.quantity * l.unitPriceCents, 0);
+        const cajas = plan.lines.reduce((s, l) => s + (l.boxes ?? 0), 0);
+        if (suma !== ladderTotalCents(n, prices) || cajas !== n) malas++;
+      } catch { malas++; }
+    }
+  }
+  const esperadas = [1, 2, 3, 4, 5, 6].reduce((s, n) => s + ((n + 2) * (n + 1)) / 2, 0);
+  check(probadas === esperadas, `se prueban las ${esperadas} mezclas de 1..${MAX_BOXES} cajas (${probadas})`);
+  check(malas === 0, `las ${probadas} mezclas resuelven y cuadran con la escalera (${malas} malas)`);
 }
 
 console.log(fails === 0 ? "\nTodos OK" : `\n${fails} FALLOS`);
