@@ -13,7 +13,7 @@ import type { Frequency } from "./types";
 export type BoxCount = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Stable key for each LIT flavor. Threaded through the plan route + overlays. */
-export type FlavorKey = "salty-lemon" | "salty-watermelon";
+export type FlavorKey = "salty-lemon" | "salty-watermelon" | "salty-peach";
 
 export interface FlavorDef {
   key: FlavorKey;
@@ -22,6 +22,15 @@ export interface FlavorDef {
   label: string;
   /** Shopify product id (numeric string). All 6 box-count variants live under it. */
   productId: string;
+  /**
+   * Prefijo del SKU de las variantes de este sabor: SL30, W30, P30…
+   * Vive aquí a propósito. Antes `mix.ts::skuFor` lo resolvía con un ternario
+   * binario (`flavor === "salty-lemon" ? "SL" : "W"`), así que al añadir un tercer
+   * sabor las cajas sueltas de melocotón salían con SKU W30 y Hive habría pickeado
+   * SANDÍA (el SKU viaja verbatim Seal → pedido → Hive). Al estar en el registro,
+   * TypeScript obliga a rellenarlo para cada sabor nuevo.
+   */
+  skuPrefix: string;
   /**
    * Variant id by box count (1..6). The variant determines:
    *  - Sachets per shipment (30 / 60 / 90 / 120 / 150 / 180)
@@ -44,6 +53,7 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     key: "salty-lemon",
     label: "Salty Lemon",
     productId: "16008517550429",
+    skuPrefix: "SL",
     // Las variantes 2-6 son la ESCALERA VIEJA: solo lectura (subs existentes las
     // conservan y deben seguir leyéndose igual). Desde la escalera web 2026-08-22
     // planTargetLines solo escribe la variante de 1 caja y el PACK4 de abajo.
@@ -60,6 +70,7 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     key: "salty-watermelon",
     label: "Salty Watermelon",
     productId: "16272445112669",
+    skuPrefix: "W",
     variantByBoxCount: {
       1: "65046727459165",  // W30  €28.35 (compare €37.80, -25%)
       2: "65046727491933",  // W60  €56.70 (escalera vieja, solo lectura)
@@ -67,6 +78,20 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
       4: "65046727557469",  // W120 €90.57 (escalera vieja, solo lectura)
       5: "65046727590237",  // W150 €103.95 (escalera vieja, solo lectura)
       6: "65046727623005",  // W180 €124.74 (escalera vieja, solo lectura)
+    },
+  },
+  "salty-peach": {
+    key: "salty-peach",
+    label: "Salty Peach",
+    productId: "16272456188253",
+    skuPrefix: "P",
+    variantByBoxCount: {
+      1: "65046790537565",  // P30  €28.35 (compare €37.80, -25%)
+      2: "65046790570333",  // P60  €56.70 (escalera vieja, solo lectura)
+      3: "65046790603101",  // P90  €67.93 (escalera vieja, solo lectura)
+      4: "65046790635869",  // P120 €90.57 (escalera vieja, solo lectura)
+      5: "65046790668637",  // P150 €103.95 (escalera vieja, solo lectura)
+      6: "65046790701405",  // P180 €124.74 (escalera vieja, solo lectura)
     },
   },
 };
@@ -123,6 +148,19 @@ export const PACK4_VARIANTS: Pack4VariantDef[] = [
   { variantId: "65636234690909", sku: "PACK4-2L2W", composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-watermelon", boxes: 2 }] },
   { variantId: "65636234723677", sku: "PACK4-1L3W", composition: [{ flavor: "salty-watermelon", boxes: 3 }, { flavor: "salty-lemon", boxes: 1 }] },
   { variantId: "65636234756445", sku: "PACK4-4W",   composition: [{ flavor: "salty-watermelon", boxes: 4 }] },
+  // Salty Peach (2026-08-31). Con 3 sabores las mezclas de 4 cajas pasan de 5 a 15
+  // (combinaciones con repetición). Estas 10 son las que llevan melocotón; creadas en
+  // Shopify el 2026-08-31 y heredan los 8 planes de Seal del producto del pack.
+  { variantId: "65753050612061", sku: "PACK4-3L1P",   composition: [{ flavor: "salty-lemon", boxes: 3 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "65753050677597", sku: "PACK4-2L1W1P", composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-watermelon", boxes: 1 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "65753050743133", sku: "PACK4-2L2P",   composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-peach", boxes: 2 }] },
+  { variantId: "65753050775901", sku: "PACK4-1L2W1P", composition: [{ flavor: "salty-watermelon", boxes: 2 }, { flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "65753051136349", sku: "PACK4-1L1W2P", composition: [{ flavor: "salty-peach", boxes: 2 }, { flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-watermelon", boxes: 1 }] },
+  { variantId: "65753051431261", sku: "PACK4-1L3P",   composition: [{ flavor: "salty-peach", boxes: 3 }, { flavor: "salty-lemon", boxes: 1 }] },
+  { variantId: "65753051627869", sku: "PACK4-3W1P",   composition: [{ flavor: "salty-watermelon", boxes: 3 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "65753051660637", sku: "PACK4-2W2P",   composition: [{ flavor: "salty-watermelon", boxes: 2 }, { flavor: "salty-peach", boxes: 2 }] },
+  { variantId: "65753051726173", sku: "PACK4-1W3P",   composition: [{ flavor: "salty-peach", boxes: 3 }, { flavor: "salty-watermelon", boxes: 1 }] },
+  { variantId: "65753051791709", sku: "PACK4-4P",     composition: [{ flavor: "salty-peach", boxes: 4 }] },
 ];
 
 /** Variantes del pack de compra única — mismas mezclas y SKUs, solo lectura. */
@@ -132,6 +170,18 @@ const PACK4_OT_VARIANTS: Pack4VariantDef[] = [
   { variantId: "65636236853597", sku: "PACK4-2L2W", composition: PACK4_VARIANTS[2].composition },
   { variantId: "65636236886365", sku: "PACK4-1L3W", composition: PACK4_VARIANTS[3].composition },
   { variantId: "65636236919133", sku: "PACK4-4W",   composition: PACK4_VARIANTS[4].composition },
+  // Gemelas de compra única de las 10 mezclas con melocotón. Mismo orden que arriba,
+  // así que la composición se referencia por índice y no se puede desincronizar.
+  { variantId: "65753051824477", sku: "PACK4-3L1P",   composition: PACK4_VARIANTS[5].composition },
+  { variantId: "65753051857245", sku: "PACK4-2L1W1P", composition: PACK4_VARIANTS[6].composition },
+  { variantId: "65753051890013", sku: "PACK4-2L2P",   composition: PACK4_VARIANTS[7].composition },
+  { variantId: "65753051922781", sku: "PACK4-1L2W1P", composition: PACK4_VARIANTS[8].composition },
+  { variantId: "65753051955549", sku: "PACK4-1L1W2P", composition: PACK4_VARIANTS[9].composition },
+  { variantId: "65753053299037", sku: "PACK4-1L3P",   composition: PACK4_VARIANTS[10].composition },
+  { variantId: "65753053364573", sku: "PACK4-3W1P",   composition: PACK4_VARIANTS[11].composition },
+  { variantId: "65753053528413", sku: "PACK4-2W2P",   composition: PACK4_VARIANTS[12].composition },
+  { variantId: "65753053561181", sku: "PACK4-1W3P",   composition: PACK4_VARIANTS[13].composition },
+  { variantId: "65753053593949", sku: "PACK4-4P",     composition: PACK4_VARIANTS[14].composition },
 ];
 
 /**

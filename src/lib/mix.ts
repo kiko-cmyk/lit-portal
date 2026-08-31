@@ -435,8 +435,11 @@ export function planFromCurrentLines(lines: SubscriptionLine[]): MixPlan {
 /** SKU we send to Seal. Seal stores it verbatim on the line and it reaches the
  *  Shopify order, which is what Hive reads, so it must match the real variant SKU. */
 function skuFor(flavor: FlavorKey, boxCount: number): string {
-  const prefix = flavor === "salty-lemon" ? "SL" : "W";
-  return `${prefix}${boxCount * 30}`;
+  // El prefijo sale del REGISTRO, no de un ternario. Con dos sabores el ternario
+  // `flavor === "salty-lemon" ? "SL" : "W"` era correcto por accidente; al entrar
+  // melocotón mandaba las cajas sueltas de peach con SKU W30 y Hive habría pickeado
+  // sandía. Ver FlavorDef.skuPrefix en seal-plans.ts.
+  return `${FLAVORS[flavor].skuPrefix}${boxCount * 30}`;
 }
 
 // ─── recomposición al cambiar el número de cajas ───────────────────────────────
