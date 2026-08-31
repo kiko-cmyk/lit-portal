@@ -12,7 +12,7 @@
  * la próxima vez que alguien añada un sabor.
  */
 import {
-  ALL_FLAVORS, FLAVORS, FLAVOR_KEYS, PACK4_BOXES, PACK4_VARIANTS,
+  ALL_FLAVORS, FLAVOR_KEYS, PACK4_BOXES, PACK4_VARIANTS,
   PACK4_BY_VARIANT, pack4VariantForComposition, variantForFlavorBox,
   BOX_COUNT_BY_VARIANT, FLAVOR_BY_VARIANT, type FlavorKey,
 } from "../src/lib/seal-plans";

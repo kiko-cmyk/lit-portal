@@ -425,17 +425,22 @@ export default function CollectionPage() {
                     : t({ en: "Complete the edition", es: "Completa la edición" })}
               </div>
               <h3 className="mb-2.5 font-display text-[26px] font-black uppercase leading-[0.95] tracking-[-0.02em]">
+                {/* Nombraba "Salty Peach" y prometia enterarse "antes que nadie". Salty Peach
+                    sale al publico el 2026-09-02, asi que dejo de ser verdad ese mismo dia.
+                    La recompensa sigue siendo la misma (acceso anticipado al proximo drop),
+                    solo se le quita el sabor concreto y la promesa de secreto, para que no
+                    haya que reescribirla en cada lanzamiento. */}
                 <T
-                  en="Early access to Salty Peach"
-                  es="Acceso anticipado a Salty Peach"
+                  en="Early access to the next drop"
+                  es="Acceso anticipado al próximo drop"
                 />
               </h3>
               <p
                 className={`mb-4 text-[13px] leading-[1.5] ${scenario === "complete" ? "text-[color:var(--color-lit-grey)]/80" : "text-[color:var(--color-warm-gray-lt)]"}`}
               >
                 <T
-                  en="Finish Edition 01 and you're first in line for the Salty Peach drop. Before anyone else hears it exists."
-                  es="Termina la Edición 01 y eres el primero en la gota de Salty Peach. Antes de que nadie se entere."
+                  en="Finish Edition 01 and you're first in line for the next drop."
+                  es="Termina la Edición 01 y eres el primero en el próximo drop."
                 />
               </p>
               <div
