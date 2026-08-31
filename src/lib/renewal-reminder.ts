@@ -53,7 +53,17 @@ import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
 import { runAsBackgroundJob } from "./http-timeout";
 import { klaviyo } from "./klaviyo";
-import { diffLines, type FlavorComposition, ladderTotalCents, planTargetLines, shortLabel } from "./mix";
+import {
+  diffLines,
+  type FlavorComposition,
+  centsToPrice,
+  ladderTotalCents,
+  MAX_BOXES,
+  planTargetLines,
+  repriceInPlace,
+  shortLabel,
+} from "./mix";
+import { BOX_COUNT_BY_VARIANT } from "./seal-plans";
 import { getLadderPrices } from "./pricing";
 import {
   extractFlavorSummary,
@@ -173,10 +183,40 @@ async function assertMixPrice(
   chargeDate: string,
 ): Promise<void> {
   try {
+    const lines = getLines(s);
+    if (!lines.length) return;
+
+    // ── DOS GUARDAS ANTES DE COMPARAR NADA (31-ago-2026) ──
+    //
+    // `boxCount` viene de getBoxCount, que CLAMPA a 6. Sin esto, la 13007758 (SL90×4
+    // = 12 cajas reales, cobra 271,72) se compararía contra el tramo de 6 (141,75),
+    // saldría como sobre-cobro de 129,97 y el heal le rebanaría 130 € a un cliente
+    // que paga exactamente la tarifa vieja por caja. Igual la 12752359 con 9 cajas.
+    const realBoxes = lines.reduce((sum, l) => sum + l.boxes, 0);
+    if (realBoxes !== boxCount || realBoxes > MAX_BOXES) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: ${realBoxes} cajas reales frente a ${boxCount} leídas ` +
+          `(clamp de getBoxCount) — fuera de lo que la escalera sabe tarificar, no se compara`,
+      );
+      return;
+    }
+    // Una variante fuera del registro cuenta como 1 caja del sabor por defecto (las
+    // "LIT Caja Regalo"), así que el número de cajas es una suposición y el precio
+    // que saldría de ella también.
+    const unmapped = lines
+      .map((l) => String(l.variantId))
+      .filter((v) => BOX_COUNT_BY_VARIANT[v] === undefined);
+    if (unmapped.length) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: variante(s) ${unmapped.join(", ")} fuera del registro ` +
+          `de cajas — su número de cajas no es fiable, no se compara`,
+      );
+      return;
+    }
+
     const prices = await getLadderPrices(composition[0].flavor);
     const expected = ladderTotalCents(boxCount, prices);
     const actual = getChargeTotalCents(s);
-    const lines = getLines(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
     if (Math.abs(actual - expected) <= lines.length) return;
@@ -211,17 +251,54 @@ async function assertMixPrice(
     const plan = planTargetLines(composition, prices);
     const diff = diffLines(lines, plan.lines);
     const isNewModelLineSet = !diff.adds.length && !diff.removes.length;
+
+    // ── CURAR EN SITIO EL MODELO VIEJO (31-ago-2026) ──
+    //
+    // Hasta hoy esta rama se rendía: un line-set del modelo viejo por encima de la
+    // escalera se dejaba tal cual "hasta que el cliente edite". Eso dejaba a 5 subs
+    // cobrando de más de forma indefinida (la 13089232 son 28,35 cada 2 meses) y
+    // ninguna se iba a curar sola, porque además el filtro de entrada las excluía.
+    //
+    // No se cura con `plan.lines`: eso es el line-set del CATÁLOGO, así que para la
+    // 13089232 significaría añadir el PACK4 y quitar tres líneas, o sea la ventana
+    // add+remove que cobró doble a 7 subs en junio. `repriceInPlace` mantiene las
+    // líneas y las cantidades y solo BAJA los precios por unidad, que es la condición
+    // que puso Kiko: solo puede bajar hacia el contrato.
+    let editsToApply = diff.edits.map((e) => ({
+      itemId: e.itemId,
+      quantity: e.quantity,
+      price: e.unitPrice,
+    }));
+    let healStrategy: "catalogo" | "en-sitio" = "catalogo";
+
     if (!isNewModelLineSet) {
-      console.warn(
-        `[${cfg.label}] sub ${s.id}: charge ${actual}c > escalera web ${expected}c pero el ` +
-          `line-set es del modelo viejo (pre-2026-08-22) — no se toca; se repreciará al ` +
-          `pack cuando el cliente edite cajas o mezcla`,
-      );
-      return;
+      const inPlace = repriceInPlace(lines, expected);
+      if (!inPlace) {
+        console.warn(
+          `[${cfg.label}] sub ${s.id}: charge ${actual}c > escalera web ${expected}c con line-set ` +
+            `del modelo viejo, y el reparto en sitio no es posible (alguna línea subiría de precio ` +
+            `o sus cajas no son múltiplo de su quantity) — no se toca`,
+        );
+        await alertSlackErrorAwaited({
+          path: cfg.path,
+          code: "mix_price_drift",
+          msg:
+            `sub ${s.id}: cobra ${actual}c y el tramo de ${boxCount} cajas es ${expected}c, pero no ` +
+            `se puede bajar en sitio sin reestructurar líneas. A mano. EL COBRO ENTRA ` +
+            `${chargeDate.slice(0, 10)}.`,
+        });
+        return;
+      }
+      healStrategy = "en-sitio";
+      editsToApply = inPlace.edits.map((e) => ({
+        itemId: e.itemId,
+        quantity: e.quantity,
+        price: centsToPrice(e.unitPriceCents),
+      }));
     }
 
     console.error(`[${cfg.label}] mix price drift`, {
-      sealId: s.id, actual, expected, boxCount, charge: chargeDate,
+      sealId: s.id, actual, expected, boxCount, charge: chargeDate, healStrategy,
     });
 
     // ── SELF-HEAL, only in the over-charge direction (aquí siempre lo es) ──
@@ -232,11 +309,8 @@ async function assertMixPrice(
     // edits-only por construcción (la guarda de arriba ya filtró adds/removes).
     let healed: "not-attempted" | "healed" | "failed" = "not-attempted";
     try {
-      if (diff.edits.length) {
-        await seal.editItems(
-          s.id,
-          diff.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
-        );
+      if (editsToApply.length) {
+        await seal.editItems(s.id, editsToApply);
         await new Promise<void>((r) => setTimeout(r, 1200));
         // Verify by reading back, never by trusting the mutation response.
         const after = await seal.getSubscriptionById(s.id);
@@ -329,7 +403,11 @@ async function runBucket(
     const boxCount = getBoxCount(s);
     const composition = getComposition(s);
 
-    if (cfg.checkMixPrice && getShape(s) === "split") {
+    // Antes solo se revisaban las subs SPLIT (`getShape(s) === "split"`, o sea 2+
+    // sabores), así que una sub de un solo sabor no se miraba JAMÁS, ni un PACK4
+    // nuevo. Por eso ninguna de las 5 que cobran de más se curaba nunca: todas son
+    // de un solo sabor. (Aviso de Kiko, 31-ago-2026.)
+    if (cfg.checkMixPrice) {
       await assertMixPrice(s, cfg, boxCount, composition, next.date);
     }
 

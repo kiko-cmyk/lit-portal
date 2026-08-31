@@ -6,6 +6,7 @@ import { Logo } from "@/components/Logo";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SignOutPill } from "@/components/SwitchAccount";
 import { useLang, useLangValue } from "@/lib/i18n";
+import { COLLECTION_ENABLED } from "@/lib/portal-link";
 import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
 import type { ReactNode } from "react";
 
@@ -28,6 +29,14 @@ const ITEMS: {
   { route: "account", en: "Account", es: "Cuenta" },
   { route: "collection", en: "Collection", es: "Colección", inactive: true },
 ];
+
+/** Lo que se pinta de verdad. La Colección está oculta mientras la función no exista
+ *  (COLLECTION_ENABLED en lib/portal-link.ts); antes salía como "Pronto", pero es una
+ *  pestaña que no lleva a nada. El nav móvil es un grid, así que el número de columnas
+ *  se calcula de aquí — si no, al quitar un item quedaba un hueco. */
+const VISIBLE_ITEMS = ITEMS.filter(
+  (it) => it.route !== "collection" || COLLECTION_ENABLED,
+);
 
 /** Line icons for the mobile bottom nav (20px, stroke = currentColor). */
 const NAV_ICONS: Record<string, ReactNode> = {
@@ -74,10 +83,10 @@ export function BottomNav() {
       // even on short pages like the no-subscription state. Estilo PRE: icono
       // por pestaña, activo en círculo amarillo (mismo lenguaje que la pastilla
       // activa del header desktop).
-      className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-3 border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-1.5 pb-5 backdrop-blur-md md:hidden"
+      className={`fixed bottom-0 left-0 right-0 z-40 grid ${VISIBLE_ITEMS.length === 2 ? "grid-cols-2" : "grid-cols-3"} border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-1.5 pb-5 backdrop-blur-md md:hidden`}
       aria-label="Primary"
     >
-      {ITEMS.map((it) => {
+      {VISIBLE_ITEMS.map((it) => {
         const active = current === it.route;
         const icon = NAV_ICONS[it.route];
         if (it.inactive) {
@@ -162,7 +171,7 @@ export function TopNav() {
           {accountOnly && <SignOutPill />}
           {!accountOnly && (
           <div className="inline-flex items-center gap-1 rounded-full border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)]/55 p-1 backdrop-blur-sm">
-          {ITEMS.map((it) => {
+          {VISIBLE_ITEMS.map((it) => {
             const active = current === it.route;
             const label = t({ en: it.en, es: it.es });
             if (it.inactive) {

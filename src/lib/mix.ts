@@ -552,6 +552,69 @@ export function diffLines(current: SubscriptionLine[], target: TargetLine[]): Li
   return { edits, adds, removes, noop: !edits.length && !adds.length && !removes.length };
 }
 
+/**
+ * Bajar el cobro de un contrato SIN reestructurar sus líneas (31-ago-2026).
+ *
+ * `planTargetLines` construye el line-set del CATÁLOGO, así que curar con él una sub
+ * del modelo viejo significa add + remove: exactamente la ventana que cobró doble a 7
+ * subs en junio-julio. Esto hace lo contrario: mantiene las líneas y las cantidades
+ * que hay, y solo BAJA los precios por unidad hasta que Σ precio × quantity cuadra
+ * con el objetivo. Todo edit_items, cero adds, cero removes, mismos item ids.
+ *
+ * El precio se reparte por CAJA y se convierte a precio por UNIDAD multiplicando por
+ * las cajas que lleva cada unidad de esa línea (SL30 = 1, SL60 = 2, SL90 = 3,
+ * PACK4 = 4). Repartir por caja y escribirlo como precio por unidad es el error que
+ * cobraría 21,26 en vez de 85,05 en una línea de pack.
+ *
+ * Devuelve null y no propone nada si algo no cuadra: sin líneas, objetivo no
+ * positivo, una línea cuyas cajas no son múltiplo de su quantity (no sabemos cuántas
+ * cajas lleva cada unidad), o si a alguna línea le SUBIRÍA el precio. Ese último es
+ * el invariante que pidió Kiko: esto solo puede bajar hacia el contrato.
+ */
+export interface InPlaceEdit {
+  itemId: number;
+  quantity: number;
+  unitPriceCents: number;
+}
+
+export function repriceInPlace(
+  lines: SubscriptionLine[],
+  targetTotalCents: number,
+): { edits: InPlaceEdit[]; totalCents: number } | null {
+  if (!lines.length) return null;
+  if (!Number.isInteger(targetTotalCents) || targetTotalCents <= 0) return null;
+
+  const totalBoxes = lines.reduce((sum, l) => sum + l.boxes, 0);
+  if (totalBoxes <= 0) return null;
+
+  const perBoxCents = Math.floor(targetTotalCents / totalBoxes);
+  if (perBoxCents <= 0) return null;
+
+  const proposed: Array<{ line: SubscriptionLine; quantity: number; unitPriceCents: number }> = [];
+  for (const l of lines) {
+    const quantity = Math.max(1, Number(l.quantity) || 1);
+    if (l.boxes <= 0 || l.boxes % quantity !== 0) return null;
+    const boxesPerUnit = l.boxes / quantity;
+    const unitPriceCents = perBoxCents * boxesPerUnit;
+    if (unitPriceCents <= 0) return null;
+    // NUNCA subir: si el precio vivo ya es menor o igual, esta función no es la
+    // herramienta (o no hay nada que bajar).
+    if (unitPriceCents > priceToCents(l.unitPrice)) return null;
+    proposed.push({ line: l, quantity, unitPriceCents });
+  }
+
+  const totalCents = proposed.reduce((sum, p) => sum + p.unitPriceCents * p.quantity, 0);
+  // El floor solo puede dejarlo por debajo del objetivo, nunca por encima; si sale
+  // por encima es un bug de esta función y vale más no proponer nada.
+  if (totalCents > targetTotalCents) return null;
+
+  const edits = proposed
+    .filter((p) => p.unitPriceCents !== priceToCents(p.line.unitPrice))
+    .map((p) => ({ itemId: p.line.itemId, quantity: p.quantity, unitPriceCents: p.unitPriceCents }));
+
+  return { edits, totalCents };
+}
+
 /** Σ quantity × unit price over lines, in cents. The money assertion compares this
  *  against the tier total. Deliberately NOT Seal's `total_value`, which nets out
  *  discount codes and would false-positive for anyone on the retention 15%. */

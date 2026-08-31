@@ -33,7 +33,7 @@ const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then(
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
-import { portalHref } from "@/lib/portal-link";
+import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
 import type {
   CustomerProfile,
   HubDashboard,
@@ -523,11 +523,18 @@ export default function HubPage() {
 
             <Marquee />
 
-            <SectionDivider title={t({ en: "Collection", es: "Colección" })} />
-            <CollectionMiniGrid
-              earned={collectionEarned}
-              href={portalHref(lang, "collection")}
-            />
+            {/* La Colección está oculta mientras la función no exista
+                (COLLECTION_ENABLED en lib/portal-link.ts). Este era el único enlace
+                CLICABLE a /coleccion: el del BottomNav ya salía como "Pronto". */}
+            {COLLECTION_ENABLED && (
+              <>
+                <SectionDivider title={t({ en: "Collection", es: "Colección" })} />
+                <CollectionMiniGrid
+                  earned={collectionEarned}
+                  href={portalHref(lang, "collection")}
+                />
+              </>
+            )}
           </>
         )}
       </main>

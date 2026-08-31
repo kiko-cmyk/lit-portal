@@ -37,6 +37,23 @@ const SLUGS: Record<Lang, Record<PortalRoute, string>> = {
   },
 };
 
+/**
+ * ¿Se muestra la Colección en el portal?
+ *
+ * `false` desde 2026-08-31 (Juan: "colections aun no esta habilitado, ocultemoslo
+ * del portal y listo de momento"). La página es la maqueta hi-fi: las cartas físicas
+ * todavía no se envían, `earnedCount` se deriva del número de envíos y las 12 cartas
+ * salen bloqueadas, así que no hay nada que el cliente pueda hacer ahí.
+ *
+ * Oculta las DOS entradas que había: el item del BottomNav y el bloque
+ * "Colección" de mi-lit. La ruta y la página siguen existiendo, así que
+ * reactivarlo es poner esto a `true` — no hay que reconstruir nada.
+ *
+ * Es una constante y no una env var a propósito: `lib/flags.ts` se resuelve en
+ * servidor y estos dos son componentes de cliente.
+ */
+export const COLLECTION_ENABLED = false;
+
 const BASE = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH ?? "";
 
 export function portalHref(locale: Lang, route: PortalRoute): string {
