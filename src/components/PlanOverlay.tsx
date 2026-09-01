@@ -23,13 +23,28 @@ export function PlanOverlay({
   subscription,
   onClose,
   onUpdated,
+  initialFrequency,
 }: {
   subscription: Subscription;
   onClose: () => void;
   onUpdated: (updated: Subscription) => void;
+  /**
+   * Cadencia preseleccionada al abrir. La usa el deep link
+   * `?action=plan&frequency=` que emite el formulario de perfilado como salida
+   * secundaria ("prefiero verlo yo"), para que el cliente aterrice con la
+   * propuesta ya marcada en vez de tener que buscarla.
+   *
+   * Solo cambia el valor INICIAL: a partir de ahí manda el cliente. Y como
+   * `hasChange` compara contra la suscripción, abrir así deja el botón de
+   * guardar activo desde el primer render, que es el comportamiento que se
+   * quiere aquí.
+   */
+  initialFrequency?: Frequency;
 }) {
   const [boxCount, setBoxCount] = useState<number>(subscription.boxCount);
-  const [frequency, setFrequency] = useState<Frequency>(subscription.frequency);
+  const [frequency, setFrequency] = useState<Frequency>(
+    initialFrequency ?? subscription.frequency,
+  );
   const [pricing, setPricing] = useState<PricingWithCompare | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
