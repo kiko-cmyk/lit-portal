@@ -35,8 +35,10 @@ import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref } from "@/lib/portal-link";
+import { FREQUENCIES } from "@/lib/plan-options";
 import type {
   CustomerProfile,
+  Frequency,
   HubDashboard,
   Subscription,
   TimelineEntry,
@@ -63,6 +65,7 @@ export default function HubPage() {
   const [showFlavor, setShowFlavor] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [showSurvey, setShowSurvey] = useState(false);
+  const [planInitialFrequency, setPlanInitialFrequency] = useState<Frequency | undefined>();
   const [showChargeNow, setShowChargeNow] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [reactivating, setReactivating] = useState(false);
@@ -95,6 +98,15 @@ export default function HubPage() {
     // de mutación, este NO se gatea con `!isPaused`: de un cliente pausado es
     // justo de quien más interesa aprender, y contestar no toca su suscripción.
     if (action === "survey") setShowSurvey(true);
+    // Salida secundaria de la propuesta de cadencia ("prefiero verlo yo"), y de
+    // paso sirve para un email de seguimiento. La cadencia se valida contra la
+    // lista canónica: un `?frequency=` inventado se ignora y el overlay abre con
+    // la del cliente, nunca con un valor que Seal no vende.
+    if (action === "plan") {
+      const f = params.get("frequency");
+      if (f && FREQUENCIES.some((x) => x.value === f)) setPlanInitialFrequency(f as Frequency);
+      setShowPlan(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -567,6 +579,7 @@ export default function HubPage() {
       {showPlan && !isPaused && (
         <PlanOverlay
           subscription={sub}
+          initialFrequency={planInitialFrequency}
           onClose={() => setShowPlan(false)}
           onUpdated={handlePlanUpdated}
         />
