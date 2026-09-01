@@ -40,3 +40,24 @@ export function longerFrequencies(current: Frequency): Frequency[] {
   const cur = FREQUENCY_DAYS[current];
   return FREQUENCIES.map((f) => f.value).filter((f) => FREQUENCY_DAYS[f] > cur);
 }
+
+/**
+ * La cadencia vendible más larga que CABE en `days`, o null si no hay ninguna
+ * (o sea, si `days` es menor que 15).
+ *
+ * Redondea SIEMPRE hacia abajo, y eso no es una preferencia estética. La
+ * escalera no es uniforme (15·30·45·60·90·120·150·180: pasos de 15 hasta los 60
+ * días y de 30 a partir de ahí), así que hay combinaciones que caen justo entre
+ * dos escalones — 3 cajas que duran mes y medio son 135 días, empatados a 15 de
+ * `4mo` y de `5mo`. Hacia abajo el cliente recibe un poco antes de agotarse y le
+ * sobra algo, que es el statu quo y se arregla saltándose un envío. Hacia arriba
+ * se queda SIN producto entre entregas, y encima justo después de habernos
+ * pedido ayuda. Ese error no se recupera.
+ */
+export function longestFrequencyWithin(days: number): Frequency | null {
+  let best: Frequency | null = null;
+  for (const { value } of FREQUENCIES) {
+    if (FREQUENCY_DAYS[value] <= days) best = value;
+  }
+  return best;
+}

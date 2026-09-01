@@ -59,6 +59,13 @@ export type DropsAction =
   | "event_checkin"
   | "reward_claim"
   | "cancel_reset"
+  // Formulario de perfilado del área personal. Sustantivo como el resto
+  // (product_review, social_share, whatsapp_optin). OJO: esta unión, el
+  // `DROPS_AMOUNTS` de lib/drops.ts y el CHECK de `drops_events.action` en
+  // Postgres tienen que decir lo mismo. Los dos primeros los ata el compilador
+  // (DROPS_AMOUNTS es un Record<DropsAction, …>); el tercero NO, y si falta en
+  // producción el INSERT revienta DESPUÉS de que el cliente haya contestado.
+  | "profile_survey"
   | "manual_adjustment";
 
 export type RewardId = "bottle_500" | "merch_1000" | "event_2500";
