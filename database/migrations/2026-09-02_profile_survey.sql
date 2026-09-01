@@ -76,6 +76,15 @@ create table if not exists profile_survey_answers (
   -- Se pone a NULL en CADA edición. Sin eso, corregir una respuesta ya
   -- sincronizada la dejaría congelada en Klaviyo con el valor viejo: es el bug
   -- LIT-397 del CS Platform, y aquí nace cerrado.
+  --
+  -- Lápida: el cliente pidió que retiráramos sus respuestas. NO se borra la
+  -- fila, y esa es la parte contraintuitiva. Medido contra la API el
+  -- 2026-09-01: `/profile-import/` no puede ELIMINAR una propiedad de Klaviyo,
+  -- solo vaciarla. Así que hace falta que alguien vaya y escriba "" en cada
+  -- cs_*, y ese alguien es el cron, que necesita saber a quién. Si la fila
+  -- desapareciera, el dato seguiría vivo en Klaviyo para siempre: el peor final
+  -- posible para una petición de borrado.
+  deleted_at         timestamptz,
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now()
 );
