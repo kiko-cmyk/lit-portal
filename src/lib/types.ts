@@ -429,6 +429,12 @@ export interface HubDashboard {
   };
   nextEvent: EventListItem | null;
   /**
+   * Perfilado: si este cliente puede ver la tarjeta del formulario y si ya lo
+   * contestó. Se resuelve SERVER-SIDE (el flag y su allowlist nunca llegan al
+   * navegador, misma convención que el resto de flags del repo).
+   */
+  profileSurvey: { enabled: boolean; answered: boolean };
+  /**
    * All upcoming shipments Seal has scheduled (pending billing attempts).
    * Excludes the next one already surfaced via `subscription.nextShipDate`.
    * Sorted by date ascending. Seal typically pre-schedules 5–6 in advance.

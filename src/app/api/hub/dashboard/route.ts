@@ -2,6 +2,7 @@ import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { langFromRequest } from "@/lib/request-lang";
 import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
+import { profileSurveyEnabledFor } from "@/lib/flags";
 import { getNextBillingAttempt, mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -269,11 +270,36 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       boxNumber: completedCount + 2 + idx,
     }));
 
+  // Perfilado. Va DENTRO de esta respuesta y no en una llamada aparte: el Hub
+  // ya hace varias en paralelo y añadir un round-trip para pintar una tarjeta
+  // retrasa la pantalla entera. `answered` sale de la lápida además de la fila,
+  // para que a quien pidió el borrado no se le vuelva a ofrecer como si nunca
+  // hubiera contestado.
+  let profileSurvey = { enabled: false, answered: false };
+  try {
+    if (profileSurveyEnabledFor(ctx.customerId)) {
+      const { data: psRow } = await sb
+        .from("profile_survey_answers")
+        .select("answers, deleted_at")
+        .eq("customer_id", ctx.customerId)
+        .maybeSingle();
+      const answered =
+        !!psRow && !psRow.deleted_at && Object.keys(psRow.answers ?? {}).length > 0;
+      profileSurvey = { enabled: true, answered };
+    }
+  } catch (err) {
+    // Si la tabla aún no existe en este entorno, la tarjeta no se enseña y el
+    // Hub carga igual. Nunca al revés: un formulario opcional no puede tumbar
+    // la pantalla principal del área personal.
+    console.warn("[hub-dashboard] profile survey lookup failed:", err);
+  }
+
   return {
     subscription,
     drops: { balance, tierEarned, activeReward, tierEarnedAt, dropsReleaseAt },
     nextEvent,
     upcomingShipments,
     reanchorPending,
+    profileSurvey,
   };
 });

@@ -30,6 +30,7 @@ const FlavorOverlay = dynamic(() => import("@/components/FlavorOverlay").then((m
 const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
+const ProfileSurveyOverlay = dynamic(() => import("@/components/ProfileSurveyOverlay").then((m) => m.ProfileSurveyOverlay));
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
@@ -61,6 +62,7 @@ export default function HubPage() {
   const [showPlan, setShowPlan] = useState(false);
   const [showFlavor, setShowFlavor] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
+  const [showSurvey, setShowSurvey] = useState(false);
   const [showChargeNow, setShowChargeNow] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [reactivating, setReactivating] = useState(false);
@@ -86,7 +88,13 @@ export default function HubPage() {
   // pathname+search, así que el `?action=skip` sobrevive al OAuth.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("action") === "skip") setShowSkip(true);
+    const action = params.get("action");
+    if (action === "skip") setShowSkip(true);
+    // El email de la campaña apunta aquí. Igual que `skip`, sobrevive al OAuth
+    // porque LoginScreen preserva pathname+search. A diferencia de los overlays
+    // de mutación, este NO se gatea con `!isPaused`: de un cliente pausado es
+    // justo de quien más interesa aprender, y contestar no toca su suscripción.
+    if (action === "survey") setShowSurvey(true);
   }, []);
 
   useEffect(() => {
@@ -506,6 +514,21 @@ export default function HubPage() {
                 onClick={() => setShowFlavor(true)}
                 disabled={sub.withinCutoff}
               />
+              {/* Perfilado. `enabled` y `answered` los resuelve el servidor en la
+                  respuesta del Hub, así que el flag y su allowlist nunca llegan
+                  al navegador. Desaparece en cuanto ha contestado: una llamada a
+                  la acción que sigue ahí después de hacerla es ruido. */}
+              {data.profileSurvey?.enabled && !data.profileSurvey.answered && (
+                <QuickActionButton
+                  icon={QAIcons.Skip}
+                  label={t({ en: "Tell us about you", es: "Cuéntanos sobre ti" })}
+                  sub={t({
+                    en: "9 questions, one minute, +50 drops",
+                    es: "9 preguntas, un minuto, +50 drops",
+                  })}
+                  onClick={() => setShowSurvey(true)}
+                />
+              )}
             </section>
 
             <SectionDivider
@@ -603,6 +626,19 @@ export default function HubPage() {
             });
             setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
           }}
+        />
+      )}
+      {/* NO va gateado con `!isPaused`, a diferencia de los overlays de mutación:
+          contestar no toca la suscripción, y de un cliente pausado es justo de
+          quien más interesa aprender. */}
+      {showSurvey && (
+        <ProfileSurveyOverlay
+          subscription={sub}
+          onClose={() => {
+            setShowSurvey(false);
+            api<HubDashboard>("/api/hub/dashboard").then(setData).catch(() => {});
+          }}
+          onSubscriptionUpdated={handlePlanUpdated}
         />
       )}
       {showCancel && !isPaused && (
