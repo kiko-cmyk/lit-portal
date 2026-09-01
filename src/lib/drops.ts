@@ -16,6 +16,11 @@ export const DROPS_AMOUNTS: Record<DropsAction, number | null> = {
   event_checkin: 100, // Phase 2 only
   reward_claim: 0, // negative amount written explicitly
   cancel_reset: 0, // negative amount written explicitly
+  // Mismo importe que `whatsapp_optin`, que es el precedente literal de la casa
+  // para "puntos por dar un dato". Plano y sin bonus por contestarlo todo: un
+  // extra por completar convertiría "prefiero no decirlo" en una multa, y con
+  // dinero de por medio el consentimiento dejaría de ser libre.
+  profile_survey: 50,
   manual_adjustment: null, // any
 };
 

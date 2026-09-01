@@ -140,10 +140,15 @@ create table if not exists subscription_states (
 create table if not exists drops_events (
   id           uuid primary key default uuid_generate_v4(),
   customer_id  text not null,
+  -- OJO: este CHECK es inline, así que en una base que YA existe editarlo aquí
+  -- no hace nada. Ampliar el conjunto exige además el drop+add explícito de
+  -- database/migrations/2026-09-02_profile_survey.sql, pegado a mano en el SQL
+  -- Editor. Esto de aquí solo sirve para que un run limpio dé el estado final.
   action       text not null check (action in (
                   'box_shipped','referral_converted','monthly_streak',
                   'product_review','social_share','whatsapp_optin',
-                  'event_checkin','reward_claim','cancel_reset','manual_adjustment'
+                  'event_checkin','reward_claim','cancel_reset','manual_adjustment',
+                  'profile_survey'
                 )),
   amount       int  not null,
   metadata     jsonb,
@@ -481,5 +486,7 @@ alter table charge_now_locks       enable row level security;
 -- there. They are NOT created here, so don't add their ALTER statements to
 -- this file or a fresh standalone run would fail. (Supabase flagged both as
 -- rls_disabled on 2026-05-25; fixed 2026-05-27.)
+-- Lo mismo con profile_survey_answers (database/migrations/2026-09-02_profile_survey.sql):
+-- se crea allí y habilita RLS allí.
 
 -- No public policies — all access via service role from API routes.

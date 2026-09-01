@@ -155,6 +155,15 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
      */
     preserveNextShipDate?: string | null;
     /**
+     * Quién originó el cambio. `portal` por defecto (el cliente lo tocó a mano
+     * en la pantalla de plan). El formulario de perfilado manda
+     * `profile_survey`, que es lo que permite responder "¿cuántos cambios de
+     * cadencia salieron de la encuesta?" desde `subscription_changes`, sin
+     * depender de Klaviyo ni de cruzar por fechas. Antes iba hardcodeado y esa
+     * pregunta no tenía respuesta.
+     */
+    source?: string;
+    /**
      * Re-anchor policy after a frequency change:
      *   - "preserve" (default): keep the current next-ship date (don't move the
      *     imminent order or undo a prior skip). This is the normal plan-change
@@ -732,7 +741,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
           chargedCents: targetPlan.totalCents,
           residualCents: targetPlan.residualCents,
           diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
-          source: "portal",
+          source: body.source ?? "portal",
         },
         applies_from: effectivePreserveYYYYMMDD,
       });

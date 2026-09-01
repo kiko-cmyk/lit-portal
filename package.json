@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-mix.ts && tsx scripts/test-request-deadline.ts && tsx scripts/test-seal-retry.ts && tsx scripts/test-address-core.ts",
+    "test": "tsx scripts/test-mix.ts && tsx scripts/test-request-deadline.ts && tsx scripts/test-seal-retry.ts && tsx scripts/test-address-core.ts && tsx scripts/test-profile-survey.ts",
     "smoke": "tsx scripts/smoke.ts",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:dry": "tsx scripts/migrate.ts --dry",
