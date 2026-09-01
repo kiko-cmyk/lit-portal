@@ -19,13 +19,16 @@
  */
 
 export const SURVEY_CONSENT = {
-  version: 1,
+  // v2: la frase nombra al responsable del tratamiento por su razón social.
+  // Se sube la versión en vez de editar en su sitio: quien ya hubiera aceptado
+  // la v1 aceptó otra frase, y el registro tiene que poder distinguirlas.
+  version: 2,
   es:
-    "Doy permiso a LIT para usar estas respuestas para personalizar lo que me manda: " +
+    "Doy permiso a LIT Hydration España S.L. para usar estas respuestas para personalizar lo que me manda: " +
     "emails, ofertas y recomendaciones de producto. Puedo retirarlo cuando quiera " +
     "escribiendo a hola@litsalt.com.",
   en:
-    "I give LIT permission to use these answers to personalise what it sends me: " +
+    "I give LIT Hydration España S.L. permission to use these answers to personalise what it sends me: " +
     "emails, offers and product recommendations. I can withdraw it any time by " +
     "writing to hola@litsalt.com.",
 } as const;
@@ -34,9 +37,18 @@ export const SURVEY_CONSENT = {
  * El aviso que va ENCIMA del formulario. No es el consentimiento (eso es la
  * casilla): es la información previa, y por eso no se versiona igual.
  *
- * PENDIENTE antes de lanzar: la razón social exacta. "El equipo de LIT" no basta
- * para el RGPD y no está en ninguno de los tres repos, así que tiene que salir de
- * la política de privacidad de la web o de finanzas.
+ * La razón social sale de la política de privacidad de litsalt.com, leída el
+ * 2026-09-01: LIT Hydration España S.L., en Madrid. El CIF no aparece publicado
+ * ahí; si algún día hace falta en este aviso, se pide a finanzas.
+ *
+ * 🔴 AVISO QUE NO ES DE ESTE FORMULARIO PERO LO TOCA. La política de privacidad
+ * dice hoy, literalmente: "Almacenamos los datos en servidores seguros ubicados
+ * en la Unión Europea". Es FALSO: Klaviyo guarda los datos en Estados Unidos, y
+ * lleva años haciéndolo. Este formulario no crea el problema, pero enlazar a esa
+ * página desde aquí lo empeora, porque le estaríamos diciendo al cliente
+ * "tus respuestas van a Estados Unidos" y a un clic "tus datos están en la UE".
+ * Por eso el bullet de abajo dice dónde acaban DE VERDAD. Corregir la política
+ * es una tarea aparte y de la web, no de aquí.
  */
 export const SURVEY_NOTICE = {
   es: {
@@ -45,7 +57,7 @@ export const SURVEY_NOTICE = {
       "lo mismo que a todo el mundo.",
     bullets: [
       "Todas son opcionales, y te llevas los 50 drops contestes lo que contestes.",
-      "Quién las ve: el equipo de LIT. No vendemos tus respuestas.",
+      "Quién las trata: LIT Hydration España S.L. No vendemos tus respuestas.",
       "Dónde acaban: en nuestra base de datos y en Klaviyo, la herramienta con la que " +
         "te escribimos, que guarda los datos en Estados Unidos.",
       "Cuánto las guardamos: mientras tengas cuenta con nosotros.",
@@ -58,7 +70,7 @@ export const SURVEY_NOTICE = {
       "you the same as everyone else.",
     bullets: [
       "All of them are optional, and you get the 50 drops whatever you answer.",
-      "Who sees them: the LIT team. We don't sell your answers.",
+      "Who handles them: LIT Hydration España S.L. We don't sell your answers.",
       "Where they end up: in our database and in Klaviyo, the tool we email you with, " +
         "which stores data in the United States.",
       "How long we keep them: as long as you have an account with us.",
