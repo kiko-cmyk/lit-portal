@@ -18,6 +18,10 @@
  * cliente (decisión de Juan, 2026-08-22).
  *
  *   SEAL_API_TOKEN=... npx tsx scripts/audit-ladder-drift.ts [salida.json]
+ *
+ * Con --slack manda además el resumen a Slack, para poder engancharlo a un cron
+ * semanal y que la población de la escalera vieja deje de ser invisible: hoy la
+ * única forma de saber si crece o mengua es que alguien se acuerde de correrlo.
  */
 
 import { writeFileSync } from "node:fs";
@@ -33,6 +37,7 @@ import {
 import { compositionLabel, ladderTotalCents, type LadderPrices } from "../src/lib/mix";
 import { BOX_COUNT_BY_VARIANT } from "../src/lib/seal-plans";
 import { supabaseAdmin } from "../src/lib/supabase";
+import { alertSlackNoticeAwaited } from "../src/lib/alert";
 
 if (!process.env.SEAL_API_TOKEN) throw new Error("SEAL_API_TOKEN required");
 
@@ -165,6 +170,28 @@ async function main() {
 
   writeFileSync(OUT, JSON.stringify(rows, null, 1));
   console.log(`\nDetalle completo: ${OUT}`);
+
+  // Resumen a Slack (opt-in con --slack). PRECIO_PISADO va el primero porque es el
+  // único que exige acción: un contrato con precio preservado que ya no lo cobra
+  // significa que Seal le ha pisado una línea y el cliente paga de más.
+  if (process.argv.includes("--slack")) {
+    const pisados = by("PRECIO_PISADO");
+    await alertSlackNoticeAwaited({
+      title: pisados.length
+        ? `⚠️ ${pisados.length} contrato(s) con el precio preservado PISADO`
+        : "Censo de la escalera vieja",
+      fields: {
+        "precio pisado (URGENTE)": preservedAvailable ? pisados.length : "no comprobado",
+        "por debajo del catálogo": by("POR_DEBAJO").length,
+        "por encima": by("POR_ENCIMA").length,
+        "alineadas": by("ALINEADA").length,
+        "a revisar (fuera de registro)": by("REVISAR").length,
+        "con precio preservado": preservedAvailable ? preservedBySealId.size : "no comprobado",
+        "subs afectadas": pisados.length ? pisados.map((r) => r.subId).join(", ") : undefined,
+      },
+    });
+    console.log("resumen enviado a Slack");
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -572,6 +572,12 @@ async function runBucket(
     return customerId ? langByCustomer.get(customerId) ?? "es" : "es";
   };
 
+  // OJO SI AÑADES UN IMPORTE AQUÍ: tiene que salir de getChargeTotalCents(s) o de
+  // preserved_charge_cents, NUNCA de ladderTotalCents (importado en este mismo fichero
+  // para el chequeo de precios). Desde el 3-sep-2026 hay ~533 contratos que pagan por
+  // debajo del catálogo, así que la escalera diría 85,05 en un email cuya tarjeta se
+  // va a cobrar 67,93. Hoy el payload no lleva precio y por eso ningún email puede
+  // contradecir al cobro.
   const eventProps = (c: Candidate, locale: string): Record<string, unknown> => ({
     hoursBefore: cfg.hoursBefore,
     sealSubscriptionId: c.sealId,

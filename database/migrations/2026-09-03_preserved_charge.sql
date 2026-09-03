@@ -36,3 +36,11 @@ alter table subscriptions
 
 comment on column subscriptions.preserved_charge_cents is
   'INTENCIÓN: el importe que este contrato tiene derecho a pagar por entrega tras conservarle el precio de la escalera vieja al cambiar de sabor. NULL = paga catálogo. Distinto de charge_total_cents, que es la OBSERVACIÓN de lo que Seal cobra y que un reseteo de precio de Seal actualizaría sin avisar.';
+
+-- RLS: `subscriptions` ya tiene row level security activada (database/schema.sql:463)
+-- con 0 políticas, o sea acceso solo con service role. Esta columna hereda esa
+-- postura y no necesita política nueva; se deja dicho porque es un dato de dinero por
+-- cliente y la regla del proyecto es que toda migración se pronuncie sobre RLS.
+-- Verificar tras aplicar:
+--   select relrowsecurity from pg_class where relname = 'subscriptions';  -- t
+--   select count(*) from pg_policies where tablename = 'subscriptions';   -- 0

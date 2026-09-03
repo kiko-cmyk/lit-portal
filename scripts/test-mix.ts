@@ -701,6 +701,21 @@ eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, -100), null, "importe
      "con el objetivo preservado, el cron la considera OK y no la toca");
 }
 
+
+// La oferta "mitad y mitad" de CancelTakeover promete POR ESCRITO "el mismo precio".
+// Eso solo se cumple si el reparto suma las mismas cajas, porque el backend conserva
+// el precio unicamente cuando el nº de cajas no cambia. Se fija aqui para que un
+// cambio en ese reparto rompa un test y no una promesa al cliente.
+{
+  for (let boxes = 2; boxes <= 6; boxes++) {
+    const half = [
+      { flavor: L, boxes: Math.ceil(boxes / 2) },
+      { flavor: W, boxes: Math.floor(boxes / 2) },
+    ];
+    eq(mixBoxCount(half), boxes, `mitad y mitad de ${boxes} cajas suma ${boxes} (promesa "mismo precio")`);
+  }
+}
+
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);
 if (failures.length) {

@@ -447,6 +447,16 @@ function Solucion({
       n < boxCount &&
       (!pricing || curPrice === null || pricing.perBox[n - 1] < curPrice),
   );
+  // ¿Este contrato paga por debajo del catálogo (escalera vieja)? Entonces cambiar el
+  // nº de cajas le mueve a la tarifa de hoy y NO puede volver: un trimestral a 67,93
+  // que baja a 2 cajas ahorra de verdad, pero si mañana quiere volver a 3 le costarán
+  // 85,05, no 67,93. Ofrecerle el ahorro sin decirle eso, y encima en el momento en
+  // que se iba a ir, es venderle una puerta de un solo sentido como si fuera un
+  // descuento. El aviso se calcula contra el catálogo de SU nº de cajas actual.
+  const belowCatalogue =
+    curPrice !== null && pricing !== null
+      ? curPrice < (pricing.perBox[boxCount - 1] ?? curPrice) - 0.005
+      : false;
   const [offerBoxes, setOfferBoxes] = useState<number>(1);
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
   const hasPackPrice =
@@ -563,6 +573,12 @@ function Solucion({
     const halfAndHalf =
       boxes >= 2 && subscription?.canEditMix && currentFlavorKey !== offerFlavor
         ? [
+            // ceil + floor SUMA EXACTAMENTE `boxes`, y de eso depende la promesa
+            // escrita de abajo ("el mismo precio"): el backend solo conserva el precio
+            // del contrato cuando el nº de cajas NO cambia (boxCountUnchanged en
+            // /api/subscription/plan). Si alguien cambia este reparto por uno que no
+            // sume igual (una caja de regalo, por ejemplo), la promesa se convierte en
+            // un reprecio silencioso a catálogo. Cubierto en scripts/test-mix.ts.
             { flavor: currentFlavorKey, boxes: Math.ceil(boxes / 2) },
             { flavor: offerFlavor, boxes: Math.floor(boxes / 2) },
           ]
@@ -719,6 +735,14 @@ function Solucion({
                 <span className="text-sm line-through opacity-50">€{curPrice.toFixed(2)}</span>
               )}
             </div>
+            {belowCatalogue && (
+              <p className="mt-3 text-[11px] leading-relaxed opacity-70">
+                <T
+                  en="Heads up: you're on an older price. If you change the number of boxes you move to the current tariff, and going back to your boxes later would cost today's price."
+                  es="Ojo: tienes un precio antiguo. Si cambias el número de cajas pasas a la tarifa actual, y volver luego a tus cajas te costaría el precio de hoy."
+                />
+              </p>
+            )}
           </div>
         )}
         {errorBox}

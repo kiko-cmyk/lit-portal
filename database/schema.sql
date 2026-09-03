@@ -48,6 +48,10 @@ alter table subscriptions add column if not exists composition jsonb;
 alter table subscriptions add column if not exists shape text not null default 'packed';
 alter table subscriptions add column if not exists line_count int not null default 1;
 alter table subscriptions add column if not exists charge_total_cents int;
+-- INTENCIÓN, no observación: lo que este contrato tiene derecho a pagar cuando se le
+-- conservó el precio de la escalera vieja al cambiar de sabor. NULL = paga catálogo.
+-- Ver database/migrations/2026-09-03_preserved_charge.sql.
+alter table subscriptions add column if not exists preserved_charge_cents int;
 
 create index if not exists idx_subscriptions_status on subscriptions(status);
 create index if not exists idx_subscriptions_next_ship on subscriptions(next_ship_date);
