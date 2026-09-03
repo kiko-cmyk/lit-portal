@@ -655,6 +655,31 @@ console.log("\n=== planPreservingCharge ===");
 eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, 0), null, "importe 0: null");
 eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, -100), null, "importe negativo: null");
 
+
+// EL RIESGO QUE INTRODUCE PRESERVAR: una vez preservada, la sub lleva las variantes
+// CANONICAS del modelo nuevo, asi que su line-set es indistinguible del de una sub
+// nueva. Si el cron comparara contra el CATALOGO y Seal le pisara un precio, la
+// "curaria" SUBIENDOLE el precio. Por eso assertMixPrice compara contra el importe
+// preservado y desarma la rama de cura a catalogo (isNewModelLineSet).
+{
+  const pres = planPreservingCharge([{ flavor: W, boxes: 6 }], LADDER, 12474)!;
+  const presLines: SubscriptionLine[] = pres.lines.map((l, i) => ({
+    itemId: 700 + i, productId: l.productId, variantId: l.variantId, flavor: l.flavor,
+    boxes: l.boxes, quantity: l.quantity, unitPrice: (l.unitPriceCents / 100).toFixed(2),
+    sellingPlanId: PLAN,
+  }));
+  eq(pres.totalCents, 12474, "preservada 6 cajas: conserva los 124,74");
+  // El line-set ES el del catalogo: de ahi el peligro.
+  const d = diffLines(presLines, planTargetLines([{ flavor: W, boxes: 6 }], LADDER).lines);
+  eq(d.adds.length === 0 && d.removes.length === 0, true,
+     "preservada: su line-set es variant-identico al del catalogo (solo cambia el precio)");
+  eq(planTargetLines([{ flavor: W, boxes: 6 }], LADDER).totalCents, 14175,
+     "…y curar por ese camino le cobraria 141,75 en vez de 124,74");
+  // Con el importe preservado como objetivo, el cron la ve correcta.
+  eq(Math.abs(chargeTotalCents(presLines) - 12474) <= presLines.length, true,
+     "con el objetivo preservado, el cron la considera OK y no la toca");
+}
+
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);
 if (failures.length) {

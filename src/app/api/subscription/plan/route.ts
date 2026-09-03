@@ -608,6 +608,10 @@ const patchPlan = async (
   // SL120 a 90,57 contra el pack a 85,05), gana el catálogo y el cliente se beneficia.
   const liveChargeCents = chargeTotalCents(currentLines);
   const boxCountUnchanged = currentLines.length > 0 && targetBoxCount === mixBoxCount(currentComposition);
+  // Cambió de verdad el nº de cajas respecto al contrato vivo. Con esto se limpia el
+  // precio preservado: quien compra otra cantidad pasa a catálogo, que es su precio
+  // legítimo para esa cantidad.
+  const boxCountChangedFromLive = currentLines.length > 0 && !boxCountUnchanged;
   let pricePreservedFromCents: number | null = null;
   if (compositionChanged && boxCountUnchanged && targetPlan.totalCents > liveChargeCents) {
     // `ladderPrices` está poblado en esta rama: compositionChanged es la única forma de
@@ -1479,6 +1483,34 @@ const patchPlan = async (
     // detector que cruce el ledger contra Seal necesita esta distinción, o marca como
     // descuadre todo lo que se quedó a medias. (24-ago-2026)
     await writeAudit("verified");
+
+    // ───── Guardar (o limpiar) el precio preservado ─────
+    //
+    // Seal ya ha confirmado lo que escribimos, así que este es el único punto donde
+    // decir "este contrato tiene derecho a pagar X" es cierto.
+    //
+    // Hace falta porque, una vez preservado, el line-set es idéntico al de una sub
+    // nueva legítima: si Seal reseteara una línea al precio de catálogo, la sub
+    // aterrizaría EXACTAMENTE en la escalera web y ni el cron ni la auditoría lo
+    // verían (comparan contra la escalera). Guardar la intención es lo que permite
+    // distinguir un precio preservado de una corrupción de Seal.
+    //
+    // Se limpia a NULL cuando el cliente cambia de nº de cajas: ahí compra otra
+    // cantidad y el catálogo pasa a ser su precio legítimo.
+    // Best effort, nunca fatal: el cambio ya está aplicado y verificado en Seal, y
+    // fallar aquí solo nos deja sin la señal, no le rompe nada al cliente.
+    if (pricePreservedFromCents !== null || boxCountChangedFromLive) {
+      try {
+        const { error } = await supabaseAdmin()
+          .from("subscriptions")
+          .update({ preserved_charge_cents: pricePreservedFromCents !== null ? targetPlan.totalCents : null })
+          .eq("customer_id", ctx.customerId)
+          .eq("seal_subscription_id", String(sealSubscriptionId));
+        if (error) log("preserved-charge-write-failed", { msg: error.message });
+      } catch (e) {
+        log("preserved-charge-write-threw", { msg: e instanceof Error ? e.message : String(e) });
+      }
+    }
 
     // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
     //

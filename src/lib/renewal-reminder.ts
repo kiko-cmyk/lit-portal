@@ -182,6 +182,10 @@ async function assertMixPrice(
   boxCount: number,
   composition: FlavorComposition[],
   chargeDate: string,
+  /** Lo que este contrato tiene DERECHO a pagar, si se le conservó el precio de la
+   *  escalera vieja al cambiar de sabor (subscriptions.preserved_charge_cents).
+   *  null = paga catálogo y la escalera es su referencia. */
+  preservedChargeCents: number | null,
 ): Promise<PriceCheckOutcome> {
   try {
     const lines = getLines(s);
@@ -216,7 +220,21 @@ async function assertMixPrice(
     }
 
     const prices = await getLadderPrices(composition[0].flavor);
-    const expected = ladderTotalCents(boxCount, prices);
+    const catalogueCents = ladderTotalCents(boxCount, prices);
+    // ── EL OBJETIVO ES EL CONTRATO, NO SIEMPRE LA ESCALERA (3-sep-2026) ──
+    //
+    // A un contrato con precio preservado la escalera NO le aplica: tiene derecho a
+    // pagar lo suyo. Comparar contra la escalera aquí tendría dos efectos malos, y el
+    // segundo es el grave:
+    //   - por debajo: se le clasificaría "por-debajo" para siempre (inofensivo pero
+    //     ciego, porque es su estado correcto, no una anomalía).
+    //   - por ENCIMA: si Seal le pisara una línea al precio de catálogo, el line-set
+    //     preservado es idéntico al de una sub nueva legítima, así que `isNewModelLineSet`
+    //     sería true y esta función le "curaría" SUBIÉNDOLE el precio hasta el catálogo.
+    //     Justo lo contrario de lo que existe para hacer. Antes de preservar precios eso
+    //     no era alcanzable: el line-set viejo (SL90/SL180) daba adds+removes y caía en
+    //     la rama de curar en sitio.
+    const expected = preservedChargeCents ?? catalogueCents;
     const actual = getChargeTotalCents(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
@@ -249,7 +267,12 @@ async function assertMixPrice(
     // viejo por encima de la escalera (SL120 @90,57 > 85,05) se deja tal cual.
     const plan = planTargetLines(composition, prices);
     const diff = diffLines(lines, plan.lines);
-    const isNewModelLineSet = !diff.adds.length && !diff.removes.length;
+    // Un contrato con precio preservado NUNCA se cura con `plan.lines`: esas líneas van
+    // a precio de CATÁLOGO, así que "curarlo" por ahí sería subirle el precio hasta lo
+    // que este cambio existe para no cobrarle. Sus líneas ya son las correctas; lo único
+    // que puede estar mal es el precio, y eso se arregla en sitio (solo edit_items).
+    const isNewModelLineSet =
+      preservedChargeCents === null && !diff.adds.length && !diff.removes.length;
 
     // ── CURAR EN SITIO EL MODELO VIEJO (31-ago-2026) ──
     //
@@ -413,6 +436,31 @@ async function runBucket(
   //    rather than remind a truncated slice of the book.)
   const subs = await seal.listAllSubscriptions();
 
+  // Los importes preservados de toda la cartera, en UNA consulta: el bucle recorre
+  // cientos de subs y no vamos a pedir una fila por cada una. Si la consulta falla, el
+  // mapa queda vacío y assertMixPrice compara contra el catálogo, que es exactamente el
+  // comportamiento anterior a este campo: se pierde precisión, no se rompe la tirada.
+  const preservedBySealId = new Map<string, number>();
+  if (cfg.checkMixPrice) {
+    const { data: preservedRows, error: preservedErr } = await sb
+      .from("subscriptions")
+      .select("seal_subscription_id, preserved_charge_cents")
+      .not("preserved_charge_cents", "is", null);
+    if (preservedErr) {
+      console.warn(
+        `[${cfg.label}] no se pudieron leer los precios preservados (${preservedErr.message}) — ` +
+          `se comparará contra el catálogo en esta tirada`,
+      );
+    } else {
+      for (const row of preservedRows ?? []) {
+        const cents = Number(row.preserved_charge_cents);
+        if (Number.isInteger(cents) && cents > 0) {
+          preservedBySealId.set(String(row.seal_subscription_id), cents);
+        }
+      }
+    }
+  }
+
   const candidates: Candidate[] = [];
   const priceCheck: Record<PriceCheckOutcome, number> = {
     "ok": 0,
@@ -436,7 +484,12 @@ async function runBucket(
     // nuevo. Por eso ninguna de las 5 que cobran de más se curaba nunca: todas son
     // de un solo sabor. (Aviso de Kiko, 31-ago-2026.)
     if (cfg.checkMixPrice) {
-      priceCheck[await assertMixPrice(s, cfg, boxCount, composition, next.date)]++;
+      priceCheck[
+        await assertMixPrice(
+          s, cfg, boxCount, composition, next.date,
+          preservedBySealId.get(String(s.id)) ?? null,
+        )
+      ]++;
     }
 
     candidates.push({
