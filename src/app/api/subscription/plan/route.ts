@@ -1501,9 +1501,16 @@ const patchPlan = async (
     // fallar aquí solo nos deja sin la señal, no le rompe nada al cliente.
     if (pricePreservedFromCents !== null || boxCountChangedFromLive) {
       try {
+        // El importe y SUS cajas van siempre juntos: un importe sin las cajas a las
+        // que pertenece es una entitlement que el cron puede aplicar sobre una
+        // composición que ya no es la suya. (Aviso de Kiko, 3-sep-2026.)
         const { error } = await supabaseAdmin()
           .from("subscriptions")
-          .update({ preserved_charge_cents: pricePreservedFromCents !== null ? targetPlan.totalCents : null })
+          .update(
+            pricePreservedFromCents !== null
+              ? { preserved_charge_cents: targetPlan.totalCents, preserved_box_count: targetBoxCount }
+              : { preserved_charge_cents: null, preserved_box_count: null },
+          )
           .eq("customer_id", ctx.customerId)
           .eq("seal_subscription_id", String(sealSubscriptionId));
         if (error) log("preserved-charge-write-failed", { msg: error.message });

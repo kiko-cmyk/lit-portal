@@ -182,10 +182,10 @@ async function assertMixPrice(
   boxCount: number,
   composition: FlavorComposition[],
   chargeDate: string,
-  /** Lo que este contrato tiene DERECHO a pagar, si se le conservó el precio de la
-   *  escalera vieja al cambiar de sabor (subscriptions.preserved_charge_cents).
-   *  null = paga catálogo y la escalera es su referencia. */
-  preservedChargeCents: number | null,
+  /** Lo que este contrato tiene DERECHO a pagar y para CUÁNTAS cajas
+   *  (subscriptions.preserved_charge_cents + preserved_box_count). null = paga
+   *  catálogo y la escalera es su referencia. */
+  preserved: { chargeCents: number; boxCount: number } | null,
 ): Promise<PriceCheckOutcome> {
   try {
     const lines = getLines(s);
@@ -234,7 +234,32 @@ async function assertMixPrice(
     //     Justo lo contrario de lo que existe para hacer. Antes de preservar precios eso
     //     no era alcanzable: el line-set viejo (SL90/SL180) daba adds+removes y caía en
     //     la rama de curar en sitio.
-    const expected = preservedChargeCents ?? catalogueCents;
+    // EL IMPORTE PRESERVADO SOLO VALE PARA SUS CAJAS (aviso de Kiko, 3-sep-2026).
+    //
+    // La regla que decide si se preserva es el nº de cajas, así que un importe sin sus
+    // cajas es un dato desacoplado de su propia regla. Un preservado de 3 cajas (67,92)
+    // sobre una sub que hoy tiene 4 a catálogo (85,05) le da la vuelta a esta función:
+    // ve sobre-cobro, entra a curar, repriceInPlace APLICA y le deja el cobro en 67,92,
+    // regalando 17,13 por entrega sobre un contrato legítimo. Se llega ahí por tres
+    // caminos nada raros: cambio de cajas fuera del portal (Seal admin, CS, portal de
+    // Seal — el webhook actualiza box_count sin tocar estas columnas), un 502 de
+    // verificación parcial que sale antes del clear, o que falle el write best-effort
+    // que las limpia.
+    //
+    // La asimetría es lo importante: fallar al ESCRIBIR la preservación es inocuo (la
+    // sub se queda a catálogo), pero fallar al LIMPIARLA deja una entitlement fantasma
+    // que este cron EJECUTA. Por eso la validación va aquí, en quien la consume, y no
+    // solo en quien la escribe: si las cajas no coinciden, la preservación queda inerte
+    // y la referencia vuelve a ser el catálogo.
+    const preservedApplies = preserved !== null && preserved.boxCount === realBoxes;
+    if (preserved !== null && !preservedApplies) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: precio preservado de ${preserved.chargeCents}c para ` +
+          `${preserved.boxCount} cajas, pero hoy tiene ${realBoxes} — se ignora y se compara ` +
+          `contra el catálogo. Alguien le cambió las cajas fuera del portal, o el clear no corrió.`,
+      );
+    }
+    const expected = preservedApplies ? preserved.chargeCents : catalogueCents;
     const actual = getChargeTotalCents(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
@@ -272,7 +297,7 @@ async function assertMixPrice(
     // que este cambio existe para no cobrarle. Sus líneas ya son las correctas; lo único
     // que puede estar mal es el precio, y eso se arregla en sitio (solo edit_items).
     const isNewModelLineSet =
-      preservedChargeCents === null && !diff.adds.length && !diff.removes.length;
+      !preservedApplies && !diff.adds.length && !diff.removes.length;
 
     // ── CURAR EN SITIO EL MODELO VIEJO (31-ago-2026) ──
     //
@@ -368,14 +393,25 @@ async function assertMixPrice(
     await alertSlackErrorAwaited({
       path: cfg.path,
       code: healed === "healed" ? "mix_price_drift_healed" : "mix_price_drift",
-      msg:
-        healed === "healed"
-          ? `sub ${s.id}: charge total was ${actual}c but the ${boxCount}-box tier is ${expected}c — ` +
-            `the per-unit prices were REPAIRED automatically and verified. Charge lands ` +
-            `${chargeDate.slice(0, 10)}. Worth checking why Seal dropped them.`
-          : `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
+      // El texto tiene que decir contra QUÉ se compara. Con un precio preservado,
+      // `expected` NO es el tramo: es lo que ese contrato tiene derecho a pagar, y
+      // llamarlo "tier" mandaba a quien lo lee a buscar un fallo de Seal que no existe
+      // (aviso de Kiko, 3-sep-2026). Lo mismo con "why Seal dropped them": sobre un
+      // contrato preservado la causa probable es un cambio de cajas fuera del portal.
+      msg: (() => {
+        const ref = preservedApplies
+          ? `the preserved contract amount for ${preserved!.boxCount} boxes is ${expected}c`
+          : `the ${boxCount}-box tier is ${expected}c`;
+        const causa = preservedApplies
+          ? `This sub has a preserved (legacy) price, so check whether its boxes changed outside the portal before blaming Seal.`
+          : `Worth checking why Seal dropped them.`;
+        return healed === "healed"
+          ? `sub ${s.id}: charge total was ${actual}c but ${ref} — the per-unit prices were ` +
+            `REPAIRED automatically and verified. Charge lands ${chargeDate.slice(0, 10)}. ${causa}`
+          : `sub ${s.id}: charge total ${actual}c but ${ref}. ` +
             `Automatic repair ${healed === "failed" ? "FAILED" : "was not possible"}. ` +
-            `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
+            `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`;
+      })(),
     });
     return "sobre-cobro";
   } catch (e) {
@@ -440,11 +476,15 @@ async function runBucket(
   // cientos de subs y no vamos a pedir una fila por cada una. Si la consulta falla, el
   // mapa queda vacío y assertMixPrice compara contra el catálogo, que es exactamente el
   // comportamiento anterior a este campo: se pierde precisión, no se rompe la tirada.
-  const preservedBySealId = new Map<string, number>();
+  // TOPE DE 1.000 FILAS de Supabase/PostgREST: hoy son ~533 preservadas y este
+  // select no pagina. Si la cifra se acerca al millar hay que paginar, porque las
+  // que se queden fuera se comparan contra el catálogo en silencio (degrada seguro,
+  // pero degrada). El contador de abajo lo deja a la vista en cada tirada.
+  const preservedBySealId = new Map<string, { chargeCents: number; boxCount: number }>();
   if (cfg.checkMixPrice) {
     const { data: preservedRows, error: preservedErr } = await sb
       .from("subscriptions")
-      .select("seal_subscription_id, preserved_charge_cents")
+      .select("seal_subscription_id, preserved_charge_cents, preserved_box_count")
       .not("preserved_charge_cents", "is", null);
     if (preservedErr) {
       console.warn(
@@ -452,11 +492,27 @@ async function runBucket(
           `se comparará contra el catálogo en esta tirada`,
       );
     } else {
+      if ((preservedRows ?? []).length >= 1000) {
+        console.warn(
+          `[${cfg.label}] el select de precios preservados ha devuelto ${preservedRows!.length} filas: ` +
+            `se está tocando el tope de 1.000 de PostgREST y hay preservaciones sin cargar. HAY QUE PAGINAR.`,
+        );
+      }
       for (const row of preservedRows ?? []) {
         const cents = Number(row.preserved_charge_cents);
-        if (Number.isInteger(cents) && cents > 0) {
-          preservedBySealId.set(String(row.seal_subscription_id), cents);
+        const boxes = Number(row.preserved_box_count);
+        // Sin cajas no se puede validar contra qué composición vale el importe, así
+        // que la fila se descarta: preferimos comparar contra el catálogo (el
+        // comportamiento de antes de la columna) a aplicar un importe a ciegas.
+        if (!Number.isInteger(cents) || cents <= 0) continue;
+        if (!Number.isInteger(boxes) || boxes <= 0) {
+          console.warn(
+            `[${cfg.label}] sub ${row.seal_subscription_id}: precio preservado sin nº de cajas ` +
+              `— se ignora (fila anterior a la migración o escritura a medias)`,
+          );
+          continue;
         }
+        preservedBySealId.set(String(row.seal_subscription_id), { chargeCents: cents, boxCount: boxes });
       }
     }
   }

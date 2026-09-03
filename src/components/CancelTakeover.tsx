@@ -453,9 +453,19 @@ function Solucion({
   // 85,05, no 67,93. Ofrecerle el ahorro sin decirle eso, y encima en el momento en
   // que se iba a ir, es venderle una puerta de un solo sentido como si fuera un
   // descuento. El aviso se calcula contra el catálogo de SU nº de cajas actual.
+  // OJO CON LAS SUBS FUERA DE ESCALERA (9 y 12 cajas, LIT-303): `perBox` solo llega a
+  // 6, asi que `perBox[boxCount - 1]` es undefined y con `?? curPrice` la comparacion
+  // se caia a false — el aviso no salia justo en las dos subs mas expuestas, que son
+  // las que mas pagan (aviso de Kiko, 3-sep-2026). Si no hay precio de catalogo para
+  // su nº de cajas, se compara contra el tramo mas alto que conocemos: quien paga por
+  // debajo de 6 cajas a catalogo esta por debajo de cualquier tramo posible.
+  const catalogueForBoxes =
+    pricing !== null
+      ? pricing.perBox[boxCount - 1] ?? pricing.perBox[pricing.perBox.length - 1] ?? null
+      : null;
   const belowCatalogue =
-    curPrice !== null && pricing !== null
-      ? curPrice < (pricing.perBox[boxCount - 1] ?? curPrice) - 0.005
+    curPrice !== null && catalogueForBoxes !== null
+      ? curPrice < catalogueForBoxes - 0.005
       : false;
   const [offerBoxes, setOfferBoxes] = useState<number>(1);
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;

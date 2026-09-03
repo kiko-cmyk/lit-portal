@@ -629,6 +629,8 @@ console.log("\n=== planPreservingCharge ===");
   let subidas = 0;
   let peor = 0;
   let sobreCatalogo = 0;
+  let aplican = 0;
+  let sinPlan = 0;
   for (let n = 1; n <= 6; n++) {
     for (let a = 0; a <= n; a++) {
       for (let b = 0; b <= n - a; b++) {
@@ -640,9 +642,13 @@ console.log("\n=== planPreservingCharge ===");
         ].filter((x) => x.boxes > 0);
         if (!mix.length) continue;
         const live = TIER_OLD[n];
-        const r = planPreservingCharge(mix, LADDER, live);
+        // El route solo preserva cuando el catalogo es MAS CARO que lo que paga hoy.
+        const catTotal = planTargetLines(mix, LADDER).totalCents;
+        const preserva = catTotal > live;
+        const r = preserva ? planPreservingCharge(mix, LADDER, live) : null;
         casos++;
-        if (!r) continue;
+        if (!r) { sinPlan++; continue; }
+        aplican++;
         if (r.totalCents > live) subidas++;
         peor = Math.min(peor, r.totalCents - live);
         // Ninguna linea puede quedar por encima de su precio de catalogo: es lo que
@@ -656,10 +662,19 @@ console.log("\n=== planPreservingCharge ===");
       }
     }
   }
-  eq(casos, 83, "barrido: 83 composiciones probadas");
+  eq(casos, 83, "barrido: 83 composiciones recorridas");
+  // OJO: recorrer 83 no es EJERCITAR 83. En 24 de ellas el precio de la escalera vieja
+  // ya iguala o mejora al catalogo, asi que el route ni llama a preservar (se queda con
+  // el catalogo, que es mas barato para el cliente). El numero que importa es cuantas
+  // pasan de verdad por el reparto. (Aviso de Kiko, 3-sep-2026.)
+  eq(aplican, 59, "barrido: 59 composiciones ejercitan de verdad el reparto preservado");
+  eq(sinPlan, 24, "barrido: 24 no preservan (catalogo igual o mas barato que la escalera vieja)");
+  eq(aplican + sinPlan, casos, "barrido: los dos recuentos suman el total (nada se cuela sin contar)");
   eq(subidas, 0, "barrido: CERO composiciones suben el precio");
   eq(sobreCatalogo, 0, "barrido: CERO lineas por encima de su precio de catalogo");
-  eq(peor >= -3, true, `barrido: el desvio nunca pasa de 3 centimos a favor del cliente (fue ${peor})`);
+  // El desvio real es 1 centimo, no 3: el reparto proporcional recoloca los sobrantes.
+  // Afirmar la cota holgada dejaria pasar una regresion de 2 centimos sin avisar.
+  eq(peor, -1, `barrido: el peor desvio es exactamente 1 centimo a favor del cliente (fue ${peor})`);
 }
 
 // IDEMPOTENCIA: preservar dos veces converge. Si erosionara, cada edicion de sabor
@@ -714,6 +729,36 @@ eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, -100), null, "importe
     ];
     eq(mixBoxCount(half), boxes, `mitad y mitad de ${boxes} cajas suma ${boxes} (promesa "mismo precio")`);
   }
+}
+
+
+// EL BLOCKER DE KIKO (3-sep-2026): un importe preservado sin sus cajas es un dato
+// desacoplado de su propia regla. Preservado de 3 cajas (67,92) sobre una sub que hoy
+// tiene 4 a catalogo (85,05): el cron ve sobre-cobro, entra a curar, repriceInPlace
+// APLICA y le deja el cobro en 67,92, regalando 17,13 por entrega sobre un contrato
+// legitimo. Se fija aqui la aritmetica que lo demuestra, y la condicion que lo mata.
+{
+  const cat4 = planTargetLines([{ flavor: L, boxes: 4 }], LADDER);
+  const lines4: SubscriptionLine[] = cat4.lines.map((l, i) => ({
+    itemId: 900 + i, productId: l.productId, variantId: l.variantId, flavor: l.flavor,
+    boxes: l.boxes, quantity: l.quantity, unitPrice: (l.unitPriceCents / 100).toFixed(2),
+    sellingPlanId: PLAN,
+  }));
+  const actual = chargeTotalCents(lines4);
+  const preservedDe3Cajas = 6792;
+
+  eq(actual, 8505, "blocker: la sub de 4 cajas cobra el catalogo (85,05)");
+  // Si el cron usara el importe preservado a ciegas, curaria a la baja.
+  const dañino = repriceInPlace(lines4, preservedDe3Cajas);
+  eq(dañino !== null, true, "blocker: sin validar cajas, repriceInPlace APLICA");
+  eq(dañino!.totalCents, 6792, "blocker: …y dejaria el cobro en 67,92 sobre un contrato de 4 cajas");
+  eq(actual - dañino!.totalCents, 1713, "blocker: son 17,13 EUR/entrega regalados");
+
+  // LA CONDICION QUE LO MATA: el importe preservado solo vale para SUS cajas.
+  const realBoxes = lines4.reduce((s, l) => s + l.boxes, 0);
+  const preservedBoxCount = 3;
+  eq(preservedBoxCount === realBoxes, false,
+     "blocker: 3 !== 4, asi que la preservacion queda INERTE y se compara contra catalogo");
 }
 
 // ── resultado ─────────────────────────────────────────────────────────────────

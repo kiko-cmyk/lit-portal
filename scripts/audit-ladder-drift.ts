@@ -11,17 +11,18 @@
  *   POR_ENCIMA  paga más que la web (SL120 90,57 > pack 85,05)
  *   ALINEADA    coincide (±1 céntimo por línea)
  *   REVISAR     lleva variantes fuera del registro (el nº de cajas no es fiable)
- *   PRECIO_PISADO  tiene precio preservado y ya NO lo cobra: Seal le ha pisado
- *               una línea. Es el único bucket que exige acción inmediata.
+ *   PRECIO_PISADO  tiene precio preservado y ya NO lo cobra (Seal le pisó una
+ *               línea). El informe distingue si cobra de MÁS (el cliente paga de
+ *               más, urgente) o de menos (descuadre sin perjudicado).
  *
  * Ningún contrato se toca: la migración se hará uno a uno hablando con cada
  * cliente (decisión de Juan, 2026-08-22).
  *
  *   SEAL_API_TOKEN=... npx tsx scripts/audit-ladder-drift.ts [salida.json]
  *
- * Con --slack manda además el resumen a Slack, para poder engancharlo a un cron
- * semanal y que la población de la escalera vieja deje de ser invisible: hoy la
- * única forma de saber si crece o mengua es que alguien se acuerde de correrlo.
+ * Con --slack manda el resumen a Slack SOLO si hay algo que hacer (un precio
+ * preservado pisado o una preservación huérfana), para poder colgarlo de un cron sin
+ * ensuciar un canal de excepciones. --slack-always fuerza el post.
  */
 
 import { writeFileSync } from "node:fs";
@@ -57,8 +58,10 @@ type Row = {
   expectedCents: number;
   deltaCents: number;
   bucket: "POR_DEBAJO" | "POR_ENCIMA" | "ALINEADA" | "REVISAR" | "PRECIO_PISADO";
-  /** Lo que el contrato tiene derecho a pagar (preserved_charge_cents), si lo hay. */
+  /** Lo que el contrato tiene derecho a pagar (preserved_charge_cents), si aplica. */
   preservedCents: number | null;
+  /** Tiene precio preservado pero para otro nº de cajas: preservación muerta. */
+  preservedStale: boolean;
 };
 
 async function main() {
@@ -69,19 +72,31 @@ async function main() {
   // Los importes preservados: sin ellos, una sub a la que Seal le haya pisado el
   // precio se cuenta como ALINEADA. Si Supabase no está a mano, el script sigue
   // siendo útil (censo de la escalera) pero no puede detectar ese caso, y lo dice.
-  const preservedBySealId = new Map<string, number>();
+  // TOPE DE 1.000 FILAS de Supabase/PostgREST: hoy son ~533 preservadas y este
+  // select no pagina. Si la cifra se acerca al millar hay que paginar, porque las
+  // que se queden fuera se comparan contra el catálogo en silencio (degrada seguro,
+  // pero degrada). El contador de abajo lo deja a la vista en cada tirada.
+  const preservedBySealId = new Map<string, { chargeCents: number; boxCount: number }>();
   let preservedAvailable = false;
   try {
     const { data, error } = await supabaseAdmin()
       .from("subscriptions")
-      .select("seal_subscription_id, preserved_charge_cents")
+      .select("seal_subscription_id, preserved_charge_cents, preserved_box_count")
       .not("preserved_charge_cents", "is", null);
     if (error) throw new Error(error.message);
+    if ((data ?? []).length >= 1000) {
+      console.warn(
+        `AVISO: el select de precios preservados ha devuelto ${data!.length} filas — tope de 1.000 ` +
+          `de PostgREST. Hay preservaciones sin cargar y saldrán mal clasificadas. HAY QUE PAGINAR.`,
+      );
+    }
     for (const row of data ?? []) {
       const cents = Number(row.preserved_charge_cents);
-      if (Number.isInteger(cents) && cents > 0) {
-        preservedBySealId.set(String(row.seal_subscription_id), cents);
-      }
+      const boxes = Number(row.preserved_box_count);
+      // El importe preservado solo vale para SUS cajas; sin ellas no se puede validar.
+      if (!Number.isInteger(cents) || cents <= 0) continue;
+      if (!Number.isInteger(boxes) || boxes <= 0) continue;
+      preservedBySealId.set(String(row.seal_subscription_id), { chargeCents: cents, boxCount: boxes });
     }
     preservedAvailable = true;
     console.log(`${preservedBySealId.size} contratos con precio preservado\n`);
@@ -93,6 +108,9 @@ async function main() {
   }
 
   const rows: Row[] = [];
+  // Preservaciones cuyas cajas ya no coinciden: entitlements fantasma. No cobran de
+  // más por sí solas, pero antes de la validación el cron las EJECUTABA a la baja.
+  let staleCount = 0;
   let skippedStatus = 0;
   let skippedNoLines = 0;
 
@@ -114,11 +132,21 @@ async function main() {
     // línea aterrizaría EXACTAMENTE en la escalera web y este script la contaría como
     // ALINEADA: correcta a la vista, y cobrando +17,12 al cliente. Comparar contra lo
     // que el contrato debe pagar es lo único que lo distingue. (3-sep-2026)
-    const preservedCents = preservedBySealId.get(String(s.id)) ?? null;
+    // El importe preservado SOLO se aplica si las cajas vivas son las suyas: si no
+    // coinciden, alguien cambió las cajas fuera del portal (o el clear no corrió) y la
+    // preservación está muerta. Contra el catálogo, como cualquier otra.
+    const preservedRow = preservedBySealId.get(String(s.id)) ?? null;
+    const realBoxes = lines.reduce((sum, l) => sum + l.boxes, 0);
+    const preservedStale = preservedRow !== null && preservedRow.boxCount !== realBoxes;
+    const preservedCents = preservedRow && !preservedStale ? preservedRow.chargeCents : null;
+    if (preservedStale) staleCount++;
 
     let bucket: Row["bucket"];
     if (hasUnmapped) bucket = "REVISAR";
     else if (preservedCents !== null) {
+      // Cualquier desvio respecto al contrato es un descuadre, pero NO siempre es un
+      // sobrecobro: si cobra MENOS de lo preservado, el cliente no paga de mas y el
+      // titular no debe decir que si (aviso de Kiko). Se distingue en el informe.
       bucket = Math.abs(actual - preservedCents) <= lines.length ? "ALINEADA" : "PRECIO_PISADO";
     } else if (Math.abs(delta) <= lines.length) bucket = "ALINEADA";
     else bucket = delta < 0 ? "POR_DEBAJO" : "POR_ENCIMA";
@@ -137,6 +165,7 @@ async function main() {
       deltaCents: delta,
       bucket,
       preservedCents,
+      preservedStale,
     });
   }
 
@@ -152,6 +181,7 @@ async function main() {
     `PRECIO PISADO (URGENTE) ......... ${by("PRECIO_PISADO").length}` +
       (preservedAvailable ? "" : "  (no comprobado: sin acceso a Supabase)"),
   );
+  console.log(`preservaciones huerfanas ........ ${staleCount}  (cajas cambiadas fuera del portal)`);
   console.log(`saltadas (cancel/otros estados) . ${skippedStatus} · sin líneas: ${skippedNoLines}`);
   console.log("=".repeat(72));
 
@@ -174,23 +204,46 @@ async function main() {
   // Resumen a Slack (opt-in con --slack). PRECIO_PISADO va el primero porque es el
   // único que exige acción: un contrato con precio preservado que ya no lo cobra
   // significa que Seal le ha pisado una línea y el cliente paga de más.
-  if (process.argv.includes("--slack")) {
+  //
+  // EXCEPTION-ONLY a propósito (petición de Kiko, 3-sep-2026): #n8n-errors es un canal
+  // de excepciones, así que una tirada en verde NO postea. Solo se avisa cuando hay
+  // algo que hacer: un precio preservado pisado (el cliente paga de más) o una
+  // preservación huérfana (entitlement que ya no corresponde a sus cajas). Con
+  // --slack-always se fuerza el post, para probar el enganche del cron sin esperar a
+  // que algo se rompa.
+  if (process.argv.includes("--slack") || process.argv.includes("--slack-always")) {
     const pisados = by("PRECIO_PISADO");
-    await alertSlackNoticeAwaited({
-      title: pisados.length
-        ? `⚠️ ${pisados.length} contrato(s) con el precio preservado PISADO`
-        : "Censo de la escalera vieja",
-      fields: {
-        "precio pisado (URGENTE)": preservedAvailable ? pisados.length : "no comprobado",
-        "por debajo del catálogo": by("POR_DEBAJO").length,
-        "por encima": by("POR_ENCIMA").length,
-        "alineadas": by("ALINEADA").length,
-        "a revisar (fuera de registro)": by("REVISAR").length,
-        "con precio preservado": preservedAvailable ? preservedBySealId.size : "no comprobado",
-        "subs afectadas": pisados.length ? pisados.map((r) => r.subId).join(", ") : undefined,
-      },
-    });
-    console.log("resumen enviado a Slack");
+    // Cobra MAS de lo que su contrato dice = el cliente paga de mas (urgente). Cobra
+    // menos = descuadre igualmente, pero nadie sale perjudicado.
+    const cobranDeMas = pisados.filter((r) => r.preservedCents !== null && r.actualCents > r.preservedCents);
+    const cobranDeMenos = pisados.length - cobranDeMas.length;
+    const hayQueActuar = pisados.length > 0 || staleCount > 0;
+    if (!hayQueActuar && !process.argv.includes("--slack-always")) {
+      console.log("nada que reportar a Slack (exception-only): 0 pisados, 0 huérfanas");
+    } else {
+      await alertSlackNoticeAwaited({
+        title: cobranDeMas.length
+          ? `⚠️ ${cobranDeMas.length} contrato(s) preservado(s) COBRANDO DE MÁS`
+          : pisados.length
+            ? `${pisados.length} contrato(s) preservado(s) descuadrado(s) (cobran de menos)`
+            : staleCount
+              ? `${staleCount} preservación(es) huérfana(s) en la escalera vieja`
+              : "Censo de la escalera vieja",
+        fields: {
+          "cobran de MÁS (URGENTE)": preservedAvailable ? cobranDeMas.length : "no comprobado",
+          "cobran de menos": preservedAvailable ? cobranDeMenos : "no comprobado",
+          "preservaciones huérfanas": preservedAvailable ? staleCount : "no comprobado",
+          "por debajo del catálogo": by("POR_DEBAJO").length,
+          "por encima": by("POR_ENCIMA").length,
+          "alineadas": by("ALINEADA").length,
+          "a revisar (fuera de registro)": by("REVISAR").length,
+          "con precio preservado": preservedAvailable ? preservedBySealId.size : "no comprobado",
+          "subs afectadas": pisados.length ? pisados.map((r) => r.subId).join(", ") : undefined,
+          "subs cobrando de más": cobranDeMas.length ? cobranDeMas.map((r) => r.subId).join(", ") : undefined,
+        },
+      });
+      console.log("resumen enviado a Slack");
+    }
   }
 }
 
