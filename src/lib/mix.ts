@@ -568,11 +568,17 @@ export function diffLines(current: SubscriptionLine[], target: TargetLine[]): Li
  * quantity sea lo que el cliente paga HOY, en vez del catálogo. La composición, las
  * cajas y las variantes son las que toque; lo único que se conserva es el importe.
  *
- * EL REPARTO VA POR CAJA Y SE ESCRIBE POR UNIDAD. `distributeUnitPrices` devuelve
- * precio por CAJA, y Seal cobra `unitPrice × quantity`: una línea PACK4 es quantity
- * 1 con 4 cajas dentro. Escribir el precio por caja tal cual en esa línea cobraría
- * 21,26 en vez de 85,05, y las guardas del route lo darían por bueno porque el
- * line-set coincide. De ahí el `× boxes/quantity`.
+ * EL REPARTO ES PROPORCIONAL AL CATÁLOGO: cada línea se escala por
+ * `liveCharge / tier`. Así se conserva la FORMA del descuento (el pack 3+1 sigue
+ * costando lo que cuesta un pack y las sueltas lo que cuesta una suelta) y ninguna
+ * línea queda por encima de su precio de catálogo. Un reparto plano por caja también
+ * daba el total correcto, pero escribía el PACK4 por ENCIMA de su propio precio de
+ * venta en las subs de 5-6 cajas.
+ *
+ * OJO: el precio se escribe SIEMPRE por UNIDAD, porque Seal cobra
+ * `unitPrice × quantity` y una línea PACK4 es quantity 1 con 4 cajas dentro. Repartir
+ * pensando en cajas y escribir esa cifra tal cual cobraría 21,26 en vez de 85,05, y
+ * las guardas del route lo darían por bueno porque el line-set coincide.
  *
  * Devuelve null (y el llamador se queda con el catálogo) si el reparto no es
  * aplicable: sin líneas, importe no positivo, o una línea cuyas cajas no son
@@ -598,20 +604,68 @@ export function planPreservingCharge(
   const boxesPerLine = catalogue.lines.map((l) => l.boxes);
   if (boxesPerLine.some((b) => !Number.isInteger(b) || b <= 0)) return null;
 
-  // Sin esto no se puede pasar de precio por caja a precio por unidad.
+  // Una línea cuyas cajas no son múltiplo de su quantity no se sabe prorratear sin
+  // inventarse cuántas cajas lleva cada unidad. Misma guarda que repriceInPlace.
   for (const l of catalogue.lines) {
     const quantity = Math.max(1, Number(l.quantity) || 1);
     if (l.boxes % quantity !== 0) return null;
   }
 
-  const { units } = distributeUnitPrices(liveChargeCents, boxesPerLine);
+  // EL REPARTO ES PROPORCIONAL AL CATÁLOGO, NO PLANO POR CAJA.
+  //
+  // Un reparto plano (mismo precio a todas las cajas) descuadra la FORMA del
+  // descuento: aplasta el 3+1 y reparte su regalo entre las cajas sueltas. Con las 90
+  // subs de SL90×2 (6 cajas a 135,86) eso escribía el PACK4 a 90,56, o sea 5,51 por
+  // encima de lo que ese mismo pack vale en catálogo (85,05), y las sueltas a 22,65,
+  // por debajo de sus 28,35. El total era correcto y nunca subía, pero el contrato de
+  // Seal, las líneas del pedido y el email de confirmación enseñaban un "PACK 3+1"
+  // más caro que su propio precio de venta, en una pantalla que le está prometiendo al
+  // cliente justo lo contrario ("incluye el pack 3+1, 1 caja gratis").
+  //
+  // Escalando cada línea por `liveCharge / tier` se conserva el peso relativo de cada
+  // una, así que el 3+1 sigue pareciendo un 3+1 y NINGUNA línea queda por encima de su
+  // precio de catálogo (el factor es < 1 por construcción: solo llegamos aquí cuando
+  // el catálogo es más caro que lo que paga el cliente).
+  const totalBoxes = boxesPerLine.reduce((a, b) => a + b, 0);
+  if (totalBoxes <= 0) return null;
 
-  const lines: TargetLine[] = catalogue.lines.map((l, i) => {
+  const scaled = catalogue.lines.map((l) => {
     const quantity = Math.max(1, Number(l.quantity) || 1);
-    const boxesPerUnit = l.boxes / quantity;
-    return { ...l, unitPriceCents: units[i] * boxesPerUnit };
+    // Precio por unidad, redondeado hacia abajo: el sobrante se reparte después, así
+    // el prorrateo nunca puede pasarse del importe del contrato.
+    const catalogueLineCents = l.unitPriceCents * quantity;
+    const unitPriceCents = Math.floor(
+      (catalogueLineCents * liveChargeCents) / (catalogue.tierTotalCents * quantity),
+    );
+    return { line: l, quantity, unitPriceCents };
   });
+  if (scaled.some((s) => s.unitPriceCents <= 0)) return null;
+
+  // Los céntimos que deja el floor van a las líneas con MENOS cajas primero: es la
+  // forma más barata de colocarlos sin pasarse (mismo criterio que
+  // distributeUnitPrices), y sube el precio por unidad lo mínimo posible.
+  let residual = liveChargeCents - scaled.reduce((s, x) => s + x.unitPriceCents * x.quantity, 0);
+  if (residual < 0) return null;
+  const bySmallest = scaled
+    .map((s, i) => ({ i, boxes: s.line.boxes }))
+    .sort((a, b) => a.boxes - b.boxes);
+  for (const { i } of bySmallest) {
+    const s = scaled[i];
+    // Nunca por encima del catálogo: es el invariante que hace que el 3+1 siga
+    // leyéndose como un 3+1.
+    while (
+      residual >= s.quantity &&
+      s.unitPriceCents + 1 <= s.line.unitPriceCents
+    ) {
+      s.unitPriceCents += 1;
+      residual -= s.quantity;
+    }
+  }
+
+  const lines: TargetLine[] = scaled.map((s) => ({ ...s.line, unitPriceCents: s.unitPriceCents }));
   if (lines.some((l) => l.unitPriceCents <= 0)) return null;
+  // Ninguna línea por encima de su precio de catálogo.
+  if (lines.some((l, i) => l.unitPriceCents > catalogue.lines[i].unitPriceCents)) return null;
 
   const totalCents = lines.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
   // `distributeUnitPrices` ya asegura Σ unidad × cajas <= objetivo, y multiplicar por

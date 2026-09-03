@@ -599,7 +599,18 @@ console.log("\n=== planPreservingCharge ===");
   eq(r!.totalCents, 13586, "6 cajas: clava los 135,86, no los 141,75 del catalogo");
   const pack = r!.lines.find((l) => l.boxes === 4)!;
   eq(pack.quantity, 1, "6 cajas: el pack es quantity 1");
-  eq(pack.unitPriceCents, 9056, "6 cajas: el PACK4 va a 90,56 por unidad, NO a 22,64");
+  // El precio va por UNIDAD (4 cajas dentro), no por caja: 22,64 cobraria un cuarto.
+  eq(pack.unitPriceCents > 2264 * 3, true, "6 cajas: el PACK4 lleva precio de UNIDAD, no de caja");
+  // Y NUNCA por encima del catalogo del propio pack: un reparto plano por caja lo
+  // escribia a 90,56, cinco euros por encima de lo que ese pack vale (85,05), en una
+  // pantalla que le promete al cliente "el pack 3+1, 1 caja gratis".
+  eq(pack.unitPriceCents <= 8505, true, "6 cajas: el PACK4 no supera su precio de catalogo");
+  for (const l of r!.lines) {
+    const cat = planTargetLines([{ flavor: W, boxes: 6 }], LADDER).lines
+      .find((c) => c.variantId === l.variantId)!;
+    eq(l.unitPriceCents <= cat.unitPriceCents, true,
+       `6 cajas: ${l.sku} no supera su precio de catalogo`);
+  }
 }
 
 // Una sub ya a catalogo no se toca: el catalogo y lo que paga coinciden.
@@ -617,6 +628,7 @@ console.log("\n=== planPreservingCharge ===");
   let casos = 0;
   let subidas = 0;
   let peor = 0;
+  let sobreCatalogo = 0;
   for (let n = 1; n <= 6; n++) {
     for (let a = 0; a <= n; a++) {
       for (let b = 0; b <= n - a; b++) {
@@ -633,11 +645,20 @@ console.log("\n=== planPreservingCharge ===");
         if (!r) continue;
         if (r.totalCents > live) subidas++;
         peor = Math.min(peor, r.totalCents - live);
+        // Ninguna linea puede quedar por encima de su precio de catalogo: es lo que
+        // mantiene legible la forma del descuento (un pack 3+1 que cuesta lo que un
+        // pack, no mas).
+        const cat = planTargetLines(mix, LADDER);
+        for (const l of r.lines) {
+          const c = cat.lines.find((x) => x.variantId === l.variantId)!;
+          if (l.unitPriceCents > c.unitPriceCents) sobreCatalogo++;
+        }
       }
     }
   }
   eq(casos, 83, "barrido: 83 composiciones probadas");
   eq(subidas, 0, "barrido: CERO composiciones suben el precio");
+  eq(sobreCatalogo, 0, "barrido: CERO lineas por encima de su precio de catalogo");
   eq(peor >= -3, true, `barrido: el desvio nunca pasa de 3 centimos a favor del cliente (fue ${peor})`);
 }
 
