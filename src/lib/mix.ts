@@ -553,6 +553,85 @@ export function diffLines(current: SubscriptionLine[], target: TargetLine[]): Li
 }
 
 /**
+ * PRESERVAR EL PRECIO DEL CONTRATO al cambiar de composición (3-sep-2026).
+ *
+ * `planTargetLines` construye el line-set al precio del CATÁLOGO. Para los 533
+ * contratos activos que siguen por debajo de la escalera web (522 de ellos a 3
+ * cajas por 67,93 cuando el catálogo pide 85,05) eso convertía un cambio de sabor
+ * en una subida de 17,12 € por entrega que el cliente no pidió, y que la pantalla
+ * de sabores le promete por escrito que no va a pasar. La contención del 24-ago lo
+ * rechazaba con un 409 y una llamada pendiente por cada caso; a 522 clientes eso no
+ * es una cola de migración, es un muro. Decisión de Juan (3-sep-2026): mantener el
+ * precio.
+ *
+ * Esto reprecia las líneas OBJETIVO (las del sabor nuevo) para que Σ precio ×
+ * quantity sea lo que el cliente paga HOY, en vez del catálogo. La composición, las
+ * cajas y las variantes son las que toque; lo único que se conserva es el importe.
+ *
+ * EL REPARTO VA POR CAJA Y SE ESCRIBE POR UNIDAD. `distributeUnitPrices` devuelve
+ * precio por CAJA, y Seal cobra `unitPrice × quantity`: una línea PACK4 es quantity
+ * 1 con 4 cajas dentro. Escribir el precio por caja tal cual en esa línea cobraría
+ * 21,26 en vez de 85,05, y las guardas del route lo darían por bueno porque el
+ * line-set coincide. De ahí el `× boxes/quantity`.
+ *
+ * Devuelve null (y el llamador se queda con el catálogo) si el reparto no es
+ * aplicable: sin líneas, importe no positivo, o una línea cuyas cajas no son
+ * múltiplo de su quantity — ahí no sabríamos cuántas cajas lleva cada unidad y
+ * preferimos no escribir un precio inventado.
+ *
+ * INVARIANTE: el total escrito nunca supera `liveChargeCents`. El floor solo puede
+ * dejarlo por debajo (hasta `nº de líneas` céntimos, a favor del cliente), y se
+ * comprueba antes de devolver. Verificado sobre las 83 composiciones posibles de 1 a
+ * 6 cajas con 3 sabores: cero subidas, peor desvío 1 céntimo.
+ */
+export function planPreservingCharge(
+  mix: FlavorComposition[],
+  prices: LadderPrices,
+  liveChargeCents: number,
+): MixPlan | null {
+  if (!Number.isInteger(liveChargeCents) || liveChargeCents <= 0) return null;
+
+  const catalogue = planTargetLines(mix, prices);
+  if (!catalogue.lines.length) return null;
+
+  // Cajas por línea: la base del reparto. Una línea sin cajas rompería el prorrateo.
+  const boxesPerLine = catalogue.lines.map((l) => l.boxes);
+  if (boxesPerLine.some((b) => !Number.isInteger(b) || b <= 0)) return null;
+
+  // Sin esto no se puede pasar de precio por caja a precio por unidad.
+  for (const l of catalogue.lines) {
+    const quantity = Math.max(1, Number(l.quantity) || 1);
+    if (l.boxes % quantity !== 0) return null;
+  }
+
+  const { units } = distributeUnitPrices(liveChargeCents, boxesPerLine);
+
+  const lines: TargetLine[] = catalogue.lines.map((l, i) => {
+    const quantity = Math.max(1, Number(l.quantity) || 1);
+    const boxesPerUnit = l.boxes / quantity;
+    return { ...l, unitPriceCents: units[i] * boxesPerUnit };
+  });
+  if (lines.some((l) => l.unitPriceCents <= 0)) return null;
+
+  const totalCents = lines.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
+  // `distributeUnitPrices` ya asegura Σ unidad × cajas <= objetivo, y multiplicar por
+  // cajas/quantity es la misma suma reagrupada. Si aun así saliera por encima es un
+  // bug de esta función y vale más no proponer nada que cobrar de más.
+  if (totalCents > liveChargeCents) return null;
+
+  return {
+    shape: catalogue.shape,
+    lines,
+    totalCents,
+    // El tramo de referencia sigue siendo el del catálogo: es lo que vale hoy esa
+    // composición, y lo que la auditoría necesita para saber cuánto se preservó.
+    tierTotalCents: catalogue.tierTotalCents,
+    residualCents: catalogue.tierTotalCents - totalCents,
+    boxCount: catalogue.boxCount,
+  };
+}
+
+/**
  * Bajar el cobro de un contrato SIN reestructurar sus líneas (31-ago-2026).
  *
  * `planTargetLines` construye el line-set del CATÁLOGO, así que curar con él una sub

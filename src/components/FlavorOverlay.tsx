@@ -119,10 +119,10 @@ export function FlavorOverlay({
           }),
         );
       } else if (err.code === "price_would_increase" || err.code === "box_count_out_of_range") {
-        // El backend se niega a repreciar un contrato de la escalera vieja por un cambio
-        // que no toca el número de cajas. No es culpa del cliente y no queremos que se
-        // quede sin poder cambiar de sabor: se le pasa a soporte, que lo hace a mano
-        // conservando su precio. (24-ago-2026)
+        // Desde el 3-sep-2026 un contrato de la escalera vieja CONSERVA su precio al
+        // cambiar de sabor, así que este camino ya no es el caso normal: solo quedan las
+        // subs cuyas líneas no admiten el reparto en sitio y las que llevan más cajas de
+        // las que la escalera sabe tarificar. Sigue siendo cosa nuestra, no del cliente.
         setError(
           t({
             en: "We can't switch this from here without changing your price, and your price shouldn't change. Write to us and we'll do it for you, keeping what you pay today.",

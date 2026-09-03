@@ -36,6 +36,7 @@ import {
   type SubscriptionLine,
   type TargetLine,
   repriceInPlace,
+  planPreservingCharge,
 } from "../src/lib/mix";
 import {
   FLAVORS,
@@ -56,6 +57,7 @@ const TIER_OLD: Record<number, number> = { 1: 2835, 2: 5670, 3: 6793, 4: 9057, 5
 
 const L: FlavorKey = "salty-lemon";
 const W: FlavorKey = "salty-watermelon";
+const P: FlavorKey = "salty-peach";
 
 let passed = 0;
 const failures: string[] = [];
@@ -563,6 +565,95 @@ eq(repriceInPlace([], 8505), null, "sin lineas: null");
 eq(repriceInPlace([rpLine(1, rpSL30, 1, "28.35", 1)], 0), null, "objetivo 0: null");
 eq(repriceInPlace([rpLine(1, rpSL30, 2, "28.35", 3)], 8505), null,
    "cajas no multiplo de quantity: null (no sabemos cajas por unidad)");
+
+
+// ── planPreservingCharge: conservar el precio del contrato (3-sep-2026) ──────
+console.log("\n=== planPreservingCharge ===");
+
+// EL CASO DE LOS AVISOS: 522 subs a 3 cajas por 67,93 cuando el catalogo pide 85,05.
+// Cambiar de sabor tiene que dejar el importe intacto.
+{
+  const r = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, 6793);
+  eq(r !== null, true, "3 cajas Lemon->Peach: propone plan");
+  eq(r!.totalCents, 6792, "3 cajas: escribe 67,92 (un centimo abajo por el floor), no 85,05");
+  eq(r!.totalCents <= 6793, true, "3 cajas: NUNCA por encima de lo que paga hoy");
+  eq(r!.tierTotalCents, 8505, "3 cajas: el tramo de referencia sigue siendo el catalogo");
+  eq(r!.lines.length, 1, "3 cajas: una sola linea de 1 caja x3");
+  eq(r!.lines[0].quantity, 3, "3 cajas: quantity 3");
+  eq(r!.lines[0].unitPriceCents, 2264, "3 cajas: 22,64 por unidad (= por caja aqui)");
+}
+
+// EL OTRO AVISO: mezcla 2 Watermelon + 1 Lemon, mismas 3 cajas.
+{
+  const r = planPreservingCharge([{ flavor: W, boxes: 2 }, { flavor: L, boxes: 1 }], LADDER, 6793);
+  eq(r !== null, true, "mezcla 2W+1L: propone plan");
+  eq(r!.totalCents, 6793, "mezcla 2W+1L: clava los 67,93");
+  eq(r!.lines.length, 2, "mezcla 2W+1L: dos lineas");
+}
+
+// LA TRAMPA DEL PACK, otra vez: 6 cajas = PACK4 (quantity 1, 4 cajas) + 2 sueltas.
+// Escribir el precio POR CAJA en la linea del pack cobraria 22,64 en vez de 90,56.
+{
+  const r = planPreservingCharge([{ flavor: W, boxes: 6 }], LADDER, 13586);
+  eq(r !== null, true, "6 cajas: propone plan");
+  eq(r!.totalCents, 13586, "6 cajas: clava los 135,86, no los 141,75 del catalogo");
+  const pack = r!.lines.find((l) => l.boxes === 4)!;
+  eq(pack.quantity, 1, "6 cajas: el pack es quantity 1");
+  eq(pack.unitPriceCents, 9056, "6 cajas: el PACK4 va a 90,56 por unidad, NO a 22,64");
+}
+
+// Una sub ya a catalogo no se toca: el catalogo y lo que paga coinciden.
+{
+  const r = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, 8505);
+  eq(r !== null, true, "ya a catalogo: propone plan");
+  eq(r!.totalCents, 8505, "ya a catalogo: sigue en 85,05");
+}
+
+// BARRIDO EXHAUSTIVO: las 83 composiciones de 1 a 6 cajas con 3 sabores, cada una
+// contra el precio tipico de la escalera VIEJA. El invariante es uno solo: jamas
+// por encima de lo que el cliente paga hoy.
+{
+  const FL: FlavorKey[] = [L, W, P];
+  let casos = 0;
+  let subidas = 0;
+  let peor = 0;
+  for (let n = 1; n <= 6; n++) {
+    for (let a = 0; a <= n; a++) {
+      for (let b = 0; b <= n - a; b++) {
+        const c = n - a - b;
+        const mix = [
+          { flavor: FL[0], boxes: a },
+          { flavor: FL[1], boxes: b },
+          { flavor: FL[2], boxes: c },
+        ].filter((x) => x.boxes > 0);
+        if (!mix.length) continue;
+        const live = TIER_OLD[n];
+        const r = planPreservingCharge(mix, LADDER, live);
+        casos++;
+        if (!r) continue;
+        if (r.totalCents > live) subidas++;
+        peor = Math.min(peor, r.totalCents - live);
+      }
+    }
+  }
+  eq(casos, 83, "barrido: 83 composiciones probadas");
+  eq(subidas, 0, "barrido: CERO composiciones suben el precio");
+  eq(peor >= -3, true, `barrido: el desvio nunca pasa de 3 centimos a favor del cliente (fue ${peor})`);
+}
+
+// IDEMPOTENCIA: preservar dos veces converge. Si erosionara, cada edicion de sabor
+// le bajaria el precio un centimo hasta el infinito.
+{
+  const r1 = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, 6793)!;
+  const r2 = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, r1.totalCents)!;
+  const r3 = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, r2.totalCents)!;
+  eq(r2.totalCents, r1.totalCents, "idempotencia: la segunda pasada no baja el precio");
+  eq(r3.totalCents, r2.totalCents, "idempotencia: la tercera tampoco");
+}
+
+// Basura: nunca proponer nada.
+eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, 0), null, "importe 0: null");
+eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, -100), null, "importe negativo: null");
 
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);
