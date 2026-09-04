@@ -26,9 +26,16 @@ import { resolveActiveSubFast } from "@/lib/sub-resolve";
  * been handed storefront HTML, so the remaining ~50s are spent on a request
  * nobody is listening to, invisible in every channel we watch. 20s leaves room
  * for the upstream budgets in lib/http-timeout.ts plus the `after()` sync while
- * bounding the invisible tail. Deliberately NOT applied to /plan or /cancel:
- * those chain several Seal mutations, where being killed early is worse than
- * being slow (partial state). Their protection is the per-call deadlines.
+ * bounding the invisible tail.
+ *
+ * This used to say the same ceiling was deliberately NOT applied to /plan or
+ * /cancel, because chaining Seal mutations makes an early kill worse than a
+ * slow request, and per-call deadlines were protection enough. Incident
+ * 2026-09-04 disproved the second half: per-call budgets never bound the sum,
+ * so /plan was killed anyway at Vercel's 60s, between add_items and
+ * remove_items, leaving three subscriptions holding both line sets. /plan now
+ * carries its own request deadline, made safe by a repair intent written before
+ * the swap. /cancel still relies on per-call deadlines alone.
  */
 export const maxDuration = 20;
 

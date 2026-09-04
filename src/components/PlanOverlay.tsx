@@ -34,6 +34,10 @@ export function PlanOverlay({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  /** The request timed out with the outcome unknown: the change may or may not
+   *  have landed. Re-submitting from here is what corrupts subscriptions, so the
+   *  save button stays locked until the customer reloads (incident 2026-09-04). */
+  const [uncertain, setUncertain] = useState(false);
   const t = useLang();
 
   useEffect(() => {
@@ -193,12 +197,17 @@ export function PlanOverlay({
           }),
         );
       } else if (err.code === "gateway_timeout" || err.status === 504) {
-        // Vercel timed out / Shopify storefront fallback. Don't dump HTML
-        // on the customer — friendly retry message instead.
+        // The App Proxy gave up at ~10s; the server may still have been mid-swap
+        // when it did. So the outcome here is UNKNOWN, not "failed", and telling
+        // the customer to try again is the wrong advice: on 2026-09-04 a retry
+        // re-sent the same payload against a subscription the first request had
+        // already changed, which is how subscriptions ended up holding both the
+        // old and the new lines. Ask them to reload and look, never to re-submit.
+        setUncertain(true);
         setError(
           t({
-            en: "The service is taking longer than usual. Wait a moment and try again.",
-            es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
+            en: "This is taking longer than usual, and your change may still be going through. Reload the page in a moment to see how your plan ended up, and don't save again in the meantime.",
+            es: "Esto está tardando más de lo normal y puede que tu cambio se haya llegado a aplicar. Recarga la página en un momento para ver cómo quedó tu plan, y no vuelvas a guardar mientras tanto.",
           }),
         );
       } else {
@@ -423,11 +432,13 @@ export function PlanOverlay({
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={!hasChange || busy}
+              disabled={!hasChange || busy || uncertain}
               className="mt-6 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
+              ) : uncertain ? (
+                <T en="Reload to see your plan" es="Recarga para ver tu plan" />
               ) : (
                 <T en="Save plan" es="Guardar plan" />
               )}

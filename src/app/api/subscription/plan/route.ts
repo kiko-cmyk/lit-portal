@@ -3,6 +3,7 @@ import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { alertSlackError } from "@/lib/alert";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
@@ -102,7 +103,53 @@ const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo"
  *   - Does Seal's `edit` with delivery_interval actually mutate, or is it
  *     the same silent no-op we saw on item edits?
  */
-export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
+/**
+ * Whole-request wall-clock budget, shared by every upstream call inside.
+ *
+ * Why (incident 2026-09-04): this route makes THREE Seal calls back to back
+ * (edit_items → add_items → remove_items), each with its own 9 s total budget,
+ * plus two 500 ms settle sleeps and a ~4 s verification read. Nothing bounded
+ * the sum, so a slow Seal day reached ~28 s while Shopify's App Proxy stops
+ * waiting at ~10 s: the customer got `gateway_timeout` and the invocation was
+ * killed BETWEEN add_items and remove_items, leaving the old and the new lines
+ * both live and the next charge too high. Three subscriptions were left
+ * overcharging by 113.40 EUR/cycle before anyone noticed.
+ *
+ * This REVERSES a deliberate decision documented in address/route.ts:29-31,
+ * which excluded /plan on the grounds that "being killed early is worse than
+ * being slow (partial state)" and that per-call deadlines were protection
+ * enough. The premise was right; the conclusion did not hold. Per-call budgets
+ * never bound the SUM, so the route was killed anyway — just later, at Vercel's
+ * 60 s, on a request nobody was listening to, and precisely between add_items
+ * and remove_items. "Slow" was never on the menu; the real choice was between
+ * dying early with a compensation and dying late without one.
+ *
+ * What makes early death safe now is the pre-armed repair intent below plus the
+ * recovery paths running under `runWithoutRequestDeadline`: an aborted swap
+ * leaves a row the cron converges, instead of a silent double charge. Without
+ * that half of the fix, the original objection would still stand.
+ *
+ * 9.5 s, same as the address route, sized just under the proxy's patience.
+ */
+const REQUEST_BUDGET_MS = 9_500;
+
+/**
+ * Hard ceiling, above REQUEST_BUDGET_MS so the deadline is what normally stops
+ * us, not the kill. The extra room is for the compensation work that runs
+ * outside the budget (repair intent, remove retry, snapshot restore) once the
+ * customer's response is already lost. The 60 s default let a doomed request
+ * mutate Seal for another ~50 s with nobody listening.
+ */
+export const maxDuration = 20;
+
+export const PATCH = withCustomer<Subscription>((req, ctx) =>
+  runWithRequestDeadline(REQUEST_BUDGET_MS, () => patchPlan(req, ctx)),
+);
+
+const patchPlan = async (
+  req: Parameters<Parameters<typeof withCustomer<Subscription>>[0]>[0],
+  ctx: Parameters<Parameters<typeof withCustomer<Subscription>>[0]>[1],
+) => {
   await enforceRateLimit(ctx.customerId, "plan", { limit: 10, windowMs: 60_000 });
 
   const t0 = Date.now();
@@ -995,8 +1042,15 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
   log("pre-mutation-snapshot", { lines: currentLines });
 
   /** Undo whatever we managed to apply: drop lines that weren't in the snapshot and
-   *  put the snapshot's quantities/prices back. One read, then at most two writes. */
-  const restoreSnapshot = async (): Promise<"restored" | "inconsistent"> => {
+   *  put the snapshot's quantities/prices back. One read, then at most two writes.
+   *
+   *  Runs OUTSIDE the request deadline on purpose. The most likely reason we are
+   *  rolling back is that the budget ran out, and with an exhausted deadline
+   *  `fetchDeadline` clamps every call to 0ms and aborts it instantly — the undo
+   *  would be dead on arrival exactly when it matters most. The customer is not
+   *  waiting on this anyway: the response is already lost to the App Proxy. */
+  const restoreSnapshot = (): Promise<"restored" | "inconsistent"> =>
+    runWithoutRequestDeadline(async () => {
     try {
       const live = await seal.getSubscriptionById(sealSubscriptionId);
       if (!live) return "inconsistent";
@@ -1017,12 +1071,16 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       log("snapshot-restore-failed", { msg: e instanceof Error ? e.message : String(e) });
       return "inconsistent";
     }
-  };
+    });
 
   /** Record the desired end state so the repair cron can converge asynchronously.
-   *  Written when we cannot get the subscription to a correct state in-request —
-   *  the case that used to end as a silent duplicate charging the customer twice. */
-  const scheduleRepair = async (reason: string) => {
+   *  Written BEFORE we touch Seal (see the pre-arm below) and again from the
+   *  catch blocks, for the case where we know precisely why we failed. */
+  const scheduleRepair = (reason: string) =>
+    // Outside the deadline: this row IS the safety net. Losing it because the
+    // budget is spent is the failure it exists to prevent (supabase-js asks for
+    // a flat 5s, which `fetchDeadline` clamps to 0 once the budget is gone).
+    runWithoutRequestDeadline(async () => {
     const nowIso = new Date().toISOString();
     const { error } = await supabaseAdmin()
       .from("subscription_line_repairs")
@@ -1046,7 +1104,52 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     }
     log("repair-intent-written");
     return true;
-  };
+    });
+
+  /** Clear the pre-armed intent once the lines really are where we wanted them. */
+  const disarmRepairIntent = () =>
+    runWithoutRequestDeadline(async () => {
+    try {
+      const { error } = await supabaseAdmin()
+        .from("subscription_line_repairs")
+        .delete()
+        .eq("customer_id", ctx.customerId)
+        .eq("seal_subscription_id", String(sealSubscriptionId));
+      if (error) {
+        // Left armed: the cron re-reads live Seal state and closes a no-op diff,
+        // so a stale row costs one wasted pass, never a wrong write.
+        log("repair-intent-disarm-failed", { msg: error.message });
+        return;
+      }
+      log("repair-intent-disarmed");
+    } catch (e) {
+      log("repair-intent-disarm-failed", { msg: e instanceof Error ? e.message : String(e) });
+    }
+    });
+
+  // ARM THE SAFETY NET BEFORE THE FIRST MUTATION (incident 2026-09-04).
+  //
+  // Every recovery path below (retry, restoreSnapshot, scheduleRepair, the Slack
+  // alert) lives inside a `catch`, so it only runs when a Seal call *rejects*.
+  // It does NOT run when the invocation dies outright — which is the failure that
+  // actually happens: three sequential Seal calls (edit → add → remove, up to 9 s
+  // each) outlast the App Proxy's ~10 s patience, the customer gets
+  // `gateway_timeout`, and the function is killed between add_items and
+  // remove_items. The subscription keeps BOTH the old and the new lines and the
+  // next charge is too high, with nothing written and no alert raised.
+  //
+  // That is not hypothetical: on 2026-09-04 it left three live subscriptions
+  // overcharging by 113.40 EUR/cycle, and `subscription_line_repairs` was empty
+  // — the net built for the June-July duplicates had never caught a single case,
+  // because it guards a mode that does not occur.
+  //
+  // So the intent is written FIRST and deleted on success. If we die mid-swap,
+  // the row survives and the repair cron converges the subscription. The cron is
+  // idempotent by construction (it diffs live Seal state against `desired`), so
+  // a row that outlives a successful change is a harmless no-op.
+  if (diff.adds.length || diff.removes.length) {
+    await scheduleRepair("pre-armed before line mutation");
+  }
 
   // 2a. Edits in place — no item ids change, nothing is removed.
   if (diff.edits.length) {
@@ -1061,7 +1164,10 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       log("seal-edit-items-failed", { msg });
       // Nothing added or removed yet, so the sub is either untouched or partially
       // edited; restore and abort.
-      await restoreSnapshot();
+      const outcome = await restoreSnapshot();
+      // Only disarm when the sub really is back on the snapshot. On
+      // "inconsistent" the pre-armed intent is the only thing that will fix it.
+      if (outcome === "restored") await disarmRepairIntent();
       await reattachRetentionDiscount();
       throw new ApiHttpError(
         502,
@@ -1099,7 +1205,8 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log("seal-add-items-failed", { msg });
-      await restoreSnapshot();
+      const outcome = await restoreSnapshot();
+      if (outcome === "restored") await disarmRepairIntent();
       await reattachRetentionDiscount();
       throw new ApiHttpError(
         502,
@@ -1128,7 +1235,11 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       await new Promise((r) => setTimeout(r, 800));
       let converged = false;
       try {
-        await seal.removeItems(sealSubscriptionId, diff.removes);
+        // Outside the request deadline: if we got here because the budget ran
+        // out, an in-budget retry would be aborted at 0ms and the customer would
+        // be left paying for both line sets. Getting the old lines off is worth
+        // more than returning fast on a response nobody is waiting for.
+        await runWithoutRequestDeadline(() => seal.removeItems(sealSubscriptionId, diff.removes));
         converged = true;
         log("seal-remove-items-ok-on-retry");
       } catch {
@@ -1137,8 +1248,14 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
       }
       await reattachRetentionDiscount();
       if (converged) {
+        // Either the retry landed (sub is on target) or the snapshot came back
+        // (sub is on its old plan). Both are consistent states nobody needs to
+        // repair, so drop the pre-armed intent.
+        await disarmRepairIntent();
         throw new ApiHttpError(502, "seal_remove_items_failed", `${msg} (rolled back)`);
       }
+      // Refresh the pre-armed intent with the real reason, for the operator
+      // reading `last_error` and for the alert below.
       const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
       alertSlackError({
         path: "/api/subscription/plan",
@@ -1155,6 +1272,12 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
         `${msg} (subscription has extra lines; a repair is scheduled)`,
       );
     }
+  }
+
+  // Lines converged: the pre-armed intent has done its job, drop it so the cron
+  // has nothing to chase.
+  if (diff.adds.length || diff.removes.length) {
+    await disarmRepairIntent();
   }
 
   // Lines converged. Record it before the verification step, so the audit trail exists
@@ -1404,7 +1527,7 @@ export const PATCH = withCustomer<Subscription>(async (req, ctx) => {
     ctx.customerId,
     effectivePreserveYYYYMMDD,
   );
-});
+};
 
 /**
  * Mix fields for a synthetic response, projected from the target plan.
