@@ -128,7 +128,19 @@ export function SkipOverlay({
   // así que ofrecer 6 cajas a quien tiene 2 es ofrecer una subida de importe donde el
   // cliente venía a frenar. Misma corrección que ya se hizo en la oferta de "menos cajas"
   // de CancelTakeover en el audit de 2026-07-08. (24-ago-2026)
-  const boxOptions = BOX_OPTIONS.filter((n) => n <= subscription.boxCount);
+  // Y tampoco tramos que quiten cajas SIN bajar el importe (4-sep-2026). La escalera
+  // cobra lo mismo por 3 que por 4 (85,05: la 4ª es la gratis del pack), así que
+  // ofrecerle 3 a quien tiene 4 en una pantalla que promete aligerar el gasto es
+  // ofrecerle perder una caja a cambio de nada. Sin precios cargados todavía no se
+  // filtra: mejor enseñar el tramo que esconderlo por una carrera de carga.
+  const boxOptions = BOX_OPTIONS.filter((n) => {
+    if (n > subscription.boxCount) return false;
+    if (n === subscription.boxCount || !pricing) return true;
+    const p = pricing.perBox[n - 1];
+    const actual = pricing.perBox[subscription.boxCount - 1];
+    if (p === undefined || actual === undefined) return true;
+    return p < actual - 0.004;
+  });
   const newPrice = pricing ? pricing.perBox[offerBoxes - 1] ?? null : null;
   // Lo que paga HOY sale del CONTRATO, no del catálogo: un trimestral legacy paga
   // 67,93 y el catálogo ya dice 85,05 (escalera web) — el delta se falseaba en las
