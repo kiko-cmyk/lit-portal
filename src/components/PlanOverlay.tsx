@@ -425,6 +425,25 @@ export function PlanOverlay({
                     {Math.abs(newPrice - currentPrice).toFixed(2)}
                   </div>
                 )}
+
+                {/* BAJAR SIN AHORRAR (4-sep-2026). La escalera cobra lo mismo por 3 que
+                    por 4 cajas (85,05 las dos: la 4ª es la gratis del pack), así que
+                    bajar de 4 a 3 quita una caja y no baja el recibo ni un céntimo. El
+                    bloque del delta de arriba solo se pinta cuando el delta NO es cero,
+                    o sea que se callaba justo en el caso en que el cliente sale
+                    perdiendo. Cinco clientes ya están pagando 85,05 por 3 cajas. */}
+                {boxesChanged &&
+                  currentPrice !== null &&
+                  newPrice !== null &&
+                  boxCount < subscription.boxCount &&
+                  Math.abs(newPrice - currentPrice) <= 0.004 && (
+                  <div className="mt-2 rounded-[14px] bg-[color:var(--color-bold-yellow)]/20 px-4 py-3 text-[11px] leading-relaxed text-[color:var(--color-lit-grey)]">
+                    <T
+                      en={`Heads up: ${boxCount} boxes costs the same as ${subscription.boxCount}, €${newPrice.toFixed(2)}. You would get one box less for the same price, so going back up to ${subscription.boxCount} is the better deal.`}
+                      es={`Ojo: ${boxCount} cajas cuestan lo mismo que ${subscription.boxCount}, ${newPrice.toFixed(2)} €. Recibirías una caja menos por el mismo precio, así que te sale mejor quedarte en ${subscription.boxCount}.`}
+                    />
+                  </div>
+                )}
                 {boxCount >= 5 && showsFreeBoxPerks && (
                   <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
                     <T

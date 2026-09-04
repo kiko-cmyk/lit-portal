@@ -4,6 +4,7 @@ import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
+import { acquirePlanLock } from "@/lib/plan-lock";
 import { alertSlackError } from "@/lib/alert";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
@@ -426,6 +427,24 @@ const patchPlan = async (
   if (nextAttemptDate && isWithinCutoff(nextAttemptDate)) {
     throw new ApiHttpError(400, "cutoff_passed", "Cannot change plan within 24h of next ship");
   }
+
+  // CERROJO (2026-09-04). Desde aquí hasta el final hay hasta tres mutaciones en Seal,
+  // y `expectedLineIds` de arriba NO las protege de la concurrencia: es una lectura
+  // seguida de una escritura, así que dos peticiones simultáneas leen el mismo estado,
+  // las dos lo ven igual al esperado y las dos ejecutan `add_items` sobre las mismas
+  // variantes. Líneas duplicadas y cliente pagando de más, con un doble clic bastando
+  // para provocarlo. Se libera en el `finally` de más abajo.
+  const planLock = await acquirePlanLock(ctx.customerId, sealSubscriptionId, "plan-route");
+  try {
+    return await applyPlanChange();
+  } finally {
+    await planLock.release();
+  }
+
+  // El cuerpo real, movido a una función interna para que el `finally` de arriba cubra
+  // TODAS las salidas (incluidos los throw de las guardas y de las mutaciones) sin
+  // tener que envolver el resto del handler en otro nivel de indentación.
+  async function applyPlanChange(): Promise<Subscription> {
 
   // Date we must keep as the next ship date after Seal regenerates its
   // billing_attempts. Prefer Seal's authoritative attempt date (read above /
@@ -1591,6 +1610,23 @@ const patchPlan = async (
   // verify_ok; el último solo aparece si Seal devolvió algo pero la rama de
   // verificación no llegó a correr, y también significa "sin verificar".
   await writeAudit(`verify_${verifyOutcome}`);
+
+  // SIN VERIFICAR = SIN CONFIRMAR (4-sep-2026). Aquí las mutaciones se aplicaron pero
+  // no hemos podido leer Seal de vuelta, así que no sabemos si el line-set quedó como
+  // queríamos. Hasta hoy eso se registraba en la auditoría y se devolvía un 200: la
+  // fila queda para el forense, pero nadie la mira en tiempo real, así que una
+  // escritura mal aplicada salía por la puerta como un éxito.
+  //
+  // Se vuelve a armar la intención de reparación (el `disarm` de más arriba corrió al
+  // converger las líneas, ANTES de este punto). El cron relee el estado vivo y lo
+  // compara con `desired`: si de verdad quedó bien, cierra como no-op y no ha costado
+  // nada; si no, lo converge. Es exactamente la asimetría que ya asumimos en el resto
+  // de la ruta: una intención de sobra es barata, una que falta cuesta dinero.
+  if (diff.adds.length || diff.removes.length) {
+    await scheduleRepair(`sin verificar (${verifyOutcome})`);
+    log("repair-intent-rearmed-unverified", { verifyOutcome });
+  }
+
   log("done-unverified", {
     sealSubscriptionId,
     verifyOutcome,
@@ -1605,6 +1641,7 @@ const patchPlan = async (
     ctx.customerId,
     effectivePreserveYYYYMMDD,
   );
+  } // fin de applyPlanChange
 };
 
 /**

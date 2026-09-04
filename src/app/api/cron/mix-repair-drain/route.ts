@@ -113,6 +113,42 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     const live = getLines(sub);
+
+    // LAS CAJAS VIVAS TIENEN QUE SEGUIR SIENDO LAS DEL INTENTO (4-sep-2026).
+    //
+    // `desired` se congela cuando se arma la intención y puede aplicarse hasta 6h más
+    // tarde (el TTL). En ese hueco el cliente puede haber cambiado su nº de cajas por
+    // otra vía: el propio portal, soporte, el admin de Seal. Aplicar entonces un
+    // line-set viejo no es reparar, es revertirle un cambio que sí pidió, y hacerlo
+    // con precios preservados significa además que ninguna guarda numérica lo va a
+    // frenar (el total cuadra con el intento, no con lo que el cliente tiene hoy).
+    //
+    // El nº de cajas es la unidad correcta para comparar: es lo que el cliente recibe
+    // y la regla con la que se decide precio y composición. Si no coincide, la
+    // intención está caduca de hecho aunque no lo esté de tiempo: se cierra y se avisa
+    // en vez de escribir.
+    const desiredBoxes = desired.reduce((s, l) => s + (Number(l.boxes) || 0), 0);
+    const liveBoxes = live.reduce((s, l) => s + (Number(l.boxes) || 0), 0);
+    if (desiredBoxes > 0 && liveBoxes > 0 && desiredBoxes !== liveBoxes) {
+      await close("failed", `cajas cambiaron: intento ${desiredBoxes}, vivas ${liveBoxes}`);
+      failed++;
+      console.warn("[mix-repair-drain] intento obsoleto, las cajas ya no coinciden", {
+        subId,
+        desiredBoxes,
+        liveBoxes,
+      });
+      alertSlackError({
+        path: "/api/cron/mix-repair-drain",
+        code: "mix_repair_stale_boxes",
+        msg:
+          `sub ${subId}: la reparación pedía ${desiredBoxes} cajas y la suscripción tiene ${liveBoxes}. ` +
+          `Alguien le cambió el plan entremedias, así que NO se aplica (habría revertido ese cambio). ` +
+          `Revisar a mano si la sub quedó bien tras aquel cambio.`,
+        customerId: intent.customer_id,
+      });
+      continue;
+    }
+
     const diff = diffLines(live, desired);
     if (diff.noop) {
       // Someone (a retry, support, the customer) already got it right.
@@ -134,11 +170,33 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         // when the original add never landed; the customer is then UNDER-charged
         // rather than over-charged, so it is safe to hand to support instead of
         // guessing a payload from the cron.
+        //
+        // PERO SE AVISA YA, NO AL EXPIRAR (4-sep-2026). Antes esto solo hacía `bump`,
+        // así que la intención daba vueltas hasta agotar MAX_ATTEMPTS o el TTL de 6h y
+        // solo entonces alertaba: seis horas en las que nadie sabía que había una
+        // suscripción que el cron no puede arreglar. Y el "está infra-cobrado, no
+        // corre prisa" solo vale si los removes ya se aplicaron; si quedan removes
+        // pendientes junto a los adds, la sub tiene líneas de más y cobra de MÁS.
+        // Cuál de los dos casos es, lo dice el diff, así que se dice en el aviso.
+        const alsoRemoves = diff.removes.length;
         await bump(`needs ${diff.adds.length} add(s) — not done from the cron`);
         deferred++;
         console.warn("[mix-repair-drain] repair needs adds, deferring to support", {
           subId,
           adds: diff.adds.map((a) => a.variantId),
+          pendingRemoves: alsoRemoves,
+        });
+        alertSlackError({
+          path: "/api/cron/mix-repair-drain",
+          code: alsoRemoves ? "mix_repair_needs_adds_overcharging" : "mix_repair_needs_adds",
+          msg:
+            `sub ${subId}: la reparación necesita ${diff.adds.length} add(s) y el cron no sabe hacerlos ` +
+            `(faltan los datos de línea de Shopify). ` +
+            (alsoRemoves
+              ? `ADEMÁS quedan ${alsoRemoves} línea(s) por quitar, así que AHORA MISMO COBRA DE MÁS: arreglar a mano ya.`
+              : `No cobra de más (le faltan líneas, no le sobran), pero no se va a arreglar solo.`) +
+            ` Variantes a añadir: ${diff.adds.map((a) => a.variantId).join(", ")}.`,
+          customerId: intent.customer_id,
         });
         continue;
       }
