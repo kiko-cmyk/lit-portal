@@ -604,8 +604,17 @@ const patchPlan = async (
   //   - Cambian las cajas → compra otra cantidad, y el catálogo es el precio de esa
   //     cantidad. PlanOverlay ya le enseña el delta contra lo que paga de verdad (a76c07d).
   //
-  // Solo baja: si el catálogo es más barato que su contrato (las 15 subs POR_ENCIMA, una
-  // SL120 a 90,57 contra el pack a 85,05), gana el catálogo y el cliente se beneficia.
+  // EN LAS DOS DIRECCIONES (Juan, 2026-09-04: "cuando alguien cambie de sabor, que no se
+  // toquen los precios NUNCA... se le mantiene su precio anterior").
+  //
+  // Hasta hoy esto solo miraba la subida (`targetPlan.totalCents > liveChargeCents`) y
+  // dejaba pasar la bajada: las 14 subs POR_ENCIMA (una SL120 a 90,57 contra el pack a
+  // 85,05) se reprecian al catálogo por el mero hecho de cambiar de sabor. Se leía como
+  // "el cliente se beneficia", pero es el mismo defecto en espejo: el cliente no pidió
+  // cambiar de precio, pidió cambiar de sabor, y su contrato es su contrato. Además es
+  // irreversible, porque las variantes de la escalera vieja son de solo lectura y el
+  // portal ya no sabe reconstruir 90,57. Ahora la condición es de DESIGUALDAD: mismas
+  // cajas y distinto importe, se preserva, suba o baje.
   const liveChargeCents = chargeTotalCents(currentLines);
   const boxCountUnchanged = currentLines.length > 0 && targetBoxCount === mixBoxCount(currentComposition);
   // Cambió de verdad el nº de cajas respecto al contrato vivo. Con esto se limpia el
@@ -613,7 +622,7 @@ const patchPlan = async (
   // legítimo para esa cantidad.
   const boxCountChangedFromLive = currentLines.length > 0 && !boxCountUnchanged;
   let pricePreservedFromCents: number | null = null;
-  if (compositionChanged && boxCountUnchanged && targetPlan.totalCents > liveChargeCents) {
+  if (compositionChanged && boxCountUnchanged && targetPlan.totalCents !== liveChargeCents) {
     // `ladderPrices` está poblado en esta rama: compositionChanged es la única forma de
     // llegar aquí, y es la rama que lo asigna.
     const preserved = ladderPrices ? planPreservingCharge(targetComposition, ladderPrices, liveChargeCents) : null;

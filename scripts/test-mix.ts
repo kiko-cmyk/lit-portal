@@ -620,6 +620,28 @@ console.log("\n=== planPreservingCharge ===");
   eq(r!.totalCents, 8505, "ya a catalogo: sigue en 85,05");
 }
 
+// CONTRATO MAS CARO QUE EL CATALOGO (4-sep-2026). Las 14 subs POR_ENCIMA: una SL120
+// a 90,57 contra un pack de 85,05. Antes se devolvia null y el cliente se repreciaba
+// a la baja por el mero hecho de cambiar de sabor; ahora se preserva igual, porque la
+// regla es "cambiar de sabor no toca el precio", no "no lo sube".
+{
+  const r = planPreservingCharge([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], LADDER, 9057);
+  eq(r !== null, true, "contrato mas caro: propone plan en vez de rendirse");
+  eq(r!.totalCents, 9057, "contrato mas caro: conserva 90,57 exacto, no baja a 85,05");
+}
+{
+  // 6 cajas a 152,98 (sub 14682293) contra un catalogo de 141,75.
+  const r = planPreservingCharge([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 3 }], LADDER, 15298);
+  eq(r !== null, true, "6 cajas por encima: propone plan");
+  eq(r!.totalCents, 15298, "6 cajas por encima: conserva 152,98 exacto");
+}
+{
+  // Sabor unico y contrato mas caro: el residual tiene que poder colocarse.
+  const r = planPreservingCharge([{ flavor: W, boxes: 4 }], LADDER, 9628);
+  eq(r !== null, true, "sabor unico por encima: propone plan");
+  eq(r!.totalCents, 9628, "sabor unico por encima: conserva 96,28 exacto");
+}
+
 // BARRIDO EXHAUSTIVO: las 83 composiciones de 1 a 6 cajas con 3 sabores, cada una
 // contra el precio tipico de la escalera VIEJA. El invariante es uno solo: jamas
 // por encima de lo que el cliente paga hoy.

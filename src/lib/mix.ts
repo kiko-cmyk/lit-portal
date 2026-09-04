@@ -629,6 +629,10 @@ export function planPreservingCharge(
   const totalBoxes = boxesPerLine.reduce((a, b) => a + b, 0);
   if (totalBoxes <= 0) return null;
 
+  /** El contrato es MÁS CARO que el catálogo de hoy, así que preservarlo escala hacia
+   *  arriba y las guardas ancladas al catálogo dejan de aplicar. */
+  const scalingUp = liveChargeCents > catalogue.tierTotalCents;
+
   const scaled = catalogue.lines.map((l) => {
     const quantity = Math.max(1, Number(l.quantity) || 1);
     // Precio por unidad, redondeado hacia abajo: el sobrante se reparte después, así
@@ -651,12 +655,14 @@ export function planPreservingCharge(
     .sort((a, b) => a.boxes - b.boxes);
   for (const { i } of bySmallest) {
     const s = scaled[i];
-    // Nunca por encima del catálogo: es el invariante que hace que el 3+1 siga
-    // leyéndose como un 3+1.
-    while (
-      residual >= s.quantity &&
-      s.unitPriceCents + 1 <= s.line.unitPriceCents
-    ) {
+    // El tope "nunca por encima del catálogo" solo vale cuando preservamos un contrato
+    // MÁS BARATO que el catálogo, que era el único caso contemplado hasta el 4-sep. Con
+    // un contrato más CARO (las 14 subs POR_ENCIMA) el factor de escala es > 1 y ese
+    // tope haría imposible colocar el residual, devolviendo null y repreciando al
+    // cliente justo lo que se le prometió no tocar. El invariante que de verdad importa
+    // es el de abajo: el total escrito == el importe del contrato, ni un céntimo más.
+    const capCents = scalingUp ? Number.MAX_SAFE_INTEGER : s.line.unitPriceCents;
+    while (residual >= s.quantity && s.unitPriceCents + 1 <= capCents) {
       s.unitPriceCents += 1;
       residual -= s.quantity;
     }
@@ -664,8 +670,12 @@ export function planPreservingCharge(
 
   const lines: TargetLine[] = scaled.map((s) => ({ ...s.line, unitPriceCents: s.unitPriceCents }));
   if (lines.some((l) => l.unitPriceCents <= 0)) return null;
-  // Ninguna línea por encima de su precio de catálogo.
-  if (lines.some((l, i) => l.unitPriceCents > catalogue.lines[i].unitPriceCents)) return null;
+  // Ninguna línea por encima de su precio de catálogo. Solo aplica al preservar hacia
+  // abajo: escalando hacia arriba, estar por encima del catálogo es justamente el punto
+  // (el contrato vale más que la tarifa de hoy).
+  if (!scalingUp && lines.some((l, i) => l.unitPriceCents > catalogue.lines[i].unitPriceCents)) {
+    return null;
+  }
 
   const totalCents = lines.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
   // `distributeUnitPrices` ya asegura Σ unidad × cajas <= objetivo, y multiplicar por

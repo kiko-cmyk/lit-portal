@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang } from "@/lib/i18n";
 import { compositionLabel, type FlavorComposition, resplitOnBoxChange } from "@/lib/mix";
@@ -10,7 +10,7 @@ import {
   type FlavorKey,
   flavorKeyForVariant,
 } from "@/lib/seal-plans";
-import type { Subscription } from "@/lib/types";
+import type { PricingResponse, Subscription } from "@/lib/types";
 import { isMixSavable, MixBuilder } from "./MixBuilder";
 
 /** Seed for a fresh mix: one box to the first flavor, the rest to the second, so the
@@ -62,7 +62,37 @@ export function FlavorOverlay({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [pricing, setPricing] = useState<PricingResponse | null>(null);
   const t = useLang();
+
+  // Catalogue price for THIS box count, to tell apart a customer on today's ladder
+  // from one carrying an older, cheaper contract. Only used to decide whether to
+  // show the banner below, so a failed fetch simply means no banner.
+  useEffect(() => {
+    api<PricingResponse>(`/api/pricing?flavor=${currentFlavor}`)
+      .then(setPricing)
+      .catch(() => null);
+  }, [currentFlavor]);
+
+  /**
+   * The customer pays less than today's catalogue for the boxes they get, so they
+   * are on a legacy contract we promise not to touch (decision LIT-372, 2026-09-03:
+   * these contracts keep their price for as long as they stay subscribed).
+   *
+   * 514 subscribers are in this position, nearly all on 3 boxes at 67,93 against a
+   * catalogue of 85,05. The page already said "your price does not change" in a
+   * dimmed line among plan, frequency and ship date, which is precisely the line
+   * that matters most to them and the easiest to miss. Hence the explicit banner.
+   */
+  const catalogueCents =
+    pricing && boxCount >= 1 && boxCount <= pricing.perBox.length
+      ? Math.round(pricing.perBox[boxCount - 1] * 100)
+      : null;
+  const keepsLegacyPrice =
+    catalogueCents !== null &&
+    subscription.chargeTotalCents > 0 &&
+    subscription.chargeTotalCents < catalogueCents;
+  const legacyPrice = (subscription.chargeTotalCents / 100).toFixed(2).replace(".", ",");
 
   const target: FlavorComposition[] =
     mode === "mix" ? draft : [{ flavor: selected, boxes: boxCount }];
@@ -264,6 +294,29 @@ export function FlavorOverlay({
                 />
               )}
             </p>
+
+            {/* Legacy contract: say the price is kept, out loud and with the figure.
+                The generic line above already promises it, but these customers are the
+                ones for whom it is the whole question. */}
+            {keepsLegacyPrice && (
+              <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-5 py-4">
+                <span aria-hidden className="mt-px text-base leading-none">
+                  🔒
+                </span>
+                <p className="text-xs leading-relaxed text-[color:var(--color-lit-grey)]">
+                  <strong className="font-bold">
+                    <T
+                      en={`You keep your price: ${legacyPrice} € per shipment.`}
+                      es={`Mantienes tu precio: ${legacyPrice} € por envío.`}
+                    />
+                  </strong>{" "}
+                  <T
+                    en="Changing flavor does not raise what you pay, however you mix them."
+                    es="Cambiar de sabor no te sube lo que pagas, los mezcles como los mezcles."
+                  />
+                </p>
+              </div>
+            )}
 
             {/* One box: mixing is impossible, so offer the way out instead of a dead end. */}
             {boxCount === 1 && ALL_FLAVORS.length >= 2 && onRequestPlanChange && (
