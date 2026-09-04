@@ -3,7 +3,7 @@ import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { runWithRequestDeadline } from "@/lib/http-timeout";
+import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { alertSlackError } from "@/lib/alert";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
@@ -115,12 +115,32 @@ const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo"
  * both live and the next charge too high. Three subscriptions were left
  * overcharging by 113.40 EUR/cycle before anyone noticed.
  *
- * With the ambient deadline, each call in the chain only gets the time actually
- * left, so a stall surfaces as a typed, alerted failure BEFORE the proxy gives
- * up — and, critically, before we are half way through a swap. Same 9.5 s the
- * address route uses, sized just under the proxy's patience.
+ * This REVERSES a deliberate decision documented in address/route.ts:29-31,
+ * which excluded /plan on the grounds that "being killed early is worse than
+ * being slow (partial state)" and that per-call deadlines were protection
+ * enough. The premise was right; the conclusion did not hold. Per-call budgets
+ * never bound the SUM, so the route was killed anyway — just later, at Vercel's
+ * 60 s, on a request nobody was listening to, and precisely between add_items
+ * and remove_items. "Slow" was never on the menu; the real choice was between
+ * dying early with a compensation and dying late without one.
+ *
+ * What makes early death safe now is the pre-armed repair intent below plus the
+ * recovery paths running under `runWithoutRequestDeadline`: an aborted swap
+ * leaves a row the cron converges, instead of a silent double charge. Without
+ * that half of the fix, the original objection would still stand.
+ *
+ * 9.5 s, same as the address route, sized just under the proxy's patience.
  */
 const REQUEST_BUDGET_MS = 9_500;
+
+/**
+ * Hard ceiling, above REQUEST_BUDGET_MS so the deadline is what normally stops
+ * us, not the kill. The extra room is for the compensation work that runs
+ * outside the budget (repair intent, remove retry, snapshot restore) once the
+ * customer's response is already lost. The 60 s default let a doomed request
+ * mutate Seal for another ~50 s with nobody listening.
+ */
+export const maxDuration = 20;
 
 export const PATCH = withCustomer<Subscription>((req, ctx) =>
   runWithRequestDeadline(REQUEST_BUDGET_MS, () => patchPlan(req, ctx)),
@@ -1022,8 +1042,15 @@ const patchPlan = async (
   log("pre-mutation-snapshot", { lines: currentLines });
 
   /** Undo whatever we managed to apply: drop lines that weren't in the snapshot and
-   *  put the snapshot's quantities/prices back. One read, then at most two writes. */
-  const restoreSnapshot = async (): Promise<"restored" | "inconsistent"> => {
+   *  put the snapshot's quantities/prices back. One read, then at most two writes.
+   *
+   *  Runs OUTSIDE the request deadline on purpose. The most likely reason we are
+   *  rolling back is that the budget ran out, and with an exhausted deadline
+   *  `fetchDeadline` clamps every call to 0ms and aborts it instantly — the undo
+   *  would be dead on arrival exactly when it matters most. The customer is not
+   *  waiting on this anyway: the response is already lost to the App Proxy. */
+  const restoreSnapshot = (): Promise<"restored" | "inconsistent"> =>
+    runWithoutRequestDeadline(async () => {
     try {
       const live = await seal.getSubscriptionById(sealSubscriptionId);
       if (!live) return "inconsistent";
@@ -1044,12 +1071,16 @@ const patchPlan = async (
       log("snapshot-restore-failed", { msg: e instanceof Error ? e.message : String(e) });
       return "inconsistent";
     }
-  };
+    });
 
   /** Record the desired end state so the repair cron can converge asynchronously.
    *  Written BEFORE we touch Seal (see the pre-arm below) and again from the
    *  catch blocks, for the case where we know precisely why we failed. */
-  const scheduleRepair = async (reason: string) => {
+  const scheduleRepair = (reason: string) =>
+    // Outside the deadline: this row IS the safety net. Losing it because the
+    // budget is spent is the failure it exists to prevent (supabase-js asks for
+    // a flat 5s, which `fetchDeadline` clamps to 0 once the budget is gone).
+    runWithoutRequestDeadline(async () => {
     const nowIso = new Date().toISOString();
     const { error } = await supabaseAdmin()
       .from("subscription_line_repairs")
@@ -1073,10 +1104,11 @@ const patchPlan = async (
     }
     log("repair-intent-written");
     return true;
-  };
+    });
 
   /** Clear the pre-armed intent once the lines really are where we wanted them. */
-  const disarmRepairIntent = async () => {
+  const disarmRepairIntent = () =>
+    runWithoutRequestDeadline(async () => {
     try {
       const { error } = await supabaseAdmin()
         .from("subscription_line_repairs")
@@ -1093,7 +1125,7 @@ const patchPlan = async (
     } catch (e) {
       log("repair-intent-disarm-failed", { msg: e instanceof Error ? e.message : String(e) });
     }
-  };
+    });
 
   // ARM THE SAFETY NET BEFORE THE FIRST MUTATION (incident 2026-09-04).
   //
@@ -1203,7 +1235,11 @@ const patchPlan = async (
       await new Promise((r) => setTimeout(r, 800));
       let converged = false;
       try {
-        await seal.removeItems(sealSubscriptionId, diff.removes);
+        // Outside the request deadline: if we got here because the budget ran
+        // out, an in-budget retry would be aborted at 0ms and the customer would
+        // be left paying for both line sets. Getting the old lines off is worth
+        // more than returning fast on a response nobody is waiting for.
+        await runWithoutRequestDeadline(() => seal.removeItems(sealSubscriptionId, diff.removes));
         converged = true;
         log("seal-remove-items-ok-on-retry");
       } catch {
