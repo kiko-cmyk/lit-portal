@@ -48,6 +48,16 @@ alter table subscriptions add column if not exists composition jsonb;
 alter table subscriptions add column if not exists shape text not null default 'packed';
 alter table subscriptions add column if not exists line_count int not null default 1;
 alter table subscriptions add column if not exists charge_total_cents int;
+-- INTENCIÓN, no observación: lo que este contrato tiene derecho a pagar cuando se le
+-- conservó el precio de la escalera vieja al cambiar de sabor. NULL = paga catálogo.
+-- Ver database/migrations/2026-09-03_preserved_charge.sql.
+alter table subscriptions add column if not exists preserved_charge_cents int
+  check (preserved_charge_cents is null or preserved_charge_cents > 0);
+-- Las cajas a las que corresponde ese importe: el importe preservado solo vale si las
+-- cajas vivas coinciden. Sin esto, un preservado de 3 cajas sobre una sub que hoy tiene
+-- 4 hace que el cron le "cure" el precio a la baja y regale 17,13 por entrega.
+alter table subscriptions add column if not exists preserved_box_count int
+  check (preserved_box_count is null or preserved_box_count between 1 and 6);
 
 create index if not exists idx_subscriptions_status on subscriptions(status);
 create index if not exists idx_subscriptions_next_ship on subscriptions(next_ship_date);

@@ -84,6 +84,16 @@ export function PlanOverlay({
   const displayPrice = !boxesChanged && realCurrent !== null ? realCurrent : newPrice;
   const atCatalog =
     displayPrice !== null && newPrice !== null && Math.abs(displayPrice - newPrice) < 0.005;
+  // Un contrato POR DEBAJO del catálogo (la escalera vieja: 67,93 por 3 cajas) que
+  // cambia de nº de cajas pasa a pagar catálogo, y eso es una SUBIDA aunque el destino
+  // traiga caja gratis. Sin esto, `atCatalog` es true en cuanto boxesChanged (porque
+  // displayPrice pasa a ser newPrice) y el cliente veía "PACK 3+1 · 1 CAJA GRATIS"
+  // justo al lado de "↑ €17,13": las dos cosas ciertas, juntas leen como una promoción
+  // que tapa la subida. Las chapas de regalo se callan cuando el cliente está dejando
+  // atrás un precio mejor. (3-sep-2026)
+  const leavingBetterRate =
+    realCurrent !== null && newPrice !== null && realCurrent < newPrice - 0.005;
+  const showsFreeBoxPerks = atCatalog && !leavingBetterRate;
 
   const handleConfirm = async () => {
     if (!hasChange) return;
@@ -299,9 +309,12 @@ export function PlanOverlay({
             {/* Upsell del pack 3+1: con 3 cajas, la 4ª es gratis (escalera web
                 2026-08-22). El importe sale SIEMPRE de pricing (nunca hardcodeado);
                 mientras pricing es null se muestra la variante sin cifra.
-                NO se enseña a un legacy en reposo que paga menos que el catálogo
-                (trimestral a 67,93): para él pasar a 4 NO es gratis, es +17,12. */}
-            {boxCount === 3 && (boxesChanged || atCatalog) && (
+                NO se enseña a un legacy que paga menos que el catálogo (trimestral a
+                67,93): para él pasar a 4 NO es gratis, es +17,12. Ojo, `boxesChanged`
+                por sí solo NO bastaba para respetarlo: en cuanto el legacy movía el
+                selector, `atCatalog` se volvía true (displayPrice pasa a ser newPrice)
+                y volvía a ver "la 4ª GRATIS" sobre una subida real. (3-sep-2026) */}
+            {boxCount === 3 && (boxesChanged || atCatalog) && !leavingBetterRate && (
               <div className="mt-4 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-bold-yellow)]/25 px-5 py-4">
                 <p className="text-xs font-bold text-[color:var(--color-lit-grey)]">
                   {pricing ? (
@@ -378,7 +391,7 @@ export function PlanOverlay({
                   <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
                     <T en="Per shipment" es="Por envío" />
                   </div>
-                  {boxCount === 4 && atCatalog && (
+                  {boxCount === 4 && showsFreeBoxPerks && (
                     <span className="rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1 text-[9px] font-black uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]">
                       <T en="PACK 3+1 · 1 FREE BOX" es="PACK 3+1 · 1 CAJA GRATIS" />
                     </span>
@@ -388,13 +401,13 @@ export function PlanOverlay({
                   <span className="font-display text-4xl font-black text-[color:var(--color-lit-grey)]">
                     €{(displayPrice ?? newPrice).toFixed(2)}
                   </span>
-                  {newCompare && atCatalog && displayPrice !== null && newCompare > displayPrice && (
+                  {newCompare && showsFreeBoxPerks && displayPrice !== null && newCompare > displayPrice && (
                     <span className="text-sm line-through text-[color:var(--color-warm-gray)]">
                       €{newCompare.toFixed(2)}
                     </span>
                   )}
                 </div>
-                {boxCount === 4 && atCatalog && (
+                {boxCount === 4 && showsFreeBoxPerks && (
                   <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
                     <T
                       en="You pay for 3 boxes and the fourth ships free."
@@ -412,7 +425,7 @@ export function PlanOverlay({
                     {Math.abs(newPrice - currentPrice).toFixed(2)}
                   </div>
                 )}
-                {boxCount >= 5 && atCatalog && (
+                {boxCount >= 5 && showsFreeBoxPerks && (
                   <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
                     <T
                       en="Includes the 3+1 pack (1 free box in every shipment)."

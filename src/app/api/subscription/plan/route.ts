@@ -19,6 +19,7 @@ import {
   type MixPlan,
   mixBoxCount,
   planFromCurrentLines,
+  planPreservingCharge,
   planTargetLines,
   priceToCents,
   resplitOnBoxChange,
@@ -551,6 +552,9 @@ const patchPlan = async (
 
   let tierTotalCents: number;
   let targetPlan: MixPlan;
+  // Los precios vivos del catálogo, cuando esta petición los ha necesitado. El camino
+  // del espejo (solo frecuencia) no consulta la escalera, así que se queda en null.
+  let ladderPrices: LadderPrices | null = null;
   if (!compositionChanged) {
     targetPlan = planFromCurrentLines(currentLines);
     tierTotalCents = targetPlan.tierTotalCents;
@@ -568,6 +572,7 @@ const patchPlan = async (
         `Could not price ${targetBoxCount} box(es): ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+    ladderPrices = prices;
     tierTotalCents = ladderTotalCents(targetBoxCount, prices);
     if (!Number.isFinite(tierTotalCents) || tierTotalCents <= 0) {
       throw new ApiHttpError(500, "pricing_unavailable", `Bad tier price ${tierTotalCents}`);
@@ -580,57 +585,88 @@ const patchPlan = async (
     targetPlan = planTargetLines(targetComposition, prices);
   }
 
-  // ───── CONTENCIÓN: nunca subir el precio en silencio (2026-08-24) ─────
+  // ───── PRESERVAR EL PRECIO DEL CONTRATO (3-sep-2026) ─────
   //
-  // Un cambio de composición reprecia TODAS las líneas a la escalera web. Para quien
-  // ya está a catálogo eso es un no-op; para los 577 contratos de la escalera vieja es
-  // una subida (una trimestral de 3 cajas pasa de 67,93 a 85,05, +17,12 por cobro) que
-  // el cliente no ha pedido y que la pantalla de sabores le prometía por escrito que no
-  // iba a pasar.
+  // Un cambio de composición construye las líneas al precio del CATÁLOGO. Para quien ya
+  // está a catálogo eso es un no-op; para los 533 contratos activos que siguen por
+  // debajo de la escalera web (522 de ellos a 3 cajas por 67,93 cuando el catálogo pide
+  // 85,05) era una subida de 17,12 € por entrega que el cliente no pidió.
   //
-  // La línea la trazamos en el NÚMERO DE CAJAS, que es lo que el cliente recibe:
-  //   - Cambian las cajas → compra otra cantidad, el catálogo es el precio y PlanOverlay
-  //     ya le enseña el delta contra lo que paga de verdad (a76c07d). Pasa.
-  //   - NO cambian las cajas (sabor o mezcla) → recibe exactamente lo mismo, así que
-  //     cobrarle más no tiene defensa. Se niega y se le manda a soporte.
+  // La contención del 24-ago lo rechazaba con un 409 y una llamada pendiente por cada
+  // caso. Con 522 clientes eso no es una cola de migración, es un muro: nadie va a hacer
+  // 522 llamadas, así que en la práctica el cliente se quedaba sin poder cambiar de
+  // sabor. Decisión de Juan (3-sep-2026): mantener el precio.
   //
-  // Es contención deliberadamente NEUTRAL respecto a la decisión pendiente sobre la
-  // escalera vieja (migrar hablando con cada cliente vs congelar el precio del
-  // contrato): no congela nada ni reprecia nada, solo convierte una subida silenciosa
-  // en la conversación que las dos salidas necesitan igual. Cuando esa decisión esté
-  // tomada, aquí se preserva el importe o se pide confirmación explícita, pero el 409
-  // deja de ser el final del camino.
+  // La línea la seguimos trazando en el NÚMERO DE CAJAS, que es lo que el cliente recibe:
+  //   - NO cambian las cajas (sabor o mezcla) → recibe exactamente lo mismo, así que paga
+  //     exactamente lo mismo. Se preserva el importe. Es lo que FlavorOverlay le promete
+  //     por escrito y lo que prometen las ofertas de retención de CancelTakeover.
+  //   - Cambian las cajas → compra otra cantidad, y el catálogo es el precio de esa
+  //     cantidad. PlanOverlay ya le enseña el delta contra lo que paga de verdad (a76c07d).
+  //
+  // EN LAS DOS DIRECCIONES (Juan, 2026-09-04: "cuando alguien cambie de sabor, que no se
+  // toquen los precios NUNCA... se le mantiene su precio anterior").
+  //
+  // Hasta hoy esto solo miraba la subida (`targetPlan.totalCents > liveChargeCents`) y
+  // dejaba pasar la bajada: las 14 subs POR_ENCIMA (una SL120 a 90,57 contra el pack a
+  // 85,05) se reprecian al catálogo por el mero hecho de cambiar de sabor. Se leía como
+  // "el cliente se beneficia", pero es el mismo defecto en espejo: el cliente no pidió
+  // cambiar de precio, pidió cambiar de sabor, y su contrato es su contrato. Además es
+  // irreversible, porque las variantes de la escalera vieja son de solo lectura y el
+  // portal ya no sabe reconstruir 90,57. Ahora la condición es de DESIGUALDAD: mismas
+  // cajas y distinto importe, se preserva, suba o baje.
   const liveChargeCents = chargeTotalCents(currentLines);
   const boxCountUnchanged = currentLines.length > 0 && targetBoxCount === mixBoxCount(currentComposition);
-  if (compositionChanged && boxCountUnchanged && targetPlan.totalCents > liveChargeCents) {
-    log("price-would-increase-refused", {
-      liveChargeCents,
-      targetCents: targetPlan.totalCents,
-      deltaCents: targetPlan.totalCents - liveChargeCents,
-      targetBoxCount,
-      currentComposition,
-      targetComposition,
-    });
-    // No es un fallo del sistema, es un cliente que quería algo y se ha quedado sin
-    // hacerlo: cada aviso es una llamada pendiente, que es exactamente la cola de
-    // migración de la escalera vieja.
-    alertSlackError({
-      path: "/api/subscription/plan",
-      code: "price_would_increase",
-      msg:
-        `sub ${sealSubscriptionId}: cambio de ${compositionLabel(currentComposition)} a ` +
-        `${compositionLabel(targetComposition)} con las MISMAS ${targetBoxCount} cajas subiría de ` +
-        `${centsToPrice(liveChargeCents)} a ${centsToPrice(targetPlan.totalCents)} ` +
-        `(+${centsToPrice(targetPlan.totalCents - liveChargeCents)}). Rechazado, el cliente no lo pidió. ` +
-        `Contrato de la escalera vieja: toca llamarle.`,
-      customerId: ctx.customerId,
-    });
-    throw new ApiHttpError(
-      409,
-      "price_would_increase",
-      `This change keeps the same ${targetBoxCount} boxes but would raise the charge from ` +
-        `${centsToPrice(liveChargeCents)} to ${centsToPrice(targetPlan.totalCents)}. Refused.`,
-    );
+  // Cambió de verdad el nº de cajas respecto al contrato vivo. Con esto se limpia el
+  // precio preservado: quien compra otra cantidad pasa a catálogo, que es su precio
+  // legítimo para esa cantidad.
+  const boxCountChangedFromLive = currentLines.length > 0 && !boxCountUnchanged;
+  let pricePreservedFromCents: number | null = null;
+  if (compositionChanged && boxCountUnchanged && targetPlan.totalCents !== liveChargeCents) {
+    // `ladderPrices` está poblado en esta rama: compositionChanged es la única forma de
+    // llegar aquí, y es la rama que lo asigna.
+    const preserved = ladderPrices ? planPreservingCharge(targetComposition, ladderPrices, liveChargeCents) : null;
+    if (preserved) {
+      pricePreservedFromCents = liveChargeCents;
+      targetPlan = preserved;
+      log("price-preserved", {
+        liveChargeCents,
+        catalogueCents: preserved.tierTotalCents,
+        writtenCents: preserved.totalCents,
+        savedCents: preserved.tierTotalCents - preserved.totalCents,
+        targetBoxCount,
+        currentComposition,
+        targetComposition,
+      });
+    } else {
+      // El reparto no es aplicable (alguna línea cuyas cajas no son múltiplo de su
+      // quantity). Antes que escribir un precio inventado o subírselo en silencio, se
+      // rechaza y se hace a mano, que es la contención del 24-ago tal cual.
+      log("price-preserve-unavailable", {
+        liveChargeCents,
+        catalogueCents: targetPlan.totalCents,
+        targetBoxCount,
+        currentComposition,
+        targetComposition,
+      });
+      alertSlackError({
+        path: "/api/subscription/plan",
+        code: "price_preserve_unavailable",
+        msg:
+          `sub ${sealSubscriptionId}: cambio de ${compositionLabel(currentComposition)} a ` +
+          `${compositionLabel(targetComposition)} con las MISMAS ${targetBoxCount} cajas. Paga ` +
+          `${centsToPrice(liveChargeCents)} y el catálogo pide ${centsToPrice(targetPlan.totalCents)}, ` +
+          `pero el reparto en sitio no es posible con sus líneas. Rechazado. Hay que hacerlo a mano ` +
+          `conservándole el precio.`,
+        customerId: ctx.customerId,
+      });
+      throw new ApiHttpError(
+        409,
+        "price_would_increase",
+        `This change keeps the same ${targetBoxCount} boxes but we cannot preserve the current ` +
+          `${centsToPrice(liveChargeCents)} charge on this subscription's lines. Refused.`,
+      );
+    }
   }
 
   const diff = diffLines(currentLines, targetPlan.lines);
@@ -798,6 +834,13 @@ const patchPlan = async (
           tierTotalCents,
           chargedCents: targetPlan.totalCents,
           residualCents: targetPlan.residualCents,
+          // Cuánto se le conservó del contrato viejo, y respecto a qué catálogo. Sin
+          // esto, un contrato preservado es indistinguible en la auditoría de uno que
+          // simplemente cobra poco, y la población de la escalera vieja solo se puede
+          // censar releyendo el libro entero de Seal. (3-sep-2026)
+          pricePreservedFromCents,
+          pricePreservedSavingCents:
+            pricePreservedFromCents !== null ? tierTotalCents - targetPlan.totalCents : null,
           diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
           source: "portal",
         },
@@ -1449,6 +1492,41 @@ const patchPlan = async (
     // detector que cruce el ledger contra Seal necesita esta distinción, o marca como
     // descuadre todo lo que se quedó a medias. (24-ago-2026)
     await writeAudit("verified");
+
+    // ───── Guardar (o limpiar) el precio preservado ─────
+    //
+    // Seal ya ha confirmado lo que escribimos, así que este es el único punto donde
+    // decir "este contrato tiene derecho a pagar X" es cierto.
+    //
+    // Hace falta porque, una vez preservado, el line-set es idéntico al de una sub
+    // nueva legítima: si Seal reseteara una línea al precio de catálogo, la sub
+    // aterrizaría EXACTAMENTE en la escalera web y ni el cron ni la auditoría lo
+    // verían (comparan contra la escalera). Guardar la intención es lo que permite
+    // distinguir un precio preservado de una corrupción de Seal.
+    //
+    // Se limpia a NULL cuando el cliente cambia de nº de cajas: ahí compra otra
+    // cantidad y el catálogo pasa a ser su precio legítimo.
+    // Best effort, nunca fatal: el cambio ya está aplicado y verificado en Seal, y
+    // fallar aquí solo nos deja sin la señal, no le rompe nada al cliente.
+    if (pricePreservedFromCents !== null || boxCountChangedFromLive) {
+      try {
+        // El importe y SUS cajas van siempre juntos: un importe sin las cajas a las
+        // que pertenece es una entitlement que el cron puede aplicar sobre una
+        // composición que ya no es la suya. (Aviso de Kiko, 3-sep-2026.)
+        const { error } = await supabaseAdmin()
+          .from("subscriptions")
+          .update(
+            pricePreservedFromCents !== null
+              ? { preserved_charge_cents: targetPlan.totalCents, preserved_box_count: targetBoxCount }
+              : { preserved_charge_cents: null, preserved_box_count: null },
+          )
+          .eq("customer_id", ctx.customerId)
+          .eq("seal_subscription_id", String(sealSubscriptionId));
+        if (error) log("preserved-charge-write-failed", { msg: error.message });
+      } catch (e) {
+        log("preserved-charge-write-threw", { msg: e instanceof Error ? e.message : String(e) });
+      }
+    }
 
     // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
     //

@@ -182,6 +182,10 @@ async function assertMixPrice(
   boxCount: number,
   composition: FlavorComposition[],
   chargeDate: string,
+  /** Lo que este contrato tiene DERECHO a pagar y para CUÁNTAS cajas
+   *  (subscriptions.preserved_charge_cents + preserved_box_count). null = paga
+   *  catálogo y la escalera es su referencia. */
+  preserved: { chargeCents: number; boxCount: number } | null,
 ): Promise<PriceCheckOutcome> {
   try {
     const lines = getLines(s);
@@ -216,7 +220,46 @@ async function assertMixPrice(
     }
 
     const prices = await getLadderPrices(composition[0].flavor);
-    const expected = ladderTotalCents(boxCount, prices);
+    const catalogueCents = ladderTotalCents(boxCount, prices);
+    // ── EL OBJETIVO ES EL CONTRATO, NO SIEMPRE LA ESCALERA (3-sep-2026) ──
+    //
+    // A un contrato con precio preservado la escalera NO le aplica: tiene derecho a
+    // pagar lo suyo. Comparar contra la escalera aquí tendría dos efectos malos, y el
+    // segundo es el grave:
+    //   - por debajo: se le clasificaría "por-debajo" para siempre (inofensivo pero
+    //     ciego, porque es su estado correcto, no una anomalía).
+    //   - por ENCIMA: si Seal le pisara una línea al precio de catálogo, el line-set
+    //     preservado es idéntico al de una sub nueva legítima, así que `isNewModelLineSet`
+    //     sería true y esta función le "curaría" SUBIÉNDOLE el precio hasta el catálogo.
+    //     Justo lo contrario de lo que existe para hacer. Antes de preservar precios eso
+    //     no era alcanzable: el line-set viejo (SL90/SL180) daba adds+removes y caía en
+    //     la rama de curar en sitio.
+    // EL IMPORTE PRESERVADO SOLO VALE PARA SUS CAJAS (aviso de Kiko, 3-sep-2026).
+    //
+    // La regla que decide si se preserva es el nº de cajas, así que un importe sin sus
+    // cajas es un dato desacoplado de su propia regla. Un preservado de 3 cajas (67,92)
+    // sobre una sub que hoy tiene 4 a catálogo (85,05) le da la vuelta a esta función:
+    // ve sobre-cobro, entra a curar, repriceInPlace APLICA y le deja el cobro en 67,92,
+    // regalando 17,13 por entrega sobre un contrato legítimo. Se llega ahí por tres
+    // caminos nada raros: cambio de cajas fuera del portal (Seal admin, CS, portal de
+    // Seal — el webhook actualiza box_count sin tocar estas columnas), un 502 de
+    // verificación parcial que sale antes del clear, o que falle el write best-effort
+    // que las limpia.
+    //
+    // La asimetría es lo importante: fallar al ESCRIBIR la preservación es inocuo (la
+    // sub se queda a catálogo), pero fallar al LIMPIARLA deja una entitlement fantasma
+    // que este cron EJECUTA. Por eso la validación va aquí, en quien la consume, y no
+    // solo en quien la escribe: si las cajas no coinciden, la preservación queda inerte
+    // y la referencia vuelve a ser el catálogo.
+    const preservedApplies = preserved !== null && preserved.boxCount === realBoxes;
+    if (preserved !== null && !preservedApplies) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: precio preservado de ${preserved.chargeCents}c para ` +
+          `${preserved.boxCount} cajas, pero hoy tiene ${realBoxes} — se ignora y se compara ` +
+          `contra el catálogo. Alguien le cambió las cajas fuera del portal, o el clear no corrió.`,
+      );
+    }
+    const expected = preservedApplies ? preserved.chargeCents : catalogueCents;
     const actual = getChargeTotalCents(s);
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
@@ -249,7 +292,12 @@ async function assertMixPrice(
     // viejo por encima de la escalera (SL120 @90,57 > 85,05) se deja tal cual.
     const plan = planTargetLines(composition, prices);
     const diff = diffLines(lines, plan.lines);
-    const isNewModelLineSet = !diff.adds.length && !diff.removes.length;
+    // Un contrato con precio preservado NUNCA se cura con `plan.lines`: esas líneas van
+    // a precio de CATÁLOGO, así que "curarlo" por ahí sería subirle el precio hasta lo
+    // que este cambio existe para no cobrarle. Sus líneas ya son las correctas; lo único
+    // que puede estar mal es el precio, y eso se arregla en sitio (solo edit_items).
+    const isNewModelLineSet =
+      !preservedApplies && !diff.adds.length && !diff.removes.length;
 
     // ── CURAR EN SITIO EL MODELO VIEJO (31-ago-2026) ──
     //
@@ -345,14 +393,25 @@ async function assertMixPrice(
     await alertSlackErrorAwaited({
       path: cfg.path,
       code: healed === "healed" ? "mix_price_drift_healed" : "mix_price_drift",
-      msg:
-        healed === "healed"
-          ? `sub ${s.id}: charge total was ${actual}c but the ${boxCount}-box tier is ${expected}c — ` +
-            `the per-unit prices were REPAIRED automatically and verified. Charge lands ` +
-            `${chargeDate.slice(0, 10)}. Worth checking why Seal dropped them.`
-          : `sub ${s.id}: charge total ${actual}c but the ${boxCount}-box tier is ${expected}c. ` +
+      // El texto tiene que decir contra QUÉ se compara. Con un precio preservado,
+      // `expected` NO es el tramo: es lo que ese contrato tiene derecho a pagar, y
+      // llamarlo "tier" mandaba a quien lo lee a buscar un fallo de Seal que no existe
+      // (aviso de Kiko, 3-sep-2026). Lo mismo con "why Seal dropped them": sobre un
+      // contrato preservado la causa probable es un cambio de cajas fuera del portal.
+      msg: (() => {
+        const ref = preservedApplies
+          ? `the preserved contract amount for ${preserved!.boxCount} boxes is ${expected}c`
+          : `the ${boxCount}-box tier is ${expected}c`;
+        const causa = preservedApplies
+          ? `This sub has a preserved (legacy) price, so check whether its boxes changed outside the portal before blaming Seal.`
+          : `Worth checking why Seal dropped them.`;
+        return healed === "healed"
+          ? `sub ${s.id}: charge total was ${actual}c but ${ref} — the per-unit prices were ` +
+            `REPAIRED automatically and verified. Charge lands ${chargeDate.slice(0, 10)}. ${causa}`
+          : `sub ${s.id}: charge total ${actual}c but ${ref}. ` +
             `Automatic repair ${healed === "failed" ? "FAILED" : "was not possible"}. ` +
-            `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`,
+            `THE CHARGE LANDS ${chargeDate.slice(0, 10)} — fix before then.`;
+      })(),
     });
     return "sobre-cobro";
   } catch (e) {
@@ -413,6 +472,51 @@ async function runBucket(
   //    rather than remind a truncated slice of the book.)
   const subs = await seal.listAllSubscriptions();
 
+  // Los importes preservados de toda la cartera, en UNA consulta: el bucle recorre
+  // cientos de subs y no vamos a pedir una fila por cada una. Si la consulta falla, el
+  // mapa queda vacío y assertMixPrice compara contra el catálogo, que es exactamente el
+  // comportamiento anterior a este campo: se pierde precisión, no se rompe la tirada.
+  // TOPE DE 1.000 FILAS de Supabase/PostgREST: hoy son ~533 preservadas y este
+  // select no pagina. Si la cifra se acerca al millar hay que paginar, porque las
+  // que se queden fuera se comparan contra el catálogo en silencio (degrada seguro,
+  // pero degrada). El contador de abajo lo deja a la vista en cada tirada.
+  const preservedBySealId = new Map<string, { chargeCents: number; boxCount: number }>();
+  if (cfg.checkMixPrice) {
+    const { data: preservedRows, error: preservedErr } = await sb
+      .from("subscriptions")
+      .select("seal_subscription_id, preserved_charge_cents, preserved_box_count")
+      .not("preserved_charge_cents", "is", null);
+    if (preservedErr) {
+      console.warn(
+        `[${cfg.label}] no se pudieron leer los precios preservados (${preservedErr.message}) — ` +
+          `se comparará contra el catálogo en esta tirada`,
+      );
+    } else {
+      if ((preservedRows ?? []).length >= 1000) {
+        console.warn(
+          `[${cfg.label}] el select de precios preservados ha devuelto ${preservedRows!.length} filas: ` +
+            `se está tocando el tope de 1.000 de PostgREST y hay preservaciones sin cargar. HAY QUE PAGINAR.`,
+        );
+      }
+      for (const row of preservedRows ?? []) {
+        const cents = Number(row.preserved_charge_cents);
+        const boxes = Number(row.preserved_box_count);
+        // Sin cajas no se puede validar contra qué composición vale el importe, así
+        // que la fila se descarta: preferimos comparar contra el catálogo (el
+        // comportamiento de antes de la columna) a aplicar un importe a ciegas.
+        if (!Number.isInteger(cents) || cents <= 0) continue;
+        if (!Number.isInteger(boxes) || boxes <= 0) {
+          console.warn(
+            `[${cfg.label}] sub ${row.seal_subscription_id}: precio preservado sin nº de cajas ` +
+              `— se ignora (fila anterior a la migración o escritura a medias)`,
+          );
+          continue;
+        }
+        preservedBySealId.set(String(row.seal_subscription_id), { chargeCents: cents, boxCount: boxes });
+      }
+    }
+  }
+
   const candidates: Candidate[] = [];
   const priceCheck: Record<PriceCheckOutcome, number> = {
     "ok": 0,
@@ -436,7 +540,12 @@ async function runBucket(
     // nuevo. Por eso ninguna de las 5 que cobran de más se curaba nunca: todas son
     // de un solo sabor. (Aviso de Kiko, 31-ago-2026.)
     if (cfg.checkMixPrice) {
-      priceCheck[await assertMixPrice(s, cfg, boxCount, composition, next.date)]++;
+      priceCheck[
+        await assertMixPrice(
+          s, cfg, boxCount, composition, next.date,
+          preservedBySealId.get(String(s.id)) ?? null,
+        )
+      ]++;
     }
 
     candidates.push({
@@ -519,6 +628,12 @@ async function runBucket(
     return customerId ? langByCustomer.get(customerId) ?? "es" : "es";
   };
 
+  // OJO SI AÑADES UN IMPORTE AQUÍ: tiene que salir de getChargeTotalCents(s) o de
+  // preserved_charge_cents, NUNCA de ladderTotalCents (importado en este mismo fichero
+  // para el chequeo de precios). Desde el 3-sep-2026 hay ~533 contratos que pagan por
+  // debajo del catálogo, así que la escalera diría 85,05 en un email cuya tarjeta se
+  // va a cobrar 67,93. Hoy el payload no lleva precio y por eso ningún email puede
+  // contradecir al cobro.
   const eventProps = (c: Candidate, locale: string): Record<string, unknown> => ({
     hoursBefore: cfg.hoursBefore,
     sealSubscriptionId: c.sealId,

@@ -553,6 +553,149 @@ export function diffLines(current: SubscriptionLine[], target: TargetLine[]): Li
 }
 
 /**
+ * PRESERVAR EL PRECIO DEL CONTRATO al cambiar de composición (3-sep-2026).
+ *
+ * `planTargetLines` construye el line-set al precio del CATÁLOGO. Para los 533
+ * contratos activos que siguen por debajo de la escalera web (522 de ellos a 3
+ * cajas por 67,93 cuando el catálogo pide 85,05) eso convertía un cambio de sabor
+ * en una subida de 17,12 € por entrega que el cliente no pidió, y que la pantalla
+ * de sabores le promete por escrito que no va a pasar. La contención del 24-ago lo
+ * rechazaba con un 409 y una llamada pendiente por cada caso; a 522 clientes eso no
+ * es una cola de migración, es un muro. Decisión de Juan (3-sep-2026): mantener el
+ * precio.
+ *
+ * Esto reprecia las líneas OBJETIVO (las del sabor nuevo) para que Σ precio ×
+ * quantity sea lo que el cliente paga HOY, en vez del catálogo. La composición, las
+ * cajas y las variantes son las que toque; lo único que se conserva es el importe.
+ *
+ * EL REPARTO ES PROPORCIONAL AL CATÁLOGO: cada línea se escala por
+ * `liveCharge / tier`. Así se conserva la FORMA del descuento (el pack 3+1 sigue
+ * costando lo que cuesta un pack y las sueltas lo que cuesta una suelta) y ninguna
+ * línea queda por encima de su precio de catálogo. Un reparto plano por caja también
+ * daba el total correcto, pero escribía el PACK4 por ENCIMA de su propio precio de
+ * venta en las subs de 5-6 cajas.
+ *
+ * OJO: el precio se escribe SIEMPRE por UNIDAD, porque Seal cobra
+ * `unitPrice × quantity` y una línea PACK4 es quantity 1 con 4 cajas dentro. Repartir
+ * pensando en cajas y escribir esa cifra tal cual cobraría 21,26 en vez de 85,05, y
+ * las guardas del route lo darían por bueno porque el line-set coincide.
+ *
+ * Devuelve null (y el llamador se queda con el catálogo) si el reparto no es
+ * aplicable: sin líneas, importe no positivo, o una línea cuyas cajas no son
+ * múltiplo de su quantity — ahí no sabríamos cuántas cajas lleva cada unidad y
+ * preferimos no escribir un precio inventado.
+ *
+ * INVARIANTE: el total escrito nunca supera `liveChargeCents`. El floor solo puede
+ * dejarlo por debajo (hasta `nº de líneas` céntimos, a favor del cliente), y se
+ * comprueba antes de devolver. Verificado sobre las 83 composiciones posibles de 1 a
+ * 6 cajas con 3 sabores: cero subidas, peor desvío 1 céntimo.
+ */
+export function planPreservingCharge(
+  mix: FlavorComposition[],
+  prices: LadderPrices,
+  liveChargeCents: number,
+): MixPlan | null {
+  if (!Number.isInteger(liveChargeCents) || liveChargeCents <= 0) return null;
+
+  const catalogue = planTargetLines(mix, prices);
+  if (!catalogue.lines.length) return null;
+
+  // Cajas por línea: la base del reparto. Una línea sin cajas rompería el prorrateo.
+  const boxesPerLine = catalogue.lines.map((l) => l.boxes);
+  if (boxesPerLine.some((b) => !Number.isInteger(b) || b <= 0)) return null;
+
+  // Una línea cuyas cajas no son múltiplo de su quantity no se sabe prorratear sin
+  // inventarse cuántas cajas lleva cada unidad. Misma guarda que repriceInPlace.
+  for (const l of catalogue.lines) {
+    const quantity = Math.max(1, Number(l.quantity) || 1);
+    if (l.boxes % quantity !== 0) return null;
+  }
+
+  // EL REPARTO ES PROPORCIONAL AL CATÁLOGO, NO PLANO POR CAJA.
+  //
+  // Un reparto plano (mismo precio a todas las cajas) descuadra la FORMA del
+  // descuento: aplasta el 3+1 y reparte su regalo entre las cajas sueltas. Con las 90
+  // subs de SL90×2 (6 cajas a 135,86) eso escribía el PACK4 a 90,56, o sea 5,51 por
+  // encima de lo que ese mismo pack vale en catálogo (85,05), y las sueltas a 22,65,
+  // por debajo de sus 28,35. El total era correcto y nunca subía, pero el contrato de
+  // Seal, las líneas del pedido y el email de confirmación enseñaban un "PACK 3+1"
+  // más caro que su propio precio de venta, en una pantalla que le está prometiendo al
+  // cliente justo lo contrario ("incluye el pack 3+1, 1 caja gratis").
+  //
+  // Escalando cada línea por `liveCharge / tier` se conserva el peso relativo de cada
+  // una, así que el 3+1 sigue pareciendo un 3+1 y NINGUNA línea queda por encima de su
+  // precio de catálogo (el factor es < 1 por construcción: solo llegamos aquí cuando
+  // el catálogo es más caro que lo que paga el cliente).
+  const totalBoxes = boxesPerLine.reduce((a, b) => a + b, 0);
+  if (totalBoxes <= 0) return null;
+
+  /** El contrato es MÁS CARO que el catálogo de hoy, así que preservarlo escala hacia
+   *  arriba y las guardas ancladas al catálogo dejan de aplicar. */
+  const scalingUp = liveChargeCents > catalogue.tierTotalCents;
+
+  const scaled = catalogue.lines.map((l) => {
+    const quantity = Math.max(1, Number(l.quantity) || 1);
+    // Precio por unidad, redondeado hacia abajo: el sobrante se reparte después, así
+    // el prorrateo nunca puede pasarse del importe del contrato.
+    const catalogueLineCents = l.unitPriceCents * quantity;
+    const unitPriceCents = Math.floor(
+      (catalogueLineCents * liveChargeCents) / (catalogue.tierTotalCents * quantity),
+    );
+    return { line: l, quantity, unitPriceCents };
+  });
+  if (scaled.some((s) => s.unitPriceCents <= 0)) return null;
+
+  // Los céntimos que deja el floor van a las líneas con MENOS cajas primero: es la
+  // forma más barata de colocarlos sin pasarse (mismo criterio que
+  // distributeUnitPrices), y sube el precio por unidad lo mínimo posible.
+  let residual = liveChargeCents - scaled.reduce((s, x) => s + x.unitPriceCents * x.quantity, 0);
+  if (residual < 0) return null;
+  const bySmallest = scaled
+    .map((s, i) => ({ i, boxes: s.line.boxes }))
+    .sort((a, b) => a.boxes - b.boxes);
+  for (const { i } of bySmallest) {
+    const s = scaled[i];
+    // El tope "nunca por encima del catálogo" solo vale cuando preservamos un contrato
+    // MÁS BARATO que el catálogo, que era el único caso contemplado hasta el 4-sep. Con
+    // un contrato más CARO (las 14 subs POR_ENCIMA) el factor de escala es > 1 y ese
+    // tope haría imposible colocar el residual, devolviendo null y repreciando al
+    // cliente justo lo que se le prometió no tocar. El invariante que de verdad importa
+    // es el de abajo: el total escrito == el importe del contrato, ni un céntimo más.
+    const capCents = scalingUp ? Number.MAX_SAFE_INTEGER : s.line.unitPriceCents;
+    while (residual >= s.quantity && s.unitPriceCents + 1 <= capCents) {
+      s.unitPriceCents += 1;
+      residual -= s.quantity;
+    }
+  }
+
+  const lines: TargetLine[] = scaled.map((s) => ({ ...s.line, unitPriceCents: s.unitPriceCents }));
+  if (lines.some((l) => l.unitPriceCents <= 0)) return null;
+  // Ninguna línea por encima de su precio de catálogo. Solo aplica al preservar hacia
+  // abajo: escalando hacia arriba, estar por encima del catálogo es justamente el punto
+  // (el contrato vale más que la tarifa de hoy).
+  if (!scalingUp && lines.some((l, i) => l.unitPriceCents > catalogue.lines[i].unitPriceCents)) {
+    return null;
+  }
+
+  const totalCents = lines.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
+  // `distributeUnitPrices` ya asegura Σ unidad × cajas <= objetivo, y multiplicar por
+  // cajas/quantity es la misma suma reagrupada. Si aun así saliera por encima es un
+  // bug de esta función y vale más no proponer nada que cobrar de más.
+  if (totalCents > liveChargeCents) return null;
+
+  return {
+    shape: catalogue.shape,
+    lines,
+    totalCents,
+    // El tramo de referencia sigue siendo el del catálogo: es lo que vale hoy esa
+    // composición, y lo que la auditoría necesita para saber cuánto se preservó.
+    tierTotalCents: catalogue.tierTotalCents,
+    residualCents: catalogue.tierTotalCents - totalCents,
+    boxCount: catalogue.boxCount,
+  };
+}
+
+/**
  * Bajar el cobro de un contrato SIN reestructurar sus líneas (31-ago-2026).
  *
  * `planTargetLines` construye el line-set del CATÁLOGO, así que curar con él una sub

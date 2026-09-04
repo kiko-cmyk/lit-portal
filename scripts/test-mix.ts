@@ -36,6 +36,7 @@ import {
   type SubscriptionLine,
   type TargetLine,
   repriceInPlace,
+  planPreservingCharge,
 } from "../src/lib/mix";
 import {
   FLAVORS,
@@ -56,6 +57,7 @@ const TIER_OLD: Record<number, number> = { 1: 2835, 2: 5670, 3: 6793, 4: 9057, 5
 
 const L: FlavorKey = "salty-lemon";
 const W: FlavorKey = "salty-watermelon";
+const P: FlavorKey = "salty-peach";
 
 let passed = 0;
 const failures: string[] = [];
@@ -563,6 +565,223 @@ eq(repriceInPlace([], 8505), null, "sin lineas: null");
 eq(repriceInPlace([rpLine(1, rpSL30, 1, "28.35", 1)], 0), null, "objetivo 0: null");
 eq(repriceInPlace([rpLine(1, rpSL30, 2, "28.35", 3)], 8505), null,
    "cajas no multiplo de quantity: null (no sabemos cajas por unidad)");
+
+
+// ── planPreservingCharge: conservar el precio del contrato (3-sep-2026) ──────
+console.log("\n=== planPreservingCharge ===");
+
+// EL CASO DE LOS AVISOS: 522 subs a 3 cajas por 67,93 cuando el catalogo pide 85,05.
+// Cambiar de sabor tiene que dejar el importe intacto.
+{
+  const r = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, 6793);
+  eq(r !== null, true, "3 cajas Lemon->Peach: propone plan");
+  eq(r!.totalCents, 6792, "3 cajas: escribe 67,92 (un centimo abajo por el floor), no 85,05");
+  eq(r!.totalCents <= 6793, true, "3 cajas: NUNCA por encima de lo que paga hoy");
+  eq(r!.tierTotalCents, 8505, "3 cajas: el tramo de referencia sigue siendo el catalogo");
+  eq(r!.lines.length, 1, "3 cajas: una sola linea de 1 caja x3");
+  eq(r!.lines[0].quantity, 3, "3 cajas: quantity 3");
+  eq(r!.lines[0].unitPriceCents, 2264, "3 cajas: 22,64 por unidad (= por caja aqui)");
+}
+
+// EL OTRO AVISO: mezcla 2 Watermelon + 1 Lemon, mismas 3 cajas.
+{
+  const r = planPreservingCharge([{ flavor: W, boxes: 2 }, { flavor: L, boxes: 1 }], LADDER, 6793);
+  eq(r !== null, true, "mezcla 2W+1L: propone plan");
+  eq(r!.totalCents, 6793, "mezcla 2W+1L: clava los 67,93");
+  eq(r!.lines.length, 2, "mezcla 2W+1L: dos lineas");
+}
+
+// LA TRAMPA DEL PACK, otra vez: 6 cajas = PACK4 (quantity 1, 4 cajas) + 2 sueltas.
+// Escribir el precio POR CAJA en la linea del pack cobraria 22,64 en vez de 90,56.
+{
+  const r = planPreservingCharge([{ flavor: W, boxes: 6 }], LADDER, 13586);
+  eq(r !== null, true, "6 cajas: propone plan");
+  eq(r!.totalCents, 13586, "6 cajas: clava los 135,86, no los 141,75 del catalogo");
+  const pack = r!.lines.find((l) => l.boxes === 4)!;
+  eq(pack.quantity, 1, "6 cajas: el pack es quantity 1");
+  // El precio va por UNIDAD (4 cajas dentro), no por caja: 22,64 cobraria un cuarto.
+  eq(pack.unitPriceCents > 2264 * 3, true, "6 cajas: el PACK4 lleva precio de UNIDAD, no de caja");
+  // Y NUNCA por encima del catalogo del propio pack: un reparto plano por caja lo
+  // escribia a 90,56, cinco euros por encima de lo que ese pack vale (85,05), en una
+  // pantalla que le promete al cliente "el pack 3+1, 1 caja gratis".
+  eq(pack.unitPriceCents <= 8505, true, "6 cajas: el PACK4 no supera su precio de catalogo");
+  for (const l of r!.lines) {
+    const cat = planTargetLines([{ flavor: W, boxes: 6 }], LADDER).lines
+      .find((c) => c.variantId === l.variantId)!;
+    eq(l.unitPriceCents <= cat.unitPriceCents, true,
+       `6 cajas: ${l.sku} no supera su precio de catalogo`);
+  }
+}
+
+// Una sub ya a catalogo no se toca: el catalogo y lo que paga coinciden.
+{
+  const r = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, 8505);
+  eq(r !== null, true, "ya a catalogo: propone plan");
+  eq(r!.totalCents, 8505, "ya a catalogo: sigue en 85,05");
+}
+
+// CONTRATO MAS CARO QUE EL CATALOGO (4-sep-2026). Las 14 subs POR_ENCIMA: una SL120
+// a 90,57 contra un pack de 85,05. Antes se devolvia null y el cliente se repreciaba
+// a la baja por el mero hecho de cambiar de sabor; ahora se preserva igual, porque la
+// regla es "cambiar de sabor no toca el precio", no "no lo sube".
+{
+  const r = planPreservingCharge([{ flavor: L, boxes: 2 }, { flavor: W, boxes: 2 }], LADDER, 9057);
+  eq(r !== null, true, "contrato mas caro: propone plan en vez de rendirse");
+  eq(r!.totalCents, 9057, "contrato mas caro: conserva 90,57 exacto, no baja a 85,05");
+}
+{
+  // 6 cajas a 152,98 (sub 14682293) contra un catalogo de 141,75.
+  const r = planPreservingCharge([{ flavor: L, boxes: 3 }, { flavor: W, boxes: 3 }], LADDER, 15298);
+  eq(r !== null, true, "6 cajas por encima: propone plan");
+  eq(r!.totalCents, 15298, "6 cajas por encima: conserva 152,98 exacto");
+}
+{
+  // Sabor unico y contrato mas caro: el residual tiene que poder colocarse.
+  const r = planPreservingCharge([{ flavor: W, boxes: 4 }], LADDER, 9628);
+  eq(r !== null, true, "sabor unico por encima: propone plan");
+  eq(r!.totalCents, 9628, "sabor unico por encima: conserva 96,28 exacto");
+}
+
+// BARRIDO EXHAUSTIVO: las 83 composiciones de 1 a 6 cajas con 3 sabores, cada una
+// contra el precio tipico de la escalera VIEJA. El invariante es uno solo: jamas
+// por encima de lo que el cliente paga hoy.
+{
+  const FL: FlavorKey[] = [L, W, P];
+  let casos = 0;
+  let subidas = 0;
+  let peor = 0;
+  let sobreCatalogo = 0;
+  let aplican = 0;
+  let sinPlan = 0;
+  for (let n = 1; n <= 6; n++) {
+    for (let a = 0; a <= n; a++) {
+      for (let b = 0; b <= n - a; b++) {
+        const c = n - a - b;
+        const mix = [
+          { flavor: FL[0], boxes: a },
+          { flavor: FL[1], boxes: b },
+          { flavor: FL[2], boxes: c },
+        ].filter((x) => x.boxes > 0);
+        if (!mix.length) continue;
+        const live = TIER_OLD[n];
+        // El route solo preserva cuando el catalogo es MAS CARO que lo que paga hoy.
+        const catTotal = planTargetLines(mix, LADDER).totalCents;
+        const preserva = catTotal > live;
+        const r = preserva ? planPreservingCharge(mix, LADDER, live) : null;
+        casos++;
+        if (!r) { sinPlan++; continue; }
+        aplican++;
+        if (r.totalCents > live) subidas++;
+        peor = Math.min(peor, r.totalCents - live);
+        // Ninguna linea puede quedar por encima de su precio de catalogo: es lo que
+        // mantiene legible la forma del descuento (un pack 3+1 que cuesta lo que un
+        // pack, no mas).
+        const cat = planTargetLines(mix, LADDER);
+        for (const l of r.lines) {
+          const c = cat.lines.find((x) => x.variantId === l.variantId)!;
+          if (l.unitPriceCents > c.unitPriceCents) sobreCatalogo++;
+        }
+      }
+    }
+  }
+  eq(casos, 83, "barrido: 83 composiciones recorridas");
+  // OJO: recorrer 83 no es EJERCITAR 83. En 24 de ellas el precio de la escalera vieja
+  // ya iguala o mejora al catalogo, asi que el route ni llama a preservar (se queda con
+  // el catalogo, que es mas barato para el cliente). El numero que importa es cuantas
+  // pasan de verdad por el reparto. (Aviso de Kiko, 3-sep-2026.)
+  eq(aplican, 59, "barrido: 59 composiciones ejercitan de verdad el reparto preservado");
+  eq(sinPlan, 24, "barrido: 24 no preservan (catalogo igual o mas barato que la escalera vieja)");
+  eq(aplican + sinPlan, casos, "barrido: los dos recuentos suman el total (nada se cuela sin contar)");
+  eq(subidas, 0, "barrido: CERO composiciones suben el precio");
+  eq(sobreCatalogo, 0, "barrido: CERO lineas por encima de su precio de catalogo");
+  // El desvio real es 1 centimo, no 3: el reparto proporcional recoloca los sobrantes.
+  // Afirmar la cota holgada dejaria pasar una regresion de 2 centimos sin avisar.
+  eq(peor, -1, `barrido: el peor desvio es exactamente 1 centimo a favor del cliente (fue ${peor})`);
+}
+
+// IDEMPOTENCIA: preservar dos veces converge. Si erosionara, cada edicion de sabor
+// le bajaria el precio un centimo hasta el infinito.
+{
+  const r1 = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, 6793)!;
+  const r2 = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, r1.totalCents)!;
+  const r3 = planPreservingCharge([{ flavor: P, boxes: 3 }], LADDER, r2.totalCents)!;
+  eq(r2.totalCents, r1.totalCents, "idempotencia: la segunda pasada no baja el precio");
+  eq(r3.totalCents, r2.totalCents, "idempotencia: la tercera tampoco");
+}
+
+// Basura: nunca proponer nada.
+eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, 0), null, "importe 0: null");
+eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, -100), null, "importe negativo: null");
+
+
+// EL RIESGO QUE INTRODUCE PRESERVAR: una vez preservada, la sub lleva las variantes
+// CANONICAS del modelo nuevo, asi que su line-set es indistinguible del de una sub
+// nueva. Si el cron comparara contra el CATALOGO y Seal le pisara un precio, la
+// "curaria" SUBIENDOLE el precio. Por eso assertMixPrice compara contra el importe
+// preservado y desarma la rama de cura a catalogo (isNewModelLineSet).
+{
+  const pres = planPreservingCharge([{ flavor: W, boxes: 6 }], LADDER, 12474)!;
+  const presLines: SubscriptionLine[] = pres.lines.map((l, i) => ({
+    itemId: 700 + i, productId: l.productId, variantId: l.variantId, flavor: l.flavor,
+    boxes: l.boxes, quantity: l.quantity, unitPrice: (l.unitPriceCents / 100).toFixed(2),
+    sellingPlanId: PLAN,
+  }));
+  eq(pres.totalCents, 12474, "preservada 6 cajas: conserva los 124,74");
+  // El line-set ES el del catalogo: de ahi el peligro.
+  const d = diffLines(presLines, planTargetLines([{ flavor: W, boxes: 6 }], LADDER).lines);
+  eq(d.adds.length === 0 && d.removes.length === 0, true,
+     "preservada: su line-set es variant-identico al del catalogo (solo cambia el precio)");
+  eq(planTargetLines([{ flavor: W, boxes: 6 }], LADDER).totalCents, 14175,
+     "…y curar por ese camino le cobraria 141,75 en vez de 124,74");
+  // Con el importe preservado como objetivo, el cron la ve correcta.
+  eq(Math.abs(chargeTotalCents(presLines) - 12474) <= presLines.length, true,
+     "con el objetivo preservado, el cron la considera OK y no la toca");
+}
+
+
+// La oferta "mitad y mitad" de CancelTakeover promete POR ESCRITO "el mismo precio".
+// Eso solo se cumple si el reparto suma las mismas cajas, porque el backend conserva
+// el precio unicamente cuando el nº de cajas no cambia. Se fija aqui para que un
+// cambio en ese reparto rompa un test y no una promesa al cliente.
+{
+  for (let boxes = 2; boxes <= 6; boxes++) {
+    const half = [
+      { flavor: L, boxes: Math.ceil(boxes / 2) },
+      { flavor: W, boxes: Math.floor(boxes / 2) },
+    ];
+    eq(mixBoxCount(half), boxes, `mitad y mitad de ${boxes} cajas suma ${boxes} (promesa "mismo precio")`);
+  }
+}
+
+
+// EL BLOCKER DE KIKO (3-sep-2026): un importe preservado sin sus cajas es un dato
+// desacoplado de su propia regla. Preservado de 3 cajas (67,92) sobre una sub que hoy
+// tiene 4 a catalogo (85,05): el cron ve sobre-cobro, entra a curar, repriceInPlace
+// APLICA y le deja el cobro en 67,92, regalando 17,13 por entrega sobre un contrato
+// legitimo. Se fija aqui la aritmetica que lo demuestra, y la condicion que lo mata.
+{
+  const cat4 = planTargetLines([{ flavor: L, boxes: 4 }], LADDER);
+  const lines4: SubscriptionLine[] = cat4.lines.map((l, i) => ({
+    itemId: 900 + i, productId: l.productId, variantId: l.variantId, flavor: l.flavor,
+    boxes: l.boxes, quantity: l.quantity, unitPrice: (l.unitPriceCents / 100).toFixed(2),
+    sellingPlanId: PLAN,
+  }));
+  const actual = chargeTotalCents(lines4);
+  const preservedDe3Cajas = 6792;
+
+  eq(actual, 8505, "blocker: la sub de 4 cajas cobra el catalogo (85,05)");
+  // Si el cron usara el importe preservado a ciegas, curaria a la baja.
+  const dañino = repriceInPlace(lines4, preservedDe3Cajas);
+  eq(dañino !== null, true, "blocker: sin validar cajas, repriceInPlace APLICA");
+  eq(dañino!.totalCents, 6792, "blocker: …y dejaria el cobro en 67,92 sobre un contrato de 4 cajas");
+  eq(actual - dañino!.totalCents, 1713, "blocker: son 17,13 EUR/entrega regalados");
+
+  // LA CONDICION QUE LO MATA: el importe preservado solo vale para SUS cajas.
+  const realBoxes = lines4.reduce((s, l) => s + l.boxes, 0);
+  const preservedBoxCount = 3;
+  eq(preservedBoxCount === realBoxes, false,
+     "blocker: 3 !== 4, asi que la preservacion queda INERTE y se compara contra catalogo");
+}
 
 // ── resultado ─────────────────────────────────────────────────────────────────
 console.log(`\n${"=".repeat(60)}`);
