@@ -251,16 +251,52 @@ async function assertMixPrice(
     // que este cron EJECUTA. Por eso la validación va aquí, en quien la consume, y no
     // solo en quien la escribe: si las cajas no coinciden, la preservación queda inerte
     // y la referencia vuelve a ser el catálogo.
-    const preservedApplies = preserved !== null && preserved.boxCount === realBoxes;
-    if (preserved !== null && !preservedApplies) {
+    const preservedBoxesMatch = preserved !== null && preserved.boxCount === realBoxes;
+    if (preserved !== null && !preservedBoxesMatch) {
       console.warn(
         `[${cfg.label}] sub ${s.id}: precio preservado de ${preserved.chargeCents}c para ` +
           `${preserved.boxCount} cajas, pero hoy tiene ${realBoxes} — se ignora y se compara ` +
           `contra el catálogo. Alguien le cambió las cajas fuera del portal, o el clear no corrió.`,
       );
     }
-    const expected = preservedApplies ? preserved.chargeCents : catalogueCents;
-    const actual = getChargeTotalCents(s);
+
+    // ── LA PRESERVACIÓN NO DESHACE UNA MIGRACIÓN DELIBERADA (aviso de Kiko, 4-sep-2026) ──
+    //
+    // El guard de arriba cubre "le cambiaron las CAJAS fuera del portal". No cubre el
+    // caso que de verdad importa, porque ahí las cajas no se mueven: LIT-372 deja
+    // abierta la salida de migrar esta población con una campaña (llamada + reprecio a
+    // catálogo en el admin de Seal). Ese reprecio NO toca el nº de cajas, así que las
+    // columnas preservadas sobreviven intactas, `expected` sigue siendo el importe
+    // viejo, y este cron leería el cobro nuevo (correcto) como sobre-cobro y lo curaría
+    // a la baja ANTES del siguiente cargo. La migración se desharía sola, en silencio,
+    // y el Slack mandaría a buscar un cambio de cajas que no existe.
+    //
+    // Nadie limpia esas columnas fuera del PATCH del portal (route.ts, rama
+    // boxCountChangedFromLive), o sea que sólo se sueltan si el CLIENTE cambia cajas.
+    // Depender de que quien migre se acuerde de ponerlas a NULL a mano es exactamente
+    // la clase de paso que se olvida, y el precio de olvidarlo es deshacer la campaña.
+    //
+    // La regla: si lo que Seal cobra HOY coincide con el catálogo de sus cajas, alguien
+    // lo ha alineado a propósito. Un contrato preservado no aterriza en su tramo exacto
+    // por casualidad (por eso existe: su importe es justamente el que NO es el tramo).
+    // Ante la duda, la preservación queda inerte y la referencia vuelve a ser el
+    // catálogo, que es la dirección segura: como mucho deja de curar algo, nunca
+    // reescribe un contrato que un humano acaba de fijar.
+    const liveChargeCents = getChargeTotalCents(s);
+    const alignedToCatalogue =
+      preservedBoxesMatch && Math.abs(liveChargeCents - catalogueCents) <= lines.length;
+    if (alignedToCatalogue) {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: tiene precio preservado de ${preserved!.chargeCents}c pero ` +
+          `hoy cobra ${liveChargeCents}c, que es el catálogo de sus ${realBoxes} cajas ` +
+          `(${catalogueCents}c). Se trata como MIGRADA: la preservación queda inerte y no se ` +
+          `cura hacia el importe viejo. Si fue una migración, conviene poner ` +
+          `preserved_charge_cents y preserved_box_count a NULL para que deje de aparecer aquí.`,
+      );
+    }
+    const preservedApplies = preservedBoxesMatch && !alignedToCatalogue;
+    const expected = preservedApplies ? preserved!.chargeCents : catalogueCents;
+    const actual = liveChargeCents;
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
     if (Math.abs(actual - expected) <= lines.length) return "ok";

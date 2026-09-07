@@ -704,10 +704,28 @@ export function planPreservingCharge(
  * que hay, y solo BAJA los precios por unidad hasta que Σ precio × quantity cuadra
  * con el objetivo. Todo edit_items, cero adds, cero removes, mismos item ids.
  *
- * El precio se reparte por CAJA y se convierte a precio por UNIDAD multiplicando por
- * las cajas que lleva cada unidad de esa línea (SL30 = 1, SL60 = 2, SL90 = 3,
- * PACK4 = 4). Repartir por caja y escribirlo como precio por unidad es el error que
- * cobraría 21,26 en vez de 85,05 en una línea de pack.
+ * EL REPARTO ES PROPORCIONAL AL PRECIO VIVO, NO PLANO POR CAJA (Kiko, 4-sep-2026).
+ *
+ * Hasta hoy repartía plano: `floor(objetivo / cajas)` y ese precio por caja a todas
+ * las líneas. Eso conserva el total y nunca sube, pero aplasta la FORMA del descuento,
+ * que es el mismo defecto que `planPreservingCharge` ya corrige en el camino de
+ * escritura. Una preservada de 6 cajas a 135,86 que Seal pise se curaba escribiendo el
+ * PACK4 a `floor(13586/6) × 4 = 90,56`, o sea 5,51 POR ENCIMA de lo que ese mismo pack
+ * vale en catálogo (85,05), y las sueltas por debajo de sus 28,35. El total cuadra y no
+ * lo ve nadie; lo que queda mal es el contrato de Seal, las líneas del pedido y el email
+ * de confirmación, que enseñan un "PACK 3+1" más caro que su propio precio de venta.
+ * Son 9 subs activas.
+ *
+ * Escalando cada línea por `objetivo / cobro vivo` se conserva el peso relativo de cada
+ * una, así que el 3+1 sigue pareciendo un 3+1. El ancla es el precio VIVO y no el de
+ * catálogo (a diferencia de `planPreservingCharge`, que sí parte del catálogo porque
+ * está construyendo un line-set nuevo): aquí las líneas ya existen, su precio es el
+ * dato, y el catálogo puede ni siquiera saber tarificarlas — es justo el caso de las
+ * subs del modelo viejo que esta rama existe para curar.
+ *
+ * El precio se calcula por UNIDAD, que es lo que Seal cobra (× quantity). Repartir por
+ * caja y escribirlo como precio por unidad es el error que cobraría 21,26 en vez de
+ * 85,05 en una línea de pack.
  *
  * EL INVARIANTE DE DINERO, que es el que pidió Kiko: esto solo puede BAJAR hacia el
  * contrato. Se comprueba sobre el TOTAL, no línea a línea: el total propuesto tiene
@@ -737,17 +755,38 @@ export function repriceInPlace(
   const totalBoxes = lines.reduce((sum, l) => sum + l.boxes, 0);
   if (totalBoxes <= 0) return null;
 
-  const perBoxCents = Math.floor(targetTotalCents / totalBoxes);
-  if (perBoxCents <= 0) return null;
+  // El ancla del prorrateo: lo que se cobra hoy. Si fuese 0 no hay proporción que
+  // conservar (y la división de abajo no tendría sentido).
+  const liveTotalCents = chargeTotalCents(lines);
+  if (liveTotalCents <= 0) return null;
 
   const proposed: Array<{ line: SubscriptionLine; quantity: number; unitPriceCents: number }> = [];
   for (const l of lines) {
     const quantity = Math.max(1, Number(l.quantity) || 1);
     if (l.boxes <= 0 || l.boxes % quantity !== 0) return null;
-    const boxesPerUnit = l.boxes / quantity;
-    const unitPriceCents = perBoxCents * boxesPerUnit;
+    // Precio por unidad, redondeado hacia abajo: el sobrante se reparte después, así el
+    // prorrateo nunca puede pasarse del objetivo. Mismo criterio que planPreservingCharge.
+    const liveLineCents = priceToCents(l.unitPrice) * quantity;
+    const unitPriceCents = Math.floor((liveLineCents * targetTotalCents) / (liveTotalCents * quantity));
     if (unitPriceCents <= 0) return null;
     proposed.push({ line: l, quantity, unitPriceCents });
+  }
+
+  // Los céntimos que deja el floor van a las líneas con MENOS cajas primero: es la forma
+  // más barata de colocarlos sin pasarse, y sube el precio por unidad lo mínimo posible.
+  // Sin esto el reparto proporcional deja hasta `nº de líneas` céntimos sobre la mesa,
+  // que en una cura es dinero que no se recupera.
+  let residual = targetTotalCents - proposed.reduce((s, p) => s + p.unitPriceCents * p.quantity, 0);
+  if (residual < 0) return null;
+  const bySmallest = proposed
+    .map((p, i) => ({ i, boxes: p.line.boxes }))
+    .sort((a, b) => a.boxes - b.boxes);
+  for (const { i } of bySmallest) {
+    const p = proposed[i];
+    while (residual >= p.quantity) {
+      p.unitPriceCents += 1;
+      residual -= p.quantity;
+    }
   }
 
   const totalCents = proposed.reduce((sum, p) => sum + p.unitPriceCents * p.quantity, 0);
@@ -755,7 +794,6 @@ export function repriceInPlace(
   // por encima es un bug de esta función y vale más no proponer nada.
   if (totalCents > targetTotalCents) return null;
   // Y tiene que bajar de verdad: si no baja, esta función no es la herramienta.
-  const liveTotalCents = chargeTotalCents(lines);
   if (totalCents >= liveTotalCents) return null;
 
   const raisesAnyLine = proposed.some((p) => p.unitPriceCents > priceToCents(p.line.unitPrice));
