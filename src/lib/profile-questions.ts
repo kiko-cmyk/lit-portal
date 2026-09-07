@@ -355,3 +355,32 @@ export function klaviyoProps(answers: Record<string, string>): Record<string, st
   }
   return props;
 }
+
+/**
+ * TODAS las propiedades que este formulario puede haber escrito en Klaviyo,
+ * incluidas las de metadatos y las de preguntas ya retiradas.
+ *
+ * Vive aquí, y no en el cron que la usa, para que un test pueda anclarla al
+ * banco: es la lista de VACIADO de una petición de borrado, y `/profile-import/`
+ * no puede eliminar una propiedad, solo escribirle "". Una clave que falte aquí
+ * es un dato personal que sobrevive a su propio borrado, sin error ninguno.
+ *
+ * Se enumera A MANO a propósito: si mañana se retira una pregunta del banco, su
+ * propiedad sigue existiendo en los perfiles de quien ya contestó y hay que
+ * poder vaciarla igual. Derivarla del banco la perdería justo entonces. Por eso
+ * el test comprueba INCLUSIÓN (banco ⊆ lista), nunca igualdad.
+ */
+export const ALL_KLAVIYO_PROPS = [
+  "cs_situacion",
+  "cs_uso",
+  "cs_sabor_pref",
+  "cs_caja_dura",
+  "cs_stock_nivel",
+  "cs_hogar",
+  "cs_deporte_frecuencia",
+  "cs_hace_deporte",
+  "cs_deporte",
+  "cs_edad",
+  "cs_perfil_fuente",
+  "cs_perfil_fecha",
+] as const;

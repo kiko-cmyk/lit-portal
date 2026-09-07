@@ -79,10 +79,16 @@ export interface SurveySubmitResult {
 
 export const GET = withCustomer<SurveyState>(async (_req, ctx) => {
   const sb = supabaseAdmin();
+  // `is("deleted_at", null)`: la fila SOBREVIVE al borrado con una lápida (el cron
+  // la necesita para saber a quién vaciarle las cs_*), así que sin este filtro
+  // quien pidió el borrado vería `answered: true` con `answers: {}` — el
+  // formulario dado por contestado y en blanco, sin poder rellenarlo. Para quien
+  // ha ejercido el borrado, el estado correcto es "sin contestar".
   const { data } = await sb
     .from("profile_survey_answers")
     .select("answers, consent")
     .eq("customer_id", ctx.customerId)
+    .is("deleted_at", null)
     .maybeSingle();
 
   const { data: paid } = await sb
@@ -143,6 +149,14 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
       // puede contener una conjetura.
       locale_shown: langFromRequest(req) ?? "unknown",
       klaviyo_synced_at: null,
+      // LEVANTAR LA LÁPIDA. Contestar de nuevo después de haber pedido el borrado
+      // es una alta, no la continuación de la baja. Sin esto la fila conserva
+      // `deleted_at` y el cron entra por su rama de borrado (mira `deleted_at`
+      // antes que nada), así que escribe "" en las doce cs_* y VACÍA en Klaviyo
+      // las respuestas que el cliente acaba de dar con consentimiento. Y como
+      // marca la fila al terminar, no se reintenta nunca: Postgres con datos,
+      // Klaviyo vacío, y ni un error en ningún lado.
+      deleted_at: null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "customer_id" },

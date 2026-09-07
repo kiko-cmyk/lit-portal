@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { klaviyo } from "@/lib/klaviyo";
-import { klaviyoProps } from "@/lib/profile-questions";
+import { ALL_KLAVIYO_PROPS, klaviyoProps } from "@/lib/profile-questions";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -88,11 +88,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       const props = klaviyoProps(answers);
 
       if (deleted) {
-        // Vaciar TODAS las claves que este formulario haya podido escribir, no
-        // solo las que queden en la fila: si el cliente borró, `answers` está
-        // vacío y no habría nada que vaciar.
+        // Vaciar TODAS las claves que este formulario haya podido escribir (la
+        // lista vive junto al banco, anclada por test), no solo las que queden en
+        // la fila: si el cliente borró, `answers` está vacío y no habría nada que
+        // vaciar.
         const blanks: Record<string, string> = {};
-        for (const key of ALL_PROPS) blanks[key] = "";
+        for (const key of ALL_KLAVIYO_PROPS) blanks[key] = "";
         await klaviyo.upsertProfile(email, blanks);
         cleared++;
       } else {
@@ -128,24 +129,3 @@ async function mark(customerId: string): Promise<void> {
     .update({ klaviyo_synced_at: new Date().toISOString() })
     .eq("customer_id", customerId);
 }
-
-/**
- * Todas las propiedades que este formulario puede escribir. Se enumera aquí y no
- * se deriva del banco de preguntas a propósito: si mañana se retira una pregunta,
- * su propiedad sigue existiendo en los perfiles de quien ya contestó, y una
- * petición de borrado tiene que poder vaciarla igual.
- */
-const ALL_PROPS = [
-  "cs_situacion",
-  "cs_uso",
-  "cs_sabor_pref",
-  "cs_caja_dura",
-  "cs_stock_nivel",
-  "cs_hogar",
-  "cs_deporte_frecuencia",
-  "cs_hace_deporte",
-  "cs_deporte",
-  "cs_edad",
-  "cs_perfil_fuente",
-  "cs_perfil_fecha",
-] as const;

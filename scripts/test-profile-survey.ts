@@ -33,6 +33,8 @@ import {
 } from "@/lib/cadence-fit";
 import { FREQUENCIES, FREQUENCY_DAYS, longestFrequencyWithin } from "@/lib/plan-options";
 import {
+  ALL_KLAVIYO_PROPS,
+  DERIVED_KLAVIYO_PROPS,
   PROFILE_QUESTIONS,
   QUESTIONS_BY_KEY,
   derivedAnswers,
@@ -218,6 +220,37 @@ check("hogar va a cs_hogar", props["cs_hogar"] === "2");
 check(
   "una respuesta sin propiedad no inventa ninguna",
   Object.keys(klaviyoProps({})).length === 0,
+);
+
+// La lista de VACIADO de una petición de borrado. `/profile-import/` no puede
+// eliminar una propiedad, solo escribirle "", así que una clave del banco que
+// falte en ALL_KLAVIYO_PROPS es un dato personal que sobrevive a su propio
+// borrado y nadie se enteraría. Se comprueba INCLUSIÓN y no igualdad a
+// propósito: la lista conserva de más (propiedades de preguntas ya retiradas,
+// que siguen vivas en los perfiles de quien contestó), nunca de menos.
+const vaciado = new Set<string>(ALL_KLAVIYO_PROPS);
+const delBanco = PROFILE_QUESTIONS.map((q) => q.klaviyoProp).filter(
+  (p): p is string => !!p,
+);
+const sinVaciar = delBanco.filter((p) => !vaciado.has(p));
+check(
+  "toda propiedad del banco se puede vaciar en un borrado",
+  sinVaciar.length === 0,
+  sinVaciar.join(","),
+);
+
+const derivadasSinVaciar = Object.values(DERIVED_KLAVIYO_PROPS).filter(
+  (p) => !vaciado.has(p),
+);
+check(
+  "y también las derivadas",
+  derivadasSinVaciar.length === 0,
+  derivadasSinVaciar.join(","),
+);
+
+check(
+  "los metadatos que escribe el cron también se vacían",
+  vaciado.has("cs_perfil_fuente") && vaciado.has("cs_perfil_fecha"),
 );
 
 // ── 6. El motor de cadencia: las 2.016 combinaciones ─────────────────────────
