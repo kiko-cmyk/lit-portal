@@ -35,13 +35,40 @@ export function mixEnabledForCustomer(customerId: string): boolean {
  *
  * The portal has no staging: changes go straight to production and are tested in the
  * real portal. So the only way to walk the real UI without writing to Seal is to allow
- * dry-run in prod for the allowlisted cohort. Restricted to the mix allowlist (never
- * `MIX_FLAVORS=on`) so it can never become a public no-op switch that makes every
- * customer's changes silently do nothing.
+ * dry-run in prod for an allowlisted cohort.
+ *
+ * ── Por qué tiene su propia variable (2026-09-09) ──
+ *
+ * Hasta hoy esto colgaba de la allowlist de MEZCLAS: exigía
+ * `MIX_FLAVORS=allowlist` y pertenencia a `MIX_FLAVORS_ALLOWLIST`. Con
+ * `MIX_FLAVORS` en `on`, que es su valor en producción, `mixMode()` no es
+ * "allowlist" y el dry-run se ignoraba EN SILENCIO: el paseo de verificación
+ * escribía en Seal de verdad creyendo que simulaba.
+ *
+ * Y la única forma de recuperarlo era bajar `MIX_FLAVORS` a `allowlist`, que
+ * cierra el constructor de mezclas a todos los clientes menos a los de la lista
+ * (unos 2 al día lo usan). O sea que las dos cosas no podían coexistir: para
+ * poder simular había que quitarle la mezcla al resto. Kiko se topó con esto el
+ * 7-sep preparando el formulario de perfilado.
+ *
+ * Sacarlo a `DRY_RUN_ALLOWLIST` ELIMINA el modo de fallo en vez de vigilarlo:
+ * nadie tiene que volver a tocar `MIX_FLAVORS` para hacer un paseo, y una lista
+ * mal puesta ya no puede cerrar una vía de negocio.
+ *
+ * ── La protección que se conserva ──
+ *
+ * NO hay modo `on`, y es deliberado: sin un valor que signifique "todos", esto
+ * no puede convertirse nunca en un interruptor público que haga que los cambios
+ * de cualquier cliente no hagan nada en silencio. Una lista vacía (o ausente) es
+ * un cierre total, no una apertura. Eso era lo que protegía el
+ * `mixMode() !== "allowlist"` de antes, y sobrevive al cambio.
  */
 export function dryRunAllowedInProdFor(customerId: string): boolean {
-  if (mixMode() !== "allowlist") return false;
-  return mixEnabledForCustomer(customerId);
+  return (process.env.DRY_RUN_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(String(customerId));
 }
 
 /**
