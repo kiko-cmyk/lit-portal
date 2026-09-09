@@ -65,6 +65,7 @@ export default function HubPage() {
   const [showFlavor, setShowFlavor] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const [showSurvey, setShowSurvey] = useState(false);
+  const [pendingSurvey, setPendingSurvey] = useState(false);
   const [planInitialFrequency, setPlanInitialFrequency] = useState<Frequency | undefined>();
   const [showChargeNow, setShowChargeNow] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
@@ -97,7 +98,29 @@ export default function HubPage() {
     // porque LoginScreen preserva pathname+search. A diferencia de los overlays
     // de mutación, este NO se gatea con `!isPaused`: de un cliente pausado es
     // justo de quien más interesa aprender, y contestar no toca su suscripción.
-    if (action === "survey") setShowSurvey(true);
+    //
+    // NO se abre aquí, se DEJA PENDIENTE. Este efecto corre al montar, cuando
+    // `data` todavía no ha llegado, así que aquí no se puede saber si el
+    // formulario está abierto para este cliente. Abrirlo ya y comprobarlo
+    // después sería enseñar un formulario que el servidor va a rechazar con un
+    // 403 al enviar, después de nueve preguntas.
+    //
+    // Y se limpia el parámetro de la URL en el mismo gesto (patrón de
+    // `account/page.tsx` con `?email_changed=1`): si se queda, recargar o
+    // volver desde el historial reabre el formulario una y otra vez, y el
+    // enlace del email de la campaña vive en el historial de todo el que lo
+    // pulse. El `?action=skip` de arriba tiene el mismo hueco, pero es del
+    // flujo de recordatorio de renovación y no lo toco desde aquí.
+    if (action === "survey") {
+      setPendingSurvey(true);
+      params.delete("action");
+      const qs = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
+      );
+    }
     // Salida secundaria de la propuesta de cadencia ("prefiero verlo yo"), y de
     // paso sirve para un email de seguimiento. La cadencia se valida contra la
     // lista canónica: un `?frequency=` inventado se ignora y el overlay abre con
@@ -651,11 +674,19 @@ export default function HubPage() {
       {/* NO va gateado con `!isPaused`, a diferencia de los overlays de mutación:
           contestar no toca la suscripción, y de un cliente pausado es justo de
           quien más interesa aprender. */}
-      {showSurvey && (
+      {/* Se DERIVA, no se guarda en estado con un efecto: el deep link deja una
+          intención pendiente al montar (cuando `data` aún no existe) y aquí ya
+          se sabe si el formulario está abierto para este cliente. Traducir eso a
+          estado con un useEffect sería estado duplicado y un render en cascada.
+          Si no está abierto para él, no se abre y no se le dice nada: un aviso de
+          "no estás en la lista" solo sirve para contarle que existe algo que no
+          le hemos ofrecido. */}
+      {(showSurvey || (pendingSurvey && data.profileSurvey?.enabled)) && (
         <ProfileSurveyOverlay
           subscription={sub}
           onClose={() => {
             setShowSurvey(false);
+            setPendingSurvey(false);
             api<HubDashboard>("/api/hub/dashboard").then(setData).catch(() => {});
           }}
           onSubscriptionUpdated={handlePlanUpdated}
