@@ -43,10 +43,15 @@ function profileSurveyMode(): "off" | "allowlist" | "on" {
  * ya guardadas se siguen leyendo y sincronizando. Un flag que además escondiera
  * el dato ya recogido convertiría el interruptor de apagado en una pérdida.
  *
- * OJO al probarlo en producción: el dry-run NO cuelga de esta allowlist, cuelga
- * de la de mix (`dryRunAllowedInProdFor` justo debajo). Quien vaya a hacer el
- * paseo de verificación tiene que estar en LAS DOS: `PROFILE_SURVEY_ALLOWLIST`
- * y `MIX_FLAVORS_ALLOWLIST`, con `MIX_FLAVORS=allowlist`.
+ * Para el paseo de verificación en producción hay que estar en DOS listas, que
+ * son independientes: ésta y `DRY_RUN_ALLOWLIST` (ver `dryRunAllowedInProdFor`
+ * debajo). Ninguna de las dos afecta a una función de negocio.
+ *
+ * Hasta el PR #112 el dry-run colgaba de `MIX_FLAVORS_ALLOWLIST`, así que para
+ * simular había que poner `MIX_FLAVORS=allowlist` y eso cerraba el constructor
+ * de mezclas a todos los demás clientes. Queda anotado porque el reflejo, al
+ * ver dos listas, es sospechar que una sobra: no sobra, y la que se fue era la
+ * que hacía daño.
  */
 export function profileSurveyEnabledFor(customerId: string): boolean {
   const mode = profileSurveyMode();
