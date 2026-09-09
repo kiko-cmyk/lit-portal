@@ -748,6 +748,11 @@ export interface InPlaceEdit {
 export function repriceInPlace(
   lines: SubscriptionLine[],
   targetTotalCents: number,
+  /** Catálogo de hoy, para topar cada línea a su propio precio de venta. Opcional para
+   *  no romper los llamadores de solo lectura, pero el cron SÍ lo pasa: sin él, el
+   *  único invariante es el del total y una línea puede quedar por encima de su
+   *  catálogo (ver el bloque del tope, abajo). */
+  prices?: LadderPrices,
 ): { edits: InPlaceEdit[]; totalCents: number; raisesAnyLine: boolean } | null {
   if (!lines.length) return null;
   if (!Number.isInteger(targetTotalCents) || targetTotalCents <= 0) return null;
@@ -772,6 +777,35 @@ export function repriceInPlace(
     proposed.push({ line: l, quantity, unitPriceCents });
   }
 
+  // EL TOPE POR LÍNEA (aviso de Kiko, 9-sep-2026).
+  //
+  // El gemelo `planPreservingCharge` protege su prorrateo con DOS cosas: el tope por
+  // línea dentro del bucle del residual, y el post-check de que ninguna quede por
+  // encima de su catálogo. La primera versión de esta función se llevó el algoritmo
+  // proporcional y ninguno de los dos guards, así que su único invariante volvía a ser
+  // el del TOTAL: con un pack vivo por encima de catálogo al lado de otra línea
+  // (PACK4 90,56 + suelta 28,35, objetivo 113,40) el total salía exacto y
+  // `raisesAnyLine` en false, pero el PACK4 se escribía a 86,36, o sea 1,31 por encima
+  // de su propio precio de venta. El mismo defecto que esta rama arregla, colado por
+  // otra puerta: lo cumplía el input del test, no el código.
+  //
+  // Barrido del libro vivo el 9-sep (3.309 subs, 1.403 activas): hoy no existe ninguna
+  // sub multilínea con una línea por encima de 85,05, así que el caso no es alcanzable
+  // en producción. El guard entra igual, porque cuesta tres líneas y lo que compra es
+  // que el invariante deje de depender de qué input le toque.
+  //
+  // Aquí el tope aplica SIEMPRE, al revés que en el gemelo, donde es condicional a
+  // `scalingUp`: esta función solo puede BAJAR (lo garantiza el check del total, más
+  // abajo), así que no existe el caso legítimo de quedar por encima del catálogo.
+  const capPerLine = proposed.map(({ line, quantity }) => {
+    if (!prices) return Number.MAX_SAFE_INTEGER;
+    const boxesPerUnit = line.boxes / quantity;
+    // El precio de venta de ESA línea: el pack tiene el suyo, y cualquier otra forma
+    // vale n × caja suelta. Una variante fuera del registro no tiene catálogo que
+    // oponerle, así que no se topa.
+    return boxesPerUnit === PACK4_BOXES ? prices.pack4Cents : boxesPerUnit * prices.oneBoxCents;
+  });
+
   // Los céntimos que deja el floor van a las líneas con MENOS cajas primero: es la forma
   // más barata de colocarlos sin pasarse, y sube el precio por unidad lo mínimo posible.
   // Sin esto el reparto proporcional deja hasta `nº de líneas` céntimos sobre la mesa,
@@ -783,11 +817,15 @@ export function repriceInPlace(
     .sort((a, b) => a.boxes - b.boxes);
   for (const { i } of bySmallest) {
     const p = proposed[i];
-    while (residual >= p.quantity) {
+    while (residual >= p.quantity && p.unitPriceCents + 1 <= capPerLine[i]) {
       p.unitPriceCents += 1;
       residual -= p.quantity;
     }
   }
+  // El post-check del gemelo. El tope de arriba no basta por sí solo: el floor
+  // proporcional ya puede dejar una línea por encima de su catálogo ANTES de repartir un
+  // solo céntimo del residual, que es exactamente el contraejemplo del PACK4 a 86,36.
+  if (proposed.some((p, i) => p.unitPriceCents > capPerLine[i])) return null;
 
   const totalCents = proposed.reduce((sum, p) => sum + p.unitPriceCents * p.quantity, 0);
   // El floor solo puede dejarlo por debajo del objetivo, nunca por encima; si sale
@@ -803,6 +841,47 @@ export function repriceInPlace(
     .map((p) => ({ itemId: p.line.itemId, quantity: p.quantity, unitPriceCents: p.unitPriceCents }));
 
   return { edits, totalCents, raisesAnyLine };
+}
+
+/** ¿Le aplica a esta sub su importe preservado, o hay que comparar contra el catálogo?
+ *
+ *  Vive aquí, y no dentro de `assertMixPrice`, porque allí es privada y no hay forma de
+ *  testearla: un test que recalcule la condición a mano assertea su propia aritmética y
+ *  sigue en verde cuando alguien cambia el operador de verdad (aviso de Kiko, 9-sep-2026,
+ *  y es el `variant_title` del PACK4 otra vez, §1d de CLAUDE.md).
+ *
+ *  Dos motivos para que la preservación quede INERTE, y son distintos:
+ *
+ *  1. LAS CAJAS NO CUADRAN (3-sep). La regla que decide si se preserva es el nº de
+ *     cajas, así que un importe sin sus cajas es un dato desacoplado de su propia regla.
+ *     Un preservado de 3 cajas (67,92) sobre una sub que hoy tiene 4 a catálogo (85,05)
+ *     le da la vuelta al cron: ve sobre-cobro y cura a la baja, regalando 17,13.
+ *
+ *  2. YA COBRA EL CATÁLOGO DE SUS CAJAS (4-sep). Aquí las cajas SÍ cuadran, y por eso el
+ *     guard 1 no lo caza. Es el caso de la migración deliberada que LIT-372 deja para más
+ *     adelante: llamada + reprecio a catálogo en el admin de Seal, que no toca el nº de
+ *     cajas. Sin esto, `expected` seguiría siendo el importe viejo y el cron desharía la
+ *     migración antes del siguiente cargo. Un contrato preservado no aterriza en su tramo
+ *     exacto por casualidad: su importe es justamente el que NO es el tramo.
+ *
+ *  La dirección es segura en los dos casos: como mucho deja de curar algo, nunca
+ *  reescribe un contrato que un humano acaba de fijar. */
+export function preservedPriceApplies(args: {
+  preserved: { chargeCents: number; boxCount: number } | null;
+  realBoxes: number;
+  liveChargeCents: number;
+  catalogueCents: number;
+  /** Tolerancia del cron: un céntimo por línea (el reparto del tramo puede aterrizar
+   *  legítimamente por debajo, 4 cajas como 2+2 es imposible de cuadrar exacto). */
+  toleranceCents: number;
+}): { applies: boolean; reason: "no-preserved" | "box-mismatch" | "already-migrated" | "preserved" } {
+  const { preserved, realBoxes, liveChargeCents, catalogueCents, toleranceCents } = args;
+  if (preserved === null) return { applies: false, reason: "no-preserved" };
+  if (preserved.boxCount !== realBoxes) return { applies: false, reason: "box-mismatch" };
+  if (Math.abs(liveChargeCents - catalogueCents) <= toleranceCents) {
+    return { applies: false, reason: "already-migrated" };
+  }
+  return { applies: true, reason: "preserved" };
 }
 
 /** Σ quantity × unit price over lines, in cents. The money assertion compares this

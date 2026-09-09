@@ -35,6 +35,7 @@ import {
   type FlavorComposition,
   type SubscriptionLine,
   type TargetLine,
+  preservedPriceApplies,
   repriceInPlace,
   planPreservingCharge,
 } from "../src/lib/mix";
@@ -844,18 +845,77 @@ eq(planPreservingCharge([{ flavor: L, boxes: 3 }], LADDER, -100), null, "importe
   eq(dañino !== null, true, "migracion: sin el guard, repriceInPlace APLICA");
   eq(dañino!.totalCents, 6792, "migracion: …y devuelve el cobro a 67,92, deshaciendo la migracion");
 
-  // LA CONDICION QUE LO MATA: si lo que Seal cobra HOY es el catalogo de sus cajas,
-  // alguien lo ha alineado a proposito. Un contrato preservado no aterriza en su tramo
-  // exacto por casualidad: su importe es justamente el que NO es el tramo.
-  const alignedToCatalogue = Math.abs(cobroHoy - catalogo3) <= migradas.length;
-  eq(alignedToCatalogue, true,
-     "migracion: cobro == catalogo de sus cajas, asi que la preservacion queda INERTE");
+  // LA CONDICION QUE LO MATA, llamada de VERDAD y no recalculada aqui (aviso de Kiko,
+  // 9-sep-2026). Antes este bloque hacia su propio Math.abs(...) <= length y asserteaba
+  // su propia aritmetica: si manana alguien cambiaba el operador en renewal-reminder.ts,
+  // el test seguia en verde y el cron volvia a deshacer la migracion en silencio. Por eso
+  // la condicion se extrajo a `preservedPriceApplies` en mix.ts. Es el variant_title del
+  // PACK4 otra vez (§1d de CLAUDE.md).
+  const tol = migradas.length;
+  const migrada = preservedPriceApplies({
+    preserved: { chargeCents: preservedViejo, boxCount: 3 },
+    realBoxes, liveChargeCents: cobroHoy, catalogueCents: catalogo3, toleranceCents: tol,
+  });
+  eq(migrada.applies, false, "migracion: la preservacion queda INERTE");
+  eq(migrada.reason, "already-migrated", "migracion: …y el motivo dice por que, para el aviso");
 
-  // Y el contrario, que es el que NO debe apagarse: una legacy sin migrar sigue
-  // cobrando su importe viejo, que no es el tramo, asi que se preserva como siempre.
-  const sinMigrar = 6792;
-  eq(Math.abs(sinMigrar - catalogo3) <= migradas.length, false,
-     "sin migrar: 67,92 no es el tramo de 3 cajas, la preservacion SIGUE viva");
+  // El contrario, que es el que NO debe apagarse: una legacy sin migrar sigue cobrando su
+  // importe viejo, que no es el tramo, asi que se preserva como siempre.
+  const viva = preservedPriceApplies({
+    preserved: { chargeCents: preservedViejo, boxCount: 3 },
+    realBoxes, liveChargeCents: preservedViejo, catalogueCents: catalogo3, toleranceCents: tol,
+  });
+  eq(viva.applies, true, "sin migrar: 67,92 no es el tramo, la preservacion SIGUE viva");
+  eq(viva.reason, "preserved", "sin migrar: motivo 'preserved'");
+
+  // Y los otros dos caminos, que tambien son del cron.
+  eq(preservedPriceApplies({
+    preserved: null, realBoxes, liveChargeCents: cobroHoy, catalogueCents: catalogo3, toleranceCents: tol,
+  }).reason, "no-preserved", "sin columnas preservadas: no-preserved");
+  eq(preservedPriceApplies({
+    preserved: { chargeCents: preservedViejo, boxCount: 4 },
+    realBoxes, liveChargeCents: preservedViejo, catalogueCents: catalogo3, toleranceCents: tol,
+  }).reason, "box-mismatch", "cajas que no cuadran: box-mismatch (el blocker del 3-sep)");
+
+  // La tolerancia es del cron (un centimo por linea), asi que un cobro un centimo por
+  // debajo del catalogo tambien cuenta como migrado: es como aterriza un tramo que no es
+  // divisible exacto.
+  eq(preservedPriceApplies({
+    preserved: { chargeCents: preservedViejo, boxCount: 3 },
+    realBoxes, liveChargeCents: catalogo3 - 1, catalogueCents: catalogo3, toleranceCents: tol,
+  }).reason, "already-migrated", "migracion: un centimo por debajo del tramo sigue siendo migrada");
+}
+
+
+// EL GUARD QUE FALTABA EN repriceInPlace (aviso de Kiko, 9-sep-2026).
+// El reparto proporcional se copio del gemelo planPreservingCharge pero NO sus dos
+// guards, asi que el unico invariante volvia a ser el del TOTAL. Con un pack vivo por
+// encima de catalogo al lado de otra linea el total sale exacto, raisesAnyLine en false,
+// y el PACK4 se escribe por encima de su propio precio de venta: el mismo defecto que
+// esta rama arregla, colado por otra puerta.
+{
+  const packCaro = rpLine(1, rpPack2L2W, 1, "90.56", 4); // pack vivo POR ENCIMA de 85,05
+  const suelta = rpLine(2, rpSL30, 1, "28.35", 1);
+
+  // Sin catalogo que oponerle (llamador de solo lectura) se comporta como antes.
+  const sinTope = repriceInPlace([packCaro, suelta], 11340);
+  eq(sinTope !== null, true, "pack caro sin prices: propone (compatibilidad)");
+  eq(sinTope!.edits.find((e) => e.itemId === 1)!.unitPriceCents, 8636,
+     "pack caro sin prices: el PACK4 queda a 86,36, o sea 1,31 SOBRE su catalogo");
+
+  // Con el catalogo, el guard lo caza: no hay reparto legitimo, asi que no propone nada.
+  const conTope = repriceInPlace([packCaro, suelta], 11340, LADDER);
+  eq(conTope, null, "pack caro con prices: NO propone, porque el pack quedaria sobre catalogo");
+
+  // Y el caso sano sigue pasando con el tope puesto: nada queda sobre su catalogo.
+  const sano = repriceInPlace(
+    [rpLine(1, rpPack2L2W, 1, "85.05", 4), rpLine(2, rpSL30, 2, "28.35", 2)],
+    13586, LADDER,
+  );
+  eq(sano !== null, true, "preservada 6 cajas con tope: sigue proponiendo");
+  eq(sano!.totalCents, 13586, "preservada 6 cajas con tope: total exacto");
+  eq(sano!.edits.find((e) => e.itemId === 1)!.unitPriceCents, 8152,
+     "preservada 6 cajas con tope: PACK4 a 81,52, por debajo de su catalogo");
 }
 
 // ── resultado ─────────────────────────────────────────────────────────────────
