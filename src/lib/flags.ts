@@ -30,6 +30,40 @@ export function mixEnabledForCustomer(customerId: string): boolean {
     .includes(String(customerId));
 }
 
+/** PROFILE_SURVEY=off | allowlist | on */
+function profileSurveyMode(): "off" | "allowlist" | "on" {
+  const v = (process.env.PROFILE_SURVEY ?? "off").trim().toLowerCase();
+  return v === "on" ? "on" : v === "allowlist" ? "allowlist" : "off";
+}
+
+/**
+ * Can this customer SEE and SUBMIT the profile survey?
+ *
+ * Gates showing and sending, never reading: si se apaga el flag, las respuestas
+ * ya guardadas se siguen leyendo y sincronizando. Un flag que además escondiera
+ * el dato ya recogido convertiría el interruptor de apagado en una pérdida.
+ *
+ * Para el paseo de verificación en producción hay que estar en DOS listas, que
+ * son independientes: ésta y `DRY_RUN_ALLOWLIST` (ver `dryRunAllowedInProdFor`
+ * debajo). Ninguna de las dos afecta a una función de negocio.
+ *
+ * Hasta el PR #112 el dry-run colgaba de `MIX_FLAVORS_ALLOWLIST`, así que para
+ * simular había que poner `MIX_FLAVORS=allowlist` y eso cerraba el constructor
+ * de mezclas a todos los demás clientes. Queda anotado porque el reflejo, al
+ * ver dos listas, es sospechar que una sobra: no sobra, y la que se fue era la
+ * que hacía daño.
+ */
+export function profileSurveyEnabledFor(customerId: string): boolean {
+  const mode = profileSurveyMode();
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  return (process.env.PROFILE_SURVEY_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(String(customerId));
+}
+
 /**
  * Whether the dry-run query param is honoured for this customer in PRODUCTION.
  *
