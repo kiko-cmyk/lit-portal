@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { suggestLongerCadence } from "@/lib/cadence-fit";
 import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
+import { profileSurveyEnabledFor } from "@/lib/flags";
 import { mixBoxCount } from "@/lib/mix";
 import { SURVEY_CONSENT } from "@/lib/survey-consent-copy";
 import { validateAnswers } from "@/lib/profile-questions";
@@ -109,6 +110,22 @@ export const GET = withCustomer<SurveyState>(async (_req, ctx) => {
 
 export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   await enforceRateLimit(ctx.customerId, "survey-profile", { limit: 10, windowMs: 60_000 });
+
+  // El flag tiene que cerrar la ESCRITURA, no solo esconder la tarjeta.
+  //
+  // Antes solo gateaba la tarjeta del Hub, y eso dejaba el flag inútil justo el
+  // día que se necesita: es la palanca de marcha atrás. Si algo sale torcido
+  // después de lanzar y se pone en `off`, el enlace directo sigue funcionando
+  // para cualquiera que lo tenga, y lo va a tener toda la base porque el email
+  // de la campaña lo lleva dentro. Un interruptor de apagado que no apaga es
+  // peor que no tenerlo, porque se cuenta con él.
+  //
+  // Se gatea SOLO el POST. El GET sigue abierto (leer tus propias respuestas no
+  // es un favor que se pueda retirar) y el borrado TAMBIÉN, siempre: una
+  // petición de supresión no puede depender de una variable de entorno.
+  if (!profileSurveyEnabledFor(ctx.customerId)) {
+    throw new ApiHttpError(403, "survey_closed", "profile survey is not open for this customer");
+  }
 
   const body = (await req.json().catch(() => ({}))) as SurveyBody;
   if (typeof body.consent !== "boolean") {
