@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SignOutPill } from "@/components/SwitchAccount";
-import { useLang, useLangValue } from "@/lib/i18n";
+import { LangToggle, useLang, useLangValue } from "@/lib/i18n";
 import { COLLECTION_ENABLED } from "@/lib/portal-link";
 import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
 import type { ReactNode } from "react";
@@ -211,6 +211,18 @@ export function TopNav() {
           })}
           </div>
           )}
+          {/* Idioma, a la derecha de la cápsula de nav (Juan 2026-09-10). Antes
+              vivía en una sección del cuerpo de Cuenta; aquí está junto a la
+              navegación, que es donde se buscan los ajustes de vista, y queda
+              accesible desde el Hub y no solo desde Cuenta.
+
+              Va FUERA de la cápsula: dentro parecería una tercera pestaña, y no
+              navega a ningún sitio. Su propia píldora, con el mismo borde y
+              fondo que el botón de Cambiar, lo deja como lo que es, un control.
+
+              Se muestra también en modo mayorista: un partner también lee el
+              portal en su idioma. */}
+          <LangToggle />
         </div>
       </div>
     </nav>

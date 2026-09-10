@@ -28,9 +28,8 @@ const VISIBLE_ORDERS = 4;
  * delivered orders yet (which is what most subscribers will see on day 0).
  *
  * Con más de `VISIBLE_ORDERS` pedidos, el resto queda plegado detrás de un
- * "Ver los N anteriores". Se pliega en el CLIENTE, no en la petición: los
- * pedidos ya vienen todos en la respuesta, así que abrir no dispara otra
- * llamada ni espera.
+ * "Ver más". Se pliega en el CLIENTE, no en la petición: los pedidos ya vienen
+ * todos en la respuesta, así que abrir no dispara otra llamada ni espera.
  */
 export function OrderHistory({ limit = 10 }: { limit?: number }) {
   const [orders, setOrders] = useState<OrderHistoryItem[] | null>(null);
@@ -48,7 +47,6 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
 
   const collapsible = orders.length > VISIBLE_ORDERS;
   const shown = collapsible && !expanded ? orders.slice(0, VISIBLE_ORDERS) : orders;
-  const hidden = orders.length - VISIBLE_ORDERS;
 
   return (
     <section className="mx-6 mt-5 md:mx-0">
@@ -122,12 +120,7 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
           {expanded ? (
             <T en="Show less" es="Ver menos" />
           ) : (
-            // Se dice CUÁNTOS quedan, no un "ver más" a ciegas: el cliente
-            // decide si merece la pena abrirlo.
-            <T
-              en={`Show ${hidden} more`}
-              es={`Ver ${hidden} ${hidden === 1 ? "anterior" : "anteriores"}`}
-            />
+            <T en="Show more" es="Ver más" />
           )}
           <span
             aria-hidden

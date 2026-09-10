@@ -580,6 +580,26 @@ export default function AccountPage() {
           </Section>
         )}
 
+        {/* DOS COLUMNAS en desktop (Juan 2026-09-10): "Mis datos" a la
+            izquierda, dirección y método de pago a la derecha.
+            En móvil sigue siendo una sola columna, en el mismo orden que antes.
+
+            Las dos columnas ocupan la MISMA ALTURA, que es lo pedido: la
+            rejilla las estira por defecto (`items-stretch`) y cada columna es
+            un flex vertical cuya última tarjeta crece (`last:flex-1`) hasta
+            llenar lo que sobre. Así el bloque queda cerrado por abajo en vez de
+            dejar un escalón entre la columna corta y la larga.
+
+            Se estira la ÚLTIMA y no todas a partes iguales para no inflar
+            tarjetas de dos filas hasta el tamaño de la de al lado: el aire
+            sobrante se lo queda una sola, la de más abajo.
+
+            Las `Section` traen su propio `mx-6 mb-3`, que en desktop se anula
+            (`md:mx-0`), así que la rejilla solo aparece a partir de `md` y no
+            hay que tocar el componente. El `mb-0` quita el margen inferior que
+            sobra cuando el `gap` de la rejilla ya separa. */}
+        <div className="md:grid md:grid-cols-2 md:gap-3 md:[&>div>section]:mb-0 md:[&>div]:flex md:[&>div]:flex-col md:[&>div]:gap-3 md:[&>div>section:last-child]:flex-1">
+        <div>
         <Section title={t({ en: "My details", es: "Mis datos" })}>
           {emailChangeConfirmed && (
             <div className="mx-6 mb-3 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
@@ -657,6 +677,12 @@ export default function AccountPage() {
               is noise on a screen that is now only rows of data. */}
           {!accountOnly && <SwitchAccountRow />}
         </Section>
+        </div>
+
+        {/* Columna derecha: dónde llega y cómo se paga. Van juntas porque son
+            los dos datos del envío, y separadas de la identidad de la
+            izquierda. */}
+        <div>
 
         {/* Wholesale: the address on their Shopify customer record, which is what
             prefills their checkout. A partner has no Seal subscription, so the
@@ -764,17 +790,32 @@ export default function AccountPage() {
             <PaymentBlock />
           </Section>
         )}
+        </div>
+        </div>
 
-        {/* Idioma vive AQUÍ (en el cuerpo de Cuenta), no en el header
-            — decisión de Juan 2026-07-13. */}
-        <Section title={t({ en: "Language", es: "Idioma" })}>
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-sm text-[color:var(--color-warm-gray)]">
-              {t({ en: "Choose your language", es: "Elige tu idioma" })}
-            </span>
-            <LangToggle />
-          </div>
-        </Section>
+        {/* IDIOMA: en desktop se fue al header, junto a Suscripción y Cuenta
+            (Juan 2026-09-10), así que aquí solo queda para móvil (`md:hidden`).
+            Revierte la decisión del 2026-07-13 de tenerlo en el cuerpo: una
+            tarjeta entera para dos botones pesaba lo mismo que la dirección o
+            el pago, y el idioma no es un dato de la cuenta, es un ajuste de la
+            interfaz. En el header además queda accesible desde el Hub y no solo
+            desde esta pantalla.
+
+            Por qué NO se quita también en móvil: la barra superior del móvil ya
+            lleva Cambiar + chip de nombre + TierPill, y el audit del 2026-07-08
+            dejó anotado que a 390px eso ya va justo. Metiendo un cuarto control
+            se rompe. Así que en móvil esta sección es el único sitio donde el
+            cliente puede cambiar de idioma, y quitarla lo dejaría sin él. */}
+        <div className="md:hidden">
+          <Section title={t({ en: "Language", es: "Idioma" })}>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm text-[color:var(--color-warm-gray)]">
+                {t({ en: "Choose your language", es: "Elige tu idioma" })}
+              </span>
+              <LangToggle />
+            </div>
+          </Section>
+        </div>
 
         <OrdersSection orders={orders} />
 
@@ -1481,10 +1522,30 @@ function PaymentBlock() {
 // LanguagePicker removed 2026-05-18 round 7 — the header LangToggle covers
 // the same function and is always visible (sticky header).
 
+/**
+ * Pedidos visibles antes del "Ver más" en Cuenta. Mismo número que el Hub
+ * (`VISIBLE_ORDERS` en components/OrderHistory.tsx): las dos superficies
+ * enseñan la misma lista y descuadrarlas no tendría motivo. Va duplicado y no
+ * importado porque esta lista es una implementación aparte, con su propio
+ * markup compacto; el día que se unifiquen, la constante se unifica con ellas.
+ */
+const VISIBLE_ACCOUNT_ORDERS = 4;
+
 function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
   const [open, setOpen] = useState(true);
+  // Mismo corte que `OrderHistory` en el Hub (Juan 2026-09-10): se ven 4 y el
+  // resto se pliega. Aquí la sección YA tenía su propio desplegable de
+  // cabecera, así que son dos cosas distintas y conviven: `open` esconde la
+  // sección entera, `expanded` alarga la lista de dentro.
+  const [expanded, setExpanded] = useState(false);
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
+
+  const collapsible = !!orders && orders.length > VISIBLE_ACCOUNT_ORDERS;
+  const shown =
+    orders && collapsible && !expanded
+      ? orders.slice(0, VISIBLE_ACCOUNT_ORDERS)
+      : orders;
 
   return (
     <section
@@ -1528,7 +1589,7 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
           )}
           {orders && orders.length > 0 && (
             <ul>
-              {orders.map((o) => (
+              {(shown ?? []).map((o) => (
                 <li
                   key={o.id}
                   className="border-t border-[color:var(--color-lit-grey)]/6"
@@ -1565,6 +1626,25 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
                 </li>
               ))}
             </ul>
+          )}
+          {collapsible && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="mt-3 flex w-full cursor-pointer items-center justify-center gap-2 border-t border-[color:var(--color-lit-grey)]/6 pt-3 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] transition-colors hover:text-[color:var(--color-lit-grey)]"
+              style={{ fontFamily: "var(--font-cond)" }}
+            >
+              {expanded ? <T en="Show less" es="Ver menos" /> : <T en="Show more" es="Ver más" />}
+              <span
+                aria-hidden
+                className={`text-[12px] leading-none transition-transform duration-200 ${
+                  expanded ? "rotate-180" : ""
+                }`}
+              >
+                ⌄
+              </span>
+            </button>
           )}
         </div>
       )}
