@@ -22,13 +22,19 @@ interface DangerZoneProps {
  * also wrong on the facts. Shopify's refresh grant never returns a new
  * id_token and `offline_access` does not exist on this platform; the real
  * mechanism is a `prompt=none` round trip. See docs/AUTH_LOGOUT.md.
+ *
+ * Sin margen superior propio (Juan 2026-09-10): el Marquee que va justo encima
+ * ya aporta su `my-12`, y un `mt` aquí no se suma a ese margen, lo gana por
+ * colapso (56 > 48). Con `mt-14` el marquee quedaba con 48px por arriba y 56
+ * por abajo, visiblemente torcido. Ahora los dos huecos salen del mismo
+ * `my-12`, así que el marquee es simétrico.
  */
 export function DangerZone({ onCancel }: DangerZoneProps) {
   const lang = useLangValue();
 
   return (
     <section
-      className="relative mx-6 mt-14 overflow-hidden rounded-[20px] border border-[rgba(155,61,61,0.3)] bg-[color:var(--color-sharp-white)] px-7 pt-8 pb-7 text-[color:var(--color-lit-grey)] md:mx-0 md:px-10 md:pt-10 md:pb-9"
+      className="relative mx-6 overflow-hidden rounded-[20px] border border-[rgba(155,61,61,0.3)] bg-[color:var(--color-sharp-white)] px-7 pt-8 pb-7 text-[color:var(--color-lit-grey)] md:mx-0 md:px-10 md:pt-10 md:pb-9"
       style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
     >
       {/* Soft danger corner glow */}
