@@ -52,6 +52,13 @@ export const SURVEY_CONSENT = {
  * Por eso el bullet de abajo dice dónde acaban DE VERDAD. Corregir la política
  * es una tarea aparte y de la web, no de aquí.
  *
+ * REDACCIÓN (Juan 2026-09-10): el bullet ya no nombra a Klaviyo ni a Estados
+ * Unidos por su nombre, dice "la herramienta con la que te escribimos, que
+ * guarda los datos fuera de la UE". Sigue siendo cierto y sigue avisando de la
+ * transferencia, que es la parte que no se puede omitir; lo que se quita es el
+ * nombre del proveedor, que al cliente no le dice nada. Si algún día se deja de
+ * escribir en Klaviyo, esta frase hay que revisarla: pasaría a sobrar.
+ *
  * La viñeta de "todas son opcionales y te llevas los 50 drops" se quitó el
  * 2026-09-10: lo de opcionales lo dice ahora la propia pantalla, en grande, y
  * los drops no se anuncian mientras la función no esté visible para el cliente.
@@ -64,9 +71,10 @@ export const SURVEY_NOTICE = {
       "Cada cuerpo tiene su ritmo y el tuyo no lo conocemos todavía. Cuéntanoslo y " +
       "ajustamos lo que te mandamos: cuándo, cuánto y de qué sabor.",
     bullets: [
-      "Quién las trata: LIT Hydration España S.L. No vendemos tus respuestas.",
-      "Dónde acaban: en nuestra base de datos y en Klaviyo, la herramienta con la que " +
-        "te escribimos, que guarda los datos en Estados Unidos.",
+      "Quién las trata: LIT Hydration España S.L.",
+      "Dónde acaban: en nuestra base de datos y en la herramienta con la que te " +
+        "escribimos, que guarda los datos fuera de la UE. No los vendemos ni los " +
+        "cedemos a nadie más.",
       "Cuánto las guardamos: mientras tengas cuenta activa con nosotros.",
       "Puedes cambiarlas o borrarlas cuando quieras volviendo aquí.",
     ],
@@ -76,9 +84,9 @@ export const SURVEY_NOTICE = {
       "Every body has its own rhythm and we don't know yours yet. Tell us, and we'll " +
       "tune what we send you: when, how much and which flavour.",
     bullets: [
-      "Who handles them: LIT Hydration España S.L. We don't sell your answers.",
-      "Where they end up: in our database and in Klaviyo, the tool we email you with, " +
-        "which stores data in the United States.",
+      "Who handles them: LIT Hydration España S.L.",
+      "Where they end up: in our database and in the tool we email you with, which " +
+        "stores data outside the EU. We don't sell them or pass them to anyone else.",
       "How long we keep them: as long as your account with us is active.",
       "You can change or delete them any time by coming back here.",
     ],
