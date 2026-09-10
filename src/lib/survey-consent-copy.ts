@@ -70,13 +70,20 @@ export const SURVEY_NOTICE = {
     intro:
       "Cada cuerpo tiene su ritmo y el tuyo no lo conocemos todavía. Cuéntanoslo y " +
       "ajustamos lo que te mandamos: cuándo, cuánto y de qué sabor.",
+    // Etiqueta + valor por separado, no una frase con dos puntos: así la
+    // pantalla puede pintar la etiqueta como tal y el aviso se ESCANEA en vez
+    // de leerse. Ver el bloque en ProfileSurveyOverlay.
     bullets: [
-      "Quién las trata: LIT Hydration España S.L.",
-      "Dónde acaban: en nuestra base de datos y en la herramienta con la que te " +
-        "escribimos, que guarda los datos fuera de la UE. No los vendemos ni los " +
-        "cedemos a nadie más.",
-      "Cuánto las guardamos: mientras tengas cuenta activa con nosotros.",
-      "Puedes cambiarlas o borrarlas cuando quieras volviendo aquí.",
+      { k: "Quién las trata", v: "LIT Hydration España S.L." },
+      {
+        k: "Dónde acaban",
+        v:
+          "En nuestra base de datos y en la herramienta con la que te escribimos, " +
+          "que guarda los datos fuera de la UE. No los vendemos ni los cedemos a " +
+          "nadie más.",
+      },
+      { k: "Cuánto las guardamos", v: "Mientras tengas cuenta activa con nosotros." },
+      { k: "Y si cambias de idea", v: "Puedes cambiarlas o borrarlas volviendo aquí." },
     ],
   },
   en: {
@@ -84,11 +91,15 @@ export const SURVEY_NOTICE = {
       "Every body has its own rhythm and we don't know yours yet. Tell us, and we'll " +
       "tune what we send you: when, how much and which flavour.",
     bullets: [
-      "Who handles them: LIT Hydration España S.L.",
-      "Where they end up: in our database and in the tool we email you with, which " +
-        "stores data outside the EU. We don't sell them or pass them to anyone else.",
-      "How long we keep them: as long as your account with us is active.",
-      "You can change or delete them any time by coming back here.",
+      { k: "Who handles them", v: "LIT Hydration España S.L." },
+      {
+        k: "Where they end up",
+        v:
+          "In our database and in the tool we email you with, which stores data " +
+          "outside the EU. We don't sell them or pass them to anyone else.",
+      },
+      { k: "How long we keep them", v: "As long as your account with us is active." },
+      { k: "If you change your mind", v: "You can change or delete them by coming back here." },
     ],
   },
 } as const;

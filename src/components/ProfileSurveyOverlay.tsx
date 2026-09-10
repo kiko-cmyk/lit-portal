@@ -199,20 +199,49 @@ export function ProfileSurveyOverlay({
               ))}
             </div>
 
-            {/* La letra pequeña, agrupada y detrás de una línea. Entera: quién
-                trata los datos, dónde acaban (Estados Unidos incluido), cuánto
-                se guardan y que se pueden cambiar. Solo deja de gritar. */}
+            {/* La letra pequeña, como FICHA DE DATOS y no como lista de
+                viñetas (Juan 2026-09-10).
+                Cada punto ya era "etiqueta: valor", pero se pintaba como texto
+                corrido detrás de un `·`, así que había que leer las cuatro
+                líneas enteras para encontrar una. Ahora la etiqueta va en
+                condensada, mayúsculas y espaciada (el mismo recurso que las
+                filas de datos de Cuenta), y el valor debajo en su propio
+                renglón: se escanea de un vistazo.
+
+                Cada punto en su propia caja sobre `brisky-cream`, en rejilla de
+                dos columnas en pantalla ancha. Deja de parecer una condición de
+                contrato y se lee como lo que es: información. */}
             <div className="mt-7 border-t border-[color:var(--color-lit-grey)]/10 pt-5">
-              <ul className="space-y-2 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+              <div
+                className="mb-3 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+                style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+              >
+                <T en="Your answers, in short" es="Tus respuestas, en corto" />
+              </div>
+              <dl className="grid gap-2 sm:grid-cols-2">
                 {notice.bullets.map((b) => (
-                  <li key={b} className="flex gap-2">
-                    <span aria-hidden className="opacity-50">
-                      ·
-                    </span>
-                    <span>{b}</span>
-                  </li>
+                  <div
+                    key={b.k}
+                    // El punto largo ("Dónde acaban", que lleva el aviso de la
+                    // transferencia) ocupa la fila entera: partido en media
+                    // columna quedaba en cinco renglones y descuadraba la
+                    // rejilla, dejando además a la última caja suelta.
+                    className={`rounded-[14px] bg-[color:var(--color-brisky-cream)]/45 px-3.5 py-3 ${
+                      b.v.length > 90 ? "sm:col-span-2" : ""
+                    }`}
+                  >
+                    <dt
+                      className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/70"
+                      style={{ fontFamily: "var(--font-cond)", fontSize: 9.5 }}
+                    >
+                      {b.k}
+                    </dt>
+                    <dd className="mt-1 text-[12px] leading-[1.45] text-[color:var(--color-warm-gray)]">
+                      {b.v}
+                    </dd>
+                  </div>
                 ))}
-              </ul>
+              </dl>
             </div>
 
             <div className="mt-8 flex justify-end">
