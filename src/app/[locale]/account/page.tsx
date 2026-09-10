@@ -23,7 +23,7 @@ import {
   usePageTitle,
 } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
-import { compositionLabel, shortLabel } from "@/lib/mix";
+import { shortLabel } from "@/lib/mix";
 import { DEFAULT_FLAVOR } from "@/lib/seal-plans";
 import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import Link from "next/link";
@@ -528,24 +528,11 @@ export default function AccountPage() {
                 }
               />
             </div>
-            {/* The abbreviated cell above only fits "2L · 1W", so spell the mix out
-                on its own full-width row. */}
-            {(subscription.composition?.length ?? 0) > 1 && (
-              <div className="mt-3 border-t border-[color:var(--color-lit-grey)]/10 pt-3">
-                <div
-                  className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-                  style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-                >
-                  <T en="Your mix" es="Tu mezcla" />
-                </div>
-                {/* font-semibold, no font-black: las celdas de arriba (CAJAS,
-                    FRECUENCIA) van a semibold, y la mezcla es info secundaria.
-                    Iba más gorda que los números que resume. (Juan 2026-07-29) */}
-                <div className="mt-1 font-display text-base font-semibold uppercase leading-tight text-[color:var(--color-lit-grey)]">
-                  {compositionLabel(subscription.composition!)}
-                </div>
-              </div>
-            )}
+            {/* La fila "Tu mezcla" se quitó (Juan 2026-09-10): la celda SABORES
+                de arriba ya dice "2L · 2W", así que era el mismo dato dos veces
+                a tres centímetros de distancia. Existía porque el resumen
+                abreviado se consideraba insuficiente, pero con dos o tres
+                sabores la abreviatura se lee sin ayuda. */}
             {/* Hidden while paused. The summary and the mix above are fine to read,
                 but this button opens PlanOverlay, which posts the four fast-path ids
                 to /api/subscription/plan and would try to mutate a paused
