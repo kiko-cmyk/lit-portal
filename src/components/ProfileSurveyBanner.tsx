@@ -97,7 +97,7 @@ export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
         <button
           type="button"
           onClick={onStart}
-          className="w-full shrink-0 rounded-full bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-black uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
+          className="w-full shrink-0 rounded-full bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
         >
           <T en="Start" es="Empezar" />
         </button>

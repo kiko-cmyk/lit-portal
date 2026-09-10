@@ -31,7 +31,7 @@ import {
   isAsked,
   type ProfileQuestion,
 } from "@/lib/profile-questions";
-import { SURVEY_NOTICE } from "@/lib/survey-consent-copy";
+import { SURVEY_CONSENT, SURVEY_NOTICE } from "@/lib/survey-consent-copy";
 import type { Frequency, Subscription } from "@/lib/types";
 
 type Step = "intro" | 1 | 2 | 3 | "done";
@@ -124,7 +124,11 @@ export function ProfileSurveyOverlay({
   };
 
   const screenOf = (n: 1 | 2 | 3) => visible.filter((q) => q.screen === n);
-  const notice = useLangValue() === "es" ? SURVEY_NOTICE.es : SURVEY_NOTICE.en;
+  const isEs = useLangValue() === "es";
+  const notice = isEs ? SURVEY_NOTICE.es : SURVEY_NOTICE.en;
+  // La MISMA frase que la ruta registra en `consent_version`. Ver el comentario
+  // en la casilla.
+  const consentText = isEs ? SURVEY_CONSENT.es : SURVEY_CONSENT.en;
 
   return (
     <div
@@ -247,12 +251,14 @@ export function ProfileSurveyOverlay({
                   onChange={(e) => setConsent(e.target.checked)}
                   className="mt-0.5 h-4 w-4 flex-none accent-[color:var(--color-bold-yellow)]"
                 />
-                <span>
-                  <T
-                    en="I want LIT to use these answers to personalise what it sends me."
-                    es="Quiero que LIT use estas respuestas para personalizar lo que me manda."
-                  />
-                </span>
+                {/* El texto sale de SURVEY_CONSENT, que es EL MISMO que la
+                    ruta registra en `consent_version` (Juan 2026-09-10).
+                    Antes iba escrito a mano aquí y era más corto que el
+                    versionado: se guardaba "aceptó la v2" mientras el cliente
+                    leía otra frase, así que el registro apuntaba a un texto que
+                    esa persona no había visto. Es justo lo que el módulo de
+                    copy existe para evitar. */}
+                <span>{consentText}</span>
               </label>
             )}
 

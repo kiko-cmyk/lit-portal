@@ -19,18 +19,20 @@
  */
 
 export const SURVEY_CONSENT = {
-  // v2: la frase nombra al responsable del tratamiento por su razón social.
-  // Se sube la versión en vez de editar en su sitio: quien ya hubiera aceptado
-  // la v1 aceptó otra frase, y el registro tiene que poder distinguirlas.
-  version: 2,
+  // v3 (2026-09-10): se reescribe para que se lea como una frase y no como un
+  // pliego. Dice lo mismo con las mismas piezas obligatorias (quién, para qué,
+  // y cómo se retira), en la voz del cliente y no en la del departamento
+  // legal. Se sube la versión en vez de editar en su sitio: quien aceptó la v2
+  // aceptó otra frase, y el registro tiene que poder distinguirlas.
+  version: 3,
   es:
-    "Doy permiso a LIT Hydration España S.L. para usar estas respuestas para personalizar lo que me manda: " +
-    "emails, ofertas y recomendaciones de producto. Puedo retirarlo cuando quiera " +
-    "escribiendo a hola@litsalt.com.",
+    "Sí, quiero que LIT Hydration España S.L. use lo que he contestado para afinar " +
+    "lo que me manda. Nada más. Puedo cambiar de idea cuando quiera escribiendo a " +
+    "hola@litsalt.com.",
   en:
-    "I give LIT Hydration España S.L. permission to use these answers to personalise what it sends me: " +
-    "emails, offers and product recommendations. I can withdraw it any time by " +
-    "writing to hola@litsalt.com.",
+    "Yes, I want LIT Hydration España S.L. to use my answers to fine-tune what it " +
+    "sends me. Nothing else. I can change my mind any time by writing to " +
+    "hola@litsalt.com.",
 } as const;
 
 /**
@@ -59,26 +61,26 @@ export const SURVEY_CONSENT = {
 export const SURVEY_NOTICE = {
   es: {
     intro:
-      "Unas preguntas rápidas sobre cómo tomas LIT. Nos sirven para dejar de mandarte " +
-      "lo mismo que a todo el mundo.",
+      "Cada cuerpo tiene su ritmo y el tuyo no lo conocemos todavía. Cuéntanoslo y " +
+      "ajustamos lo que te mandamos: cuándo, cuánto y de qué sabor.",
     bullets: [
       "Quién las trata: LIT Hydration España S.L. No vendemos tus respuestas.",
       "Dónde acaban: en nuestra base de datos y en Klaviyo, la herramienta con la que " +
         "te escribimos, que guarda los datos en Estados Unidos.",
-      "Cuánto las guardamos: mientras tengas cuenta con nosotros.",
-      "Puedes cambiarlas cuando quieras volviendo a este formulario.",
+      "Cuánto las guardamos: mientras tengas cuenta activa con nosotros.",
+      "Puedes cambiarlas o borrarlas cuando quieras volviendo aquí.",
     ],
   },
   en: {
     intro:
-      "A few quick questions about how you drink LIT. They're what stops us sending " +
-      "you the same as everyone else.",
+      "Every body has its own rhythm and we don't know yours yet. Tell us, and we'll " +
+      "tune what we send you: when, how much and which flavour.",
     bullets: [
       "Who handles them: LIT Hydration España S.L. We don't sell your answers.",
       "Where they end up: in our database and in Klaviyo, the tool we email you with, " +
         "which stores data in the United States.",
-      "How long we keep them: as long as you have an account with us.",
-      "You can change them any time by coming back to this form.",
+      "How long we keep them: as long as your account with us is active.",
+      "You can change or delete them any time by coming back here.",
     ],
   },
 } as const;
