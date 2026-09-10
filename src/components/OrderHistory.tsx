@@ -9,14 +9,32 @@ import { orderDetailHref } from "@/lib/portal-link";
 import type { OrderHistoryItem } from "@/lib/types";
 
 /**
+ * Cuántos pedidos se ven antes de tener que pedir más (Juan 2026-09-10).
+ *
+ * Con un suscriptor mensual, 4 pedidos son los últimos cuatro meses: suficiente
+ * para "¿llegó el de este mes?", que es a lo que se entra. A partir de ahí la
+ * lista crecía sin techo y empujaba el pie del Hub fuera de la pantalla.
+ *
+ * El corte se aplica solo si SOBRAN pedidos: con 5 se colapsa uno y el
+ * desplegable no vale la pena, así que el umbral real es "más de 4".
+ */
+const VISIBLE_ORDERS = 4;
+
+/**
  * Past orders list. Loaded lazily off `/api/orders?limit=N` on mount, never
  * blocks the Hub's first paint.
  *
  * Renders nothing while loading and an empty hint when the customer has no
  * delivered orders yet (which is what most subscribers will see on day 0).
+ *
+ * Con más de `VISIBLE_ORDERS` pedidos, el resto queda plegado detrás de un
+ * "Ver los N anteriores". Se pliega en el CLIENTE, no en la petición: los
+ * pedidos ya vienen todos en la respuesta, así que abrir no dispara otra
+ * llamada ni espera.
  */
 export function OrderHistory({ limit = 10 }: { limit?: number }) {
   const [orders, setOrders] = useState<OrderHistoryItem[] | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
@@ -27,6 +45,10 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
   }, [limit]);
 
   if (orders === null) return null;
+
+  const collapsible = orders.length > VISIBLE_ORDERS;
+  const shown = collapsible && !expanded ? orders.slice(0, VISIBLE_ORDERS) : orders;
+  const hidden = orders.length - VISIBLE_ORDERS;
 
   return (
     <section className="mx-6 mt-5 md:mx-0">
@@ -42,7 +64,7 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
         </div>
       ) : (
         <ul className="space-y-2">
-          {orders.map((o) => (
+          {shown.map((o) => (
             <li
               key={o.id}
               className="overflow-hidden rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
@@ -81,6 +103,41 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Sin `<details>` nativo a propósito: su marcador y su tipografía por
+          defecto no se pueden alinear con el resto del portal sin pelearse con
+          el user-agent. Un botón con `aria-expanded` da el mismo anuncio a un
+          lector de pantalla y se estiliza igual que todo lo demás.
+
+          Al plegar de vuelta NO se hace scroll: el botón se queda donde estaba
+          y la lista se acorta por debajo, así que no se pierde el sitio. */}
+      {collapsible && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-[14px] border border-dashed border-[color:var(--color-lit-grey)]/20 px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] transition-colors hover:border-[color:var(--color-lit-grey)]/35 hover:text-[color:var(--color-lit-grey)]"
+        >
+          {expanded ? (
+            <T en="Show less" es="Ver menos" />
+          ) : (
+            // Se dice CUÁNTOS quedan, no un "ver más" a ciegas: el cliente
+            // decide si merece la pena abrirlo.
+            <T
+              en={`Show ${hidden} more`}
+              es={`Ver ${hidden} ${hidden === 1 ? "anterior" : "anteriores"}`}
+            />
+          )}
+          <span
+            aria-hidden
+            className={`text-[13px] leading-none transition-transform duration-200 ${
+              expanded ? "rotate-180" : ""
+            }`}
+          >
+            ⌄
+          </span>
+        </button>
       )}
     </section>
   );

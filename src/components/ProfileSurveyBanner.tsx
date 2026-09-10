@@ -7,19 +7,7 @@ interface ProfileSurveyBannerProps {
 }
 
 /**
- * Los drops que paga el formulario. Va a mano porque `DROPS_AMOUNTS` vive en
- * `lib/drops.ts`, que importa `supabaseAdmin` y por tanto no se puede traer a
- * un componente de cliente. Mismo criterio que `ProfileSurveyOverlay`, que ya
- * escribe la cifra en su CTA.
- *
- * Si algún día cambia el importe hay que tocar los dos sitios. La fuente de
- * verdad para lo que se PAGA sigue siendo `DROPS_AMOUNTS.profile_survey`: esto
- * es solo la promesa en pantalla.
- */
-const SURVEY_DROPS = 50;
-
-/**
- * Llamada al formulario de perfilado, bajo las quick actions del Hub.
+ * Llamada al formulario de perfilado. Vive bajo "Próximos pedidos" en el Hub.
  *
  * ── Por qué NO es una quick action más (Juan, 2026-09-10) ──
  *
@@ -28,28 +16,38 @@ const SURVEY_DROPS = 50;
  * que la quinta caía sola en una segunda fila, huérfana y alineada a la
  * izquierda. Y la de fondo, que es la que importa: las otras cuatro
  * ADMINISTRAN la suscripción (adelantar, plan, saltar, sabor) y ésta pide un
- * favor al cliente a cambio de drops. Vestirla igual promete lo mismo que las
- * demás y no lo es.
+ * favor al cliente. Vestirla igual promete lo mismo que las demás y no lo es.
  *
  * Así que se separa del grid y hereda el lenguaje de `ReactivateCard`:
- * gradiente oscuro a ancho completo, eyebrow amarillo y un único CTA. En una
- * pantalla de tarjetas claras, la banda oscura dice "esto es otra cosa" sin
- * necesidad de explicarlo. No es un patrón nuevo: es el que el portal ya usa
- * cuando algo no es una acción de rutina.
+ * gradiente oscuro a ancho completo y un único CTA. En una pantalla de tarjetas
+ * claras, la banda oscura dice "esto es otra cosa" sin necesidad de explicarlo.
+ * No es un patrón nuevo: es el que el portal ya usa cuando algo no es una
+ * acción de rutina.
  *
- * El copy nombra el beneficio para el CLIENTE (ajustar sus envíos), no el
- * nuestro (datos). Los drops van de eyebrow, no de titular: pagan la molestia,
- * no son el motivo, y encabezar con la recompensa se lee como promoción.
+ * ── Sin mención a los drops (Juan, 2026-09-10) ──
  *
- * `mt-3` da aire con las quick actions: pegado a ellas, el salto de tarjeta
- * clara a banda oscura se lee como un borde del propio grid.
+ * El primer borrador encabezaba con "+50 drops" de eyebrow. Fuera: los drops y
+ * la Colección no están todavía visibles ni funcionales para el cliente, así
+ * que prometer una recompensa que no puede ver ni gastar es una deuda, no un
+ * incentivo. El formulario SÍ los paga (`DROPS_AMOUNTS.profile_survey`), y se
+ * los encuentra al terminar; simplemente no se anuncian aquí.
+ *
+ * Cuando los drops se enciendan de cara al cliente, este es el sitio obvio para
+ * recuperar ese eyebrow.
+ *
+ * El copy nombra el beneficio para el CLIENTE (ajustar su suscripción a lo que
+ * consume), nunca el nuestro (datos).
+ *
+ * `mt-10/12` porque no lleva SectionDivider propio, y ese componente es el que
+ * pone el aire entre secciones (`mt-14/16`). Sin este margen la banda quedaba
+ * pegada al calendario de arriba, como si fuera parte de él.
  *
  * Sin guiones largos en el copy, por la guía de LIT.
  */
 export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
   return (
     <section
-      className="relative mx-6 mt-3 overflow-hidden rounded-[24px] px-6 py-6 text-[#F2EEE1] md:mx-0 md:px-8 md:py-7"
+      className="relative mx-6 mt-10 overflow-hidden rounded-[24px] px-6 py-6 text-[#F2EEE1] md:mx-0 md:mt-12 md:px-8 md:py-7"
       style={{
         background:
           "linear-gradient(135deg, var(--color-lit-grey), var(--color-dark-indigo))",
@@ -67,20 +65,28 @@ export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
 
       <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-8">
         <div className="min-w-0">
-          <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]">
-            <T en={`+${SURVEY_DROPS} drops`} es={`+${SURVEY_DROPS} drops`} />
-          </div>
-
-          <h2 className="mt-2 font-display text-[26px] font-black uppercase leading-[0.95] tracking-[-0.02em] md:text-[30px]">
+          {/* Mismo tamaño y peso que SectionDivider ("Gestionar mi suscripción",
+              "Próximos pedidos"…): clamp 18-22px, Clash Display 600, uppercase,
+              tracking -0.01em. Antes iba a 30px y se leía como un titular de
+              campaña, más alto en la jerarquía que las secciones que lo rodean.
+              Aquí el fondo oscuro ya da todo el contraste que necesita. */}
+          <h2
+            className="font-semibold uppercase leading-[1] tracking-[-0.01em]"
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "clamp(18px, 4vw, 22px)",
+            }}
+          >
             <T en="Tell us about you" es="Cuéntanos sobre ti" />
           </h2>
 
           {/* El "para qué" en la voz del cliente. Sin esto el banner pide nueve
-              respuestas sin decir qué gana, y los drops solos suenan a cebo. */}
+              respuestas sin decir para qué sirven, que es la forma más rápida de
+              que nadie las conteste. */}
           <p className="mt-2.5 max-w-md text-[13px] leading-[1.5] text-[#b3ab98]">
             <T
-              en="Nine questions, one minute. We use them to fit your deliveries to what you actually drink, so no more boxes piling up."
-              es="Nueve preguntas, un minuto. Nos sirven para ajustar tus envíos a lo que de verdad bebes, y que no se te acumulen las cajas."
+              en="Nine questions, one minute. We use them to fit your subscription to what you actually drink, so no more boxes piling up."
+              es="Nueve preguntas, un minuto. Nos sirven para ajustar tu suscripción a lo que de verdad consumes, y que no se te acumulen las cajas."
             />
           </p>
         </div>

@@ -552,10 +552,23 @@ export default function HubPage() {
               />
             </section>
 
-            {/* Perfilado. FUERA del grid a propósito: no es una acción de
-                gestión como las cuatro de arriba, así que va en su propia banda
-                a ancho completo (ver ProfileSurveyBanner). Dentro del grid caía
-                huérfano en una segunda fila y se vestía igual que lo que no es.
+            <SectionDivider
+              title={t({ en: "Upcoming", es: "Próximos pedidos" })}
+            />
+            <DeliveryCalendar
+              nextShipDate={nextShipDate}
+              upcoming={data.upcomingShipments}
+            />
+
+            {/* Perfilado, bajo el calendario (Juan 2026-09-10). FUERA del grid
+                de quick actions a propósito: no es una acción de gestión como
+                esas cuatro, así que va en su propia banda a ancho completo (ver
+                ProfileSurveyBanner). Y aquí, no arriba, porque el cliente entra
+                al Hub a resolver algo concreto: primero lo suyo (su próxima
+                caja, sus acciones, su calendario) y solo después le pedimos el
+                favor. Sin SectionDivider propio: la banda ya se separa sola de
+                lo de arriba y un título encima la convertiría en una sección
+                más del Hub.
 
                 `enabled` y `answered` los resuelve el servidor en la respuesta
                 del Hub, así que el flag y su allowlist nunca llegan al
@@ -566,17 +579,14 @@ export default function HubPage() {
             )}
 
             <SectionDivider
-              title={t({ en: "Upcoming", es: "Próximos pedidos" })}
-            />
-            <DeliveryCalendar
-              nextShipDate={nextShipDate}
-              upcoming={data.upcomingShipments}
-            />
-
-            <SectionDivider
               title={t({ en: "My orders", es: "Mis pedidos" })}
             />
-            <OrderHistory limit={10} />
+            {/* 20 y no 10: desde que la lista se plega a 4 (OrderHistory), lo
+                que se pide de más no se pinta, solo espera detrás del
+                desplegable. Con 10 un suscriptor de un año veía "ver 6 más" y
+                se quedaba sin los otros seis sin que nada lo dijera. El API
+                topa en 50. */}
+            <OrderHistory limit={20} />
 
             <Marquee />
 
