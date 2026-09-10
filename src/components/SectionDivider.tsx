@@ -11,10 +11,22 @@ import type { ReactNode } from "react";
  *   - Tracking loosened from -0.025em to -0.005em — letters breathe.
  *   - No uppercase. Title-case feels editorial instead of shouty.
  *   - Smaller cap on the size scale (clamp 18-22px).
- *   - More top margin so sections have real breathing room.
+ *   - (El margen superior se igualó al del resto del Hub el 2026-09-10;
+ *     ver la nota de espaciado más abajo.)
  *
  * The eyebrow and meta props remain optional but the Hub now never
  * passes them — kept for flexibility on future surfaces.
+ *
+ * ── Espaciado (Juan 2026-09-10) ──
+ *
+ * `mt-10 / md:mt-12`. Todas las secciones del Hub se separan por este hueco, y
+ * la referencia es el que hay entre el calendario y el banner del formulario,
+ * que sale del `mt-10 md:mt-12` de ProfileSurveyBanner. Antes esto era
+ * `mt-14 md:mt-16` (56/64px): cada título respiraba más que ese banner y el
+ * ritmo de la página iba a saltos.
+ *
+ * Si se cambia aquí hay que cambiarlo también en ProfileSurveyBanner, que no
+ * lleva divisor y se separa por su cuenta.
  */
 export function SectionDivider({
   eyebrow,
@@ -26,7 +38,7 @@ export function SectionDivider({
   meta?: string | ReactNode;
 }) {
   return (
-    <div className="mx-6 mt-14 mb-5 md:mx-0 md:mt-16">
+    <div className="mx-6 mt-10 mb-5 md:mx-0 md:mt-12">
       {eyebrow && (
         <div
           className="mb-1.5 font-bold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"

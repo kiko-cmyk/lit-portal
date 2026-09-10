@@ -10,6 +10,11 @@
  * noticeably wider gap at the join. Now every gap (word→dot, dot→word,
  * sequence→sequence) is the same `--marquee-gap`, controlled by a single
  * flex container.
+ *
+ * `my-10 / md:my-12` para ir al mismo ritmo que el resto del Hub (Juan
+ * 2026-09-10): el mismo hueco que SectionDivider y ProfileSurveyBanner. Antes
+ * era `my-12` fijo, que en desktop ya coincidía pero en móvil dejaba 48px
+ * donde todo lo demás deja 40.
  */
 const CLAIMS = ["LIT", "PERFORM", "REPEAT"] as const;
 
@@ -31,7 +36,7 @@ export function Marquee() {
   }
 
   return (
-    <div className="relative my-12 overflow-hidden border-y border-[color:var(--color-lit-grey)]/12 py-5">
+    <div className="relative my-10 overflow-hidden border-y border-[color:var(--color-lit-grey)]/12 py-5 md:my-12">
       <div
         className="flex w-max shrink-0 items-center whitespace-nowrap"
         style={{
