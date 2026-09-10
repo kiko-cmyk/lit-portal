@@ -19,20 +19,24 @@
  */
 
 export const SURVEY_CONSENT = {
-  // v3 (2026-09-10): se reescribe para que se lea como una frase y no como un
-  // pliego. Dice lo mismo con las mismas piezas obligatorias (quién, para qué,
-  // y cómo se retira), en la voz del cliente y no en la del departamento
-  // legal. Se sube la versión en vez de editar en su sitio: quien aceptó la v2
-  // aceptó otra frase, y el registro tiene que poder distinguirlas.
-  version: 3,
+  // v4 (2026-09-10, frase de Juan): "permito … para ajustar mis preferencias".
+  //
+  // Se CONSERVA la última frase, la de retirar el permiso: un consentimiento
+  // tiene que decir cómo se retira, y sin ella la casilla dejaría de ser una
+  // base válida. Es la única pieza que no se puede recortar por estilo. El
+  // resto (quién y para qué) va tal cual.
+  //
+  // Se sube la versión en vez de editar en su sitio: quien aceptó la v3 aceptó
+  // otra frase, y `consent_version` tiene que poder distinguirlas.
+  version: 4,
   es:
-    "Sí, quiero que LIT Hydration España S.L. use lo que he contestado para afinar " +
-    "lo que me manda. Nada más. Puedo cambiar de idea cuando quiera escribiendo a " +
-    "hola@litsalt.com.",
+    "Sí, permito que LIT Hydration España S.L. utilice mis respuestas para ajustar " +
+    "mis preferencias. Nada más. Puedo retirar este permiso cuando quiera " +
+    "escribiendo a hola@litsalt.com.",
   en:
-    "Yes, I want LIT Hydration España S.L. to use my answers to fine-tune what it " +
-    "sends me. Nothing else. I can change my mind any time by writing to " +
-    "hola@litsalt.com.",
+    "Yes, I allow LIT Hydration España S.L. to use my answers to tune my " +
+    "preferences. Nothing else. I can withdraw this permission any time by " +
+    "writing to hola@litsalt.com.",
 } as const;
 
 /**
