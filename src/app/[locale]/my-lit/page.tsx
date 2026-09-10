@@ -12,6 +12,7 @@ import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
+import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
 import {
   QAIcons,
   QuickActionButton,
@@ -549,22 +550,20 @@ export default function HubPage() {
                 onClick={() => setShowFlavor(true)}
                 disabled={sub.withinCutoff}
               />
-              {/* Perfilado. `enabled` y `answered` los resuelve el servidor en la
-                  respuesta del Hub, así que el flag y su allowlist nunca llegan
-                  al navegador. Desaparece en cuanto ha contestado: una llamada a
-                  la acción que sigue ahí después de hacerla es ruido. */}
-              {data.profileSurvey?.enabled && !data.profileSurvey.answered && (
-                <QuickActionButton
-                  icon={QAIcons.Skip}
-                  label={t({ en: "Tell us about you", es: "Cuéntanos sobre ti" })}
-                  sub={t({
-                    en: "9 questions, one minute, +50 drops",
-                    es: "9 preguntas, un minuto, +50 drops",
-                  })}
-                  onClick={() => setShowSurvey(true)}
-                />
-              )}
             </section>
+
+            {/* Perfilado. FUERA del grid a propósito: no es una acción de
+                gestión como las cuatro de arriba, así que va en su propia banda
+                a ancho completo (ver ProfileSurveyBanner). Dentro del grid caía
+                huérfano en una segunda fila y se vestía igual que lo que no es.
+
+                `enabled` y `answered` los resuelve el servidor en la respuesta
+                del Hub, así que el flag y su allowlist nunca llegan al
+                navegador. Desaparece en cuanto ha contestado: una llamada a la
+                acción que sigue ahí después de hacerla es ruido. */}
+            {data.profileSurvey?.enabled && !data.profileSurvey.answered && (
+              <ProfileSurveyBanner onStart={() => setShowSurvey(true)} />
+            )}
 
             <SectionDivider
               title={t({ en: "Upcoming", es: "Próximos pedidos" })}
