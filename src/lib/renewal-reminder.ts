@@ -60,6 +60,7 @@ import {
   ladderTotalCents,
   MAX_BOXES,
   planTargetLines,
+  preservedPriceApplies,
   repriceInPlace,
   shortLabel,
 } from "./mix";
@@ -251,16 +252,36 @@ async function assertMixPrice(
     // que este cron EJECUTA. Por eso la validación va aquí, en quien la consume, y no
     // solo en quien la escribe: si las cajas no coinciden, la preservación queda inerte
     // y la referencia vuelve a ser el catálogo.
-    const preservedApplies = preserved !== null && preserved.boxCount === realBoxes;
-    if (preserved !== null && !preservedApplies) {
+    const liveChargeCents = getChargeTotalCents(s);
+    // La condición vive en mix.ts, junto a su gemelo y con sus tests. Aquí solo se
+    // consume y se avisa: recalcularla a mano en dos sitios es cómo se desincronizan.
+    const preservedVerdict = preservedPriceApplies({
+      preserved,
+      realBoxes,
+      liveChargeCents,
+      catalogueCents,
+      toleranceCents: lines.length,
+    });
+    const preservedApplies = preservedVerdict.applies;
+    if (preservedVerdict.reason === "box-mismatch") {
       console.warn(
-        `[${cfg.label}] sub ${s.id}: precio preservado de ${preserved.chargeCents}c para ` +
-          `${preserved.boxCount} cajas, pero hoy tiene ${realBoxes} — se ignora y se compara ` +
+        `[${cfg.label}] sub ${s.id}: precio preservado de ${preserved!.chargeCents}c para ` +
+          `${preserved!.boxCount} cajas, pero hoy tiene ${realBoxes} — se ignora y se compara ` +
           `contra el catálogo. Alguien le cambió las cajas fuera del portal, o el clear no corrió.`,
       );
     }
-    const expected = preservedApplies ? preserved.chargeCents : catalogueCents;
-    const actual = getChargeTotalCents(s);
+
+    if (preservedVerdict.reason === "already-migrated") {
+      console.warn(
+        `[${cfg.label}] sub ${s.id}: tiene precio preservado de ${preserved!.chargeCents}c pero ` +
+          `hoy cobra ${liveChargeCents}c, que es el catálogo de sus ${realBoxes} cajas ` +
+          `(${catalogueCents}c). Se trata como MIGRADA: la preservación queda inerte y no se ` +
+          `cura hacia el importe viejo. Si fue una migración, conviene poner ` +
+          `preserved_charge_cents y preserved_box_count a NULL para que deje de aparecer aquí.`,
+      );
+    }
+    const expected = preservedApplies ? preserved!.chargeCents : catalogueCents;
+    const actual = liveChargeCents;
     // Tolerance = one cent per line: the tier split can legitimately land a cent
     // under (4 boxes as 2+2 is mathematically impossible to hit exactly).
     if (Math.abs(actual - expected) <= lines.length) return "ok";
@@ -328,7 +349,7 @@ async function assertMixPrice(
     let intendedTotalCents = plan.totalCents;
 
     if (!isNewModelLineSet) {
-      const inPlace = repriceInPlace(lines, expected);
+      const inPlace = repriceInPlace(lines, expected, prices);
       if (!inPlace) {
         console.warn(
           `[${cfg.label}] sub ${s.id}: charge ${actual}c > escalera web ${expected}c con line-set ` +
