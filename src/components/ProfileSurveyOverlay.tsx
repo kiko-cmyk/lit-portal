@@ -145,23 +145,72 @@ export function ProfileSurveyOverlay({
           ×
         </button>
 
+        {/* INTRO (rediseñada, Juan 2026-09-10).
+            Fuera "Solo para suscriptores": el formulario solo se ofrece dentro
+            del portal, a quien ya tiene una suscripción, así que informaba de
+            algo que el cliente ya sabe por estar donde está.
+
+            El problema de fondo era la jerarquía: titular, párrafo y cinco
+            viñetas iguales, todo en el mismo gris, así que la letra legal
+            pesaba lo mismo que el motivo para empezar. Ahora hay tres niveles:
+            el titular, una frase de entrada legible (el "para qué"), y la
+            letra pequeña recogida en su propio bloque, separada por una línea y
+            a menor tamaño. Lo legal sigue estando entero y a la vista, pero deja
+            de competir con la invitación. */}
         {step === "intro" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
-              <T en="Subscribers only" es="Solo para suscriptores" />
-            </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
+            <h1 className="font-display text-4xl font-black uppercase leading-[1.05] tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
               <T en="Tell us how you drink LIT" es="Cuéntanos cómo tomas LIT" />
             </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">{notice.intro}</p>
-            <ul className="mt-4 space-y-1.5 text-[13px] text-[color:var(--color-warm-gray)]">
-              {notice.bullets.map((b) => (
-                <li key={b} className="flex gap-2">
-                  <span aria-hidden>·</span>
-                  <span>{b}</span>
-                </li>
+
+            {/* La frase de entrada, al tamaño del cuerpo del portal y en el
+                gris oscuro: es el motivo para contestar, no una nota al pie. */}
+            <p className="mt-4 text-[15px] leading-[1.55] text-[color:var(--color-lit-grey)]/85">
+              {notice.intro}
+            </p>
+
+            {/* Tres datos rápidos, en horizontal: lo que de verdad decide si
+                alguien empieza. Se sacan de las viñetas para que no queden
+                enterrados entre la letra legal. */}
+            <div className="mt-6 flex flex-wrap gap-x-7 gap-y-3">
+              {[
+                { k: "9", l: t({ en: "questions", es: "preguntas" }) },
+                { k: "1 min", l: t({ en: "of your time", es: "de tu tiempo" }) },
+                {
+                  k: t({ en: "Optional", es: "Opcionales" }),
+                  l: t({ en: "all of them", es: "todas ellas" }),
+                },
+              ].map((it) => (
+                <div key={it.k}>
+                  <div className="font-display text-xl font-bold uppercase leading-none tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+                    {it.k}
+                  </div>
+                  <div
+                    className="mt-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+                    style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                  >
+                    {it.l}
+                  </div>
+                </div>
               ))}
-            </ul>
+            </div>
+
+            {/* La letra pequeña, agrupada y detrás de una línea. Entera: quién
+                trata los datos, dónde acaban (Estados Unidos incluido), cuánto
+                se guardan y que se pueden cambiar. Solo deja de gritar. */}
+            <div className="mt-7 border-t border-[color:var(--color-lit-grey)]/10 pt-5">
+              <ul className="space-y-2 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+                {notice.bullets.map((b) => (
+                  <li key={b} className="flex gap-2">
+                    <span aria-hidden className="opacity-50">
+                      ·
+                    </span>
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             <div className="mt-8 flex justify-end">
               <PrimaryButton onClick={() => setStep(1)}>
                 <T en="Start" es="Empezar" />
@@ -227,20 +276,18 @@ export function ProfileSurveyOverlay({
                   {busy ? (
                     <T en="Saving…" es="Guardando…" />
                   ) : (
-                    <T en="Send and claim 50 drops" es="Enviar y llevarme 50 drops" />
+                    <T en="Send" es="Enviar" />
                   )}
                 </PrimaryButton>
               )}
             </div>
-            {/* Ninguna pregunta es obligatoria: se puede continuar sin contestar.
-                Si el premio dependiera de completar, "prefiero no decirlo" sería
-                una multa y el consentimiento dejaría de ser libre. */}
-            <p className="mt-3 text-right text-[11px] text-[color:var(--color-warm-gray)] opacity-70">
-              <T
-                en="Skip any you'd rather not answer. You still get the drops."
-                es="Sáltate las que no quieras. Los drops se llevan igual."
-              />
-            </p>
+            {/* Ninguna pregunta es obligatoria: se puede continuar sin
+                contestar, y eso NO cambia (si el premio dependiera de
+                completar, "prefiero no decirlo" sería una multa y el
+                consentimiento dejaría de ser libre). Lo que se fue es el
+                recordatorio en pantalla: el aviso de la intro ya dice que todas
+                son opcionales, y repetirlo debajo de cada pantalla sonaba a
+                disculpa. */}
           </>
         )}
 
@@ -513,7 +560,7 @@ function PrimaryButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
+      className="rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
     >
       {children}
     </button>

@@ -109,13 +109,18 @@ export function OrderHistory({ limit = 10 }: { limit?: number }) {
           lector de pantalla y se estiliza igual que todo lo demás.
 
           Al plegar de vuelta NO se hace scroll: el botón se queda donde estaba
-          y la lista se acorta por debajo, así que no se pierde el sitio. */}
+          y la lista se acorta por debajo, así que no se pierde el sitio.
+
+          Sin borde de puntos (Juan 2026-09-10): con la caja discontinua
+          parecía una tarjeta más de la lista, o un hueco por rellenar. Es un
+          control de texto, así que se comporta como tal y se pega a la lista
+          (`mt-1`) en vez de flotar separado. */}
       {collapsible && (
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
-          className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-[14px] border border-dashed border-[color:var(--color-lit-grey)]/20 px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] transition-colors hover:border-[color:var(--color-lit-grey)]/35 hover:text-[color:var(--color-lit-grey)]"
+          className="mt-1 flex w-full items-center justify-center gap-1.5 py-2.5 text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] transition-colors hover:text-[color:var(--color-lit-grey)]"
         >
           {expanded ? (
             <T en="Show less" es="Ver menos" />

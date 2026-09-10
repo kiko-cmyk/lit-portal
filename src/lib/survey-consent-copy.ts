@@ -49,6 +49,12 @@ export const SURVEY_CONSENT = {
  * "tus respuestas van a Estados Unidos" y a un clic "tus datos están en la UE".
  * Por eso el bullet de abajo dice dónde acaban DE VERDAD. Corregir la política
  * es una tarea aparte y de la web, no de aquí.
+ *
+ * La viñeta de "todas son opcionales y te llevas los 50 drops" se quitó el
+ * 2026-09-10: lo de opcionales lo dice ahora la propia pantalla, en grande, y
+ * los drops no se anuncian mientras la función no esté visible para el cliente.
+ * Que ninguna pregunta sea obligatoria no cambia, es el comportamiento real del
+ * formulario.
  */
 export const SURVEY_NOTICE = {
   es: {
@@ -56,7 +62,6 @@ export const SURVEY_NOTICE = {
       "Unas preguntas rápidas sobre cómo tomas LIT. Nos sirven para dejar de mandarte " +
       "lo mismo que a todo el mundo.",
     bullets: [
-      "Todas son opcionales, y te llevas los 50 drops contestes lo que contestes.",
       "Quién las trata: LIT Hydration España S.L. No vendemos tus respuestas.",
       "Dónde acaban: en nuestra base de datos y en Klaviyo, la herramienta con la que " +
         "te escribimos, que guarda los datos en Estados Unidos.",
@@ -69,7 +74,6 @@ export const SURVEY_NOTICE = {
       "A few quick questions about how you drink LIT. They're what stops us sending " +
       "you the same as everyone else.",
     bullets: [
-      "All of them are optional, and you get the 50 drops whatever you answer.",
       "Who handles them: LIT Hydration España S.L. We don't sell your answers.",
       "Where they end up: in our database and in Klaviyo, the tool we email you with, " +
         "which stores data in the United States.",
