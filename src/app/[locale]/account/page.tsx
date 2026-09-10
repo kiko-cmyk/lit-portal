@@ -388,7 +388,7 @@ export default function AccountPage() {
         </section>
 
         {subPaused && (
-          <section className="mx-6 mb-5 rounded-[18px] border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
+          <section className="mx-6 mb-3 rounded-[18px] border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
             <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
               <T en="Paused" es="En pausa" />
             </div>
@@ -423,7 +423,7 @@ export default function AccountPage() {
         )}
 
         {subActive && !subPaused && (
-          <section className="mx-6 mb-5 grid grid-cols-2 gap-1.5 md:mx-0 md:grid-cols-4">
+          <section className="mx-6 mb-3 grid grid-cols-2 gap-1.5 md:mx-0 md:grid-cols-4">
             <CompactAction
               icon={QAIcons.ChargeNow}
               label={t({ en: "Bring fwd", es: "Adelantar" })}
@@ -454,7 +454,7 @@ export default function AccountPage() {
         )}
 
         {justSkipped && subscription?.nextShipDate && (
-          <div className="mx-6 mb-5 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
+          <div className="mx-6 mb-3 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
             <span className="text-[12px] text-[color:var(--color-lit-grey)]">
               <T
                 en="You skipped the previous order. The next one ships on"
@@ -594,11 +594,18 @@ export default function AccountPage() {
             tarjetas de dos filas hasta el tamaño de la de al lado: el aire
             sobrante se lo queda una sola, la de más abajo.
 
-            Las `Section` traen su propio `mx-6 mb-3`, que en desktop se anula
-            (`md:mx-0`), así que la rejilla solo aparece a partir de `md` y no
-            hay que tocar el componente. El `mb-0` quita el margen inferior que
-            sobra cuando el `gap` de la rejilla ya separa. */}
-        <div className="md:grid md:grid-cols-2 md:gap-3 md:[&>div>section]:mb-0 md:[&>div]:flex md:[&>div]:flex-col md:[&>div]:gap-3 md:[&>div>section:last-child]:flex-1">
+            ESPACIADO, y es lo delicado: en Cuenta todas las secciones se
+            separan por el `mb-3` (12px) que trae cada `Section`, y ese hueco
+            tiene que ser el mismo en todas partes (Juan 2026-09-10, "ni más ni
+            menos"). Aquí eso significa tres cosas a la vez:
+              - `gap-3` = los mismos 12px entre las dos columnas y entre las
+                tarjetas apiladas de la derecha.
+              - `[&>div>section]:mb-0` anula el `mb-3` DENTRO de las columnas,
+                que si no se sumaría al gap y daría 24px.
+              - `mb-3` en el propio contenedor devuelve esos 12px por debajo,
+                para que "Mis pedidos" quede a la misma distancia que el resto.
+                Sin él el bloque se pegaba a la sección siguiente. */}
+        <div className="md:mb-3 md:grid md:grid-cols-2 md:gap-3 md:[&>div>section]:mb-0 md:[&>div]:flex md:[&>div]:flex-col md:[&>div]:gap-3 md:[&>div>section:last-child]:flex-1">
         <div>
         <Section title={t({ en: "My details", es: "Mis datos" })}>
           {emailChangeConfirmed && (
@@ -817,13 +824,11 @@ export default function AccountPage() {
           </Section>
         </div>
 
-        {/* Aire con las dos columnas de arriba (Juan 2026-09-10). Con el `mb-3`
-            que traen las Section, "Mis pedidos" quedaba pegado al bloque de
-            columnas y los tres parecían la misma rejilla. Aquí empieza otra
-            cosa: el historial, a ancho completo. */}
-        <div className="mt-7 md:mt-9">
-          <OrdersSection orders={orders} />
-        </div>
+        {/* Sin margen propio: el `mb-3` de la Section anterior ya da los 12px
+            que separan TODAS las secciones de Cuenta (Juan 2026-09-10, "ni más
+            ni menos"). El `mt-7 md:mt-9` que llevaba antes hacía este hueco más
+            grande que los demás. */}
+        <OrdersSection orders={orders} />
 
         <Marquee />
 
