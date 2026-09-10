@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SignOutPill } from "@/components/SwitchAccount";
-import { LangToggle, useLang, useLangValue } from "@/lib/i18n";
+import { LangMenu, LangToggle, useLang, useLangValue } from "@/lib/i18n";
 import { COLLECTION_ENABLED } from "@/lib/portal-link";
 import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
 import type { ReactNode } from "react";
@@ -209,20 +209,21 @@ export function TopNav() {
               </Link>
             );
           })}
+          {/* Idioma DENTRO de la cápsula, como en litsalt.com (Juan
+              2026-09-10): "○ ABOUT  ○ LOG IN  ▾ ES" es una sola pieza, no una
+              cápsula más una píldora aparte. Corrige la primera versión, que lo
+              dejaba fuera con su propio borde: se leía como un segundo control
+              al nivel de "Cambiar" cuando pertenece al mismo grupo que las
+              pestañas.
+
+              Va al final y con el chevron en vez de una viñeta ○/●: comparte el
+              lenguaje del grupo pero se distingue de lo que navega. */}
+          <LangMenu />
           </div>
           )}
-          {/* Idioma, a la derecha de la cápsula de nav (Juan 2026-09-10). Antes
-              vivía en una sección del cuerpo de Cuenta; aquí está junto a la
-              navegación, que es donde se buscan los ajustes de vista, y queda
-              accesible desde el Hub y no solo desde Cuenta.
-
-              Va FUERA de la cápsula: dentro parecería una tercera pestaña, y no
-              navega a ningún sitio. Su propia píldora, con el mismo borde y
-              fondo que el botón de Cambiar, lo deja como lo que es, un control.
-
-              Se muestra también en modo mayorista: un partner también lee el
-              portal en su idioma. */}
-          <LangToggle />
+          {/* Mayorista: no hay cápsula, así que el idioma necesita ir suelto.
+              Un partner también lee el portal en su idioma. */}
+          {accountOnly && <LangToggle />}
         </div>
       </div>
     </nav>

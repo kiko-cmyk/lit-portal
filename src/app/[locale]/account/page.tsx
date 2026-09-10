@@ -817,7 +817,13 @@ export default function AccountPage() {
           </Section>
         </div>
 
-        <OrdersSection orders={orders} />
+        {/* Aire con las dos columnas de arriba (Juan 2026-09-10). Con el `mb-3`
+            que traen las Section, "Mis pedidos" quedaba pegado al bloque de
+            columnas y los tres parecían la misma rejilla. Aquí empieza otra
+            cosa: el historial, a ancho completo. */}
+        <div className="mt-7 md:mt-9">
+          <OrdersSection orders={orders} />
+        </div>
 
         <Marquee />
 
