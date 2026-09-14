@@ -21,6 +21,21 @@
  * Y son justo las dos ramas de los enlaces VIEJOS, sobre los que no tenemos
  * ningún control: ya están en la bandeja de entrada de quien los recibió.
  *
+ * SEGUNDA PARTE, del 2026-09-14: el arreglo de arriba, tal y como se desplegó,
+ * pasaba `nextUrl.search` ENTERO. Eso se llevaba por delante los parámetros que
+ * añade el propio App Proxy de Shopify (`shop`, `path_prefix`, `timestamp`,
+ * `signature`, `logged_in_customer_id`). Shopify los vuelve a poner en el
+ * siguiente salto, se duplicaban, su validación HMAC fallaba y el cliente
+ * recibía un 404.
+ *
+ * O sea que el arreglo dejó el síntoma PEOR que el problema: antes se perdía el
+ * parámetro pero el Hub cargaba; después, 404. Y lo pagaban justo los enlaces
+ * viejos del aviso T-2 que siguen vivos en bandejas de entrada.
+ *
+ * Por eso el test de la query no bastaba: afirmaba lo que sobrevive y no lo que
+ * NO debe sobrevivir. Un test que solo mira lo que quieres conservar no ve lo
+ * que estás arrastrando de más.
+ *
  * LO QUE ESTE TEST NO CUBRE, dicho para que nadie lo dé por cubierto: el prefijo
  * del App Proxy (`/apps/portal`) sale de `NEXT_PUBLIC_PORTAL_BASE_PATH`, que se
  * lee al cargar el módulo y aquí está vacía. Así que estas aserciones fijan la
@@ -94,6 +109,24 @@ console.log("\n── lo que NO debe redirigir ──");
 check("la ruta con idioma no redirige (se sirve tal cual)", destino("/es/mi-lit?action=survey") === null);
 check("las rutas de API se saltan enteras", destino("/api/hub/dashboard?x=1") === null);
 check("los estáticos se saltan", destino("/favicon.ico") === null);
+
+console.log("\n── los parámetros del App Proxy NO se propagan ──");
+
+const conFirma = destino(
+  "/my-lit?action=survey&shop=lit-tienda.myshopify.com&path_prefix=%2Fapps%2Fportal" +
+    "&timestamp=1789399551&signature=deadbeef&logged_in_customer_id=123",
+);
+check("el nuestro sobrevive", !!conFirma && conFirma.includes("action=survey"), conFirma ?? "");
+for (const p of ["shop", "path_prefix", "timestamp", "signature", "logged_in_customer_id"]) {
+  check(`${p} NO viaja en el redirect`, !!conFirma && !conFirma.includes(`${p}=`), conFirma ?? "");
+}
+
+const soloFirma = destino("/my-lit?shop=x&signature=y&timestamp=1&path_prefix=%2Fa&logged_in_customer_id=");
+check(
+  "si SOLO venían los del proxy, el destino va limpio y sin '?'",
+  !!soloFirma && !soloFirma.includes("?"),
+  soloFirma ?? "",
+);
 
 console.log("\n── el host ──");
 
