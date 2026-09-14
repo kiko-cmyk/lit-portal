@@ -61,6 +61,19 @@ const LEGACY_REDIRECTS: Record<string, string> = {
   "tu-lit": "mi-lit",
 };
 
+/**
+ * Lo que añade el App Proxy de Shopify a cada petición que reenvía. Nunca se
+ * propaga en un redirect nuestro: Shopify los vuelve a poner en el siguiente
+ * salto, y duplicados rompen su propia firma.
+ */
+const APP_PROXY_PARAMS = [
+  "shop",
+  "path_prefix",
+  "timestamp",
+  "signature",
+  "logged_in_customer_id",
+] as const;
+
 function isLocale(s: string): s is (typeof LOCALES)[number] {
   return (LOCALES as readonly string[]).includes(s);
 }
@@ -86,7 +99,22 @@ function browserRelativeRedirect(pathname: string, req: NextRequest): NextRespon
   // ruta sin idioma y la de slug legacy (`tu-lit`/`your-lit`), que existe
   // porque esos enlaces siguen vivos en emails ya enviados. Son las que menos
   // control tenemos sobre quién las pulsa y cuándo.
-  const target = new URL(`${forwardedProto}://${forwardedHost}${pathname}${req.nextUrl.search}`);
+  // Se conservan SOLO los parámetros nuestros. Los del App Proxy de Shopify se
+  // quitan, y esto no es limpieza cosmética: Shopify vuelve a firmar la petición
+  // al proxyearla y añade su `shop`, `path_prefix`, `timestamp`, `signature` y
+  // `logged_in_customer_id`. Si ya vienen en la URL se duplican, la validación
+  // HMAC falla y la respuesta es un 404.
+  //
+  // Se rompió así el 2026-09-14 al arreglar la pérdida de la query: pasar
+  // `nextUrl.search` entero se llevaba también la firma por delante. El sintoma
+  // era peor que el problema original, porque antes el cliente al menos
+  // aterrizaba en el Hub.
+  const params = new URLSearchParams(req.nextUrl.search);
+  for (const p of APP_PROXY_PARAMS) params.delete(p);
+  const query = params.toString();
+  const target = new URL(
+    `${forwardedProto}://${forwardedHost}${pathname}${query ? `?${query}` : ""}`,
+  );
   return NextResponse.redirect(target, 308);
 }
 
