@@ -72,7 +72,21 @@ function browserRelativeRedirect(pathname: string, req: NextRequest): NextRespon
   // would skip App Proxy on the follow-up request.
   const forwardedHost = req.headers.get("x-forwarded-host") ?? req.nextUrl.host;
   const forwardedProto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
-  const target = new URL(`${forwardedProto}://${forwardedHost}${pathname}`);
+  // La QUERY viaja con el redirect. Se construía solo desde `pathname`, así que
+  // cualquier ruta que pase por aquí perdía sus parámetros en silencio: un 308
+  // limpio a una página que carga bien, sin error en ningún sitio.
+  //
+  // Importa porque los parámetros de este portal no son decoración, son la
+  // acción: `?action=skip` viene del aviso T-2 de renovación, `?action=survey`
+  // del formulario de perfilado y `?action=plan&frequency=` de la propuesta de
+  // cadencia. Perderlos deja al cliente en el Hub preguntándose qué hacía ahí,
+  // y a nosotros leyendo "nadie hace clic" cuando sí hacen clic.
+  //
+  // Las dos ramas que llegan aquí son justo las de los enlaces viejos: la de
+  // ruta sin idioma y la de slug legacy (`tu-lit`/`your-lit`), que existe
+  // porque esos enlaces siguen vivos en emails ya enviados. Son las que menos
+  // control tenemos sobre quién las pulsa y cuándo.
+  const target = new URL(`${forwardedProto}://${forwardedHost}${pathname}${req.nextUrl.search}`);
   return NextResponse.redirect(target, 308);
 }
 
