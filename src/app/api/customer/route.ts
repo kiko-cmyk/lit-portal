@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { provinceFromEsPostalCode } from "@/lib/es-provinces";
-import { isB2BCustomer } from "@/lib/flags";
+import { isB2BCustomer, profileSurveyEnabledFor } from "@/lib/flags";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import {
@@ -32,6 +32,33 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
 
   const isB2B = isB2BCustomer(c.tags);
 
+  // El estado del formulario de perfilado vive AQUÍ y no en /api/hub/dashboard
+  // (Kiko, 2026-09-15). Esa ruta devuelve 404 cuando no hay suscripción viva,
+  // así que alimentando el banner desde allí se quedaban fuera los 77 en pausa
+  // y los cancelados: justo la gente de la que más interesa aprender. Y encima
+  // le habría metido a Cuenta una llamada a Seal y a Shopify que no necesita.
+  //
+  // Esta ruta solo depende de que el cliente pueda entrar al área personal, que
+  // es exactamente la condición que queremos.
+  let profileSurvey = { enabled: false, answered: false };
+  try {
+    if (profileSurveyEnabledFor(ctx.customerId)) {
+      const { data: psRow } = await supabaseAdmin()
+        .from("profile_survey_answers")
+        .select("answers, deleted_at")
+        .eq("customer_id", ctx.customerId)
+        .maybeSingle();
+      const answered =
+        !!psRow && !psRow.deleted_at && Object.keys(psRow.answers ?? {}).length > 0;
+      profileSurvey = { enabled: true, answered };
+    }
+  } catch (err) {
+    // Si la tabla no existe en este entorno, el banner no se enseña y Cuenta
+    // carga igual. Nunca al revés: un formulario opcional no puede tumbar la
+    // pantalla donde el cliente arregla su dirección o su método de pago.
+    console.warn("[customer] profile survey lookup failed:", err);
+  }
+
   return {
     name: [c.firstName, c.lastName].filter(Boolean).join(" ").trim() || c.email,
     email: c.email,
@@ -45,6 +72,7 @@ export const GET = withCustomer<CustomerProfile>(async (_req, ctx) => {
     // matters is the Seal one, and sending these would invite the Account page
     // to edit the wrong record.
     business: isB2B ? buildBusinessDetails(c) : null,
+    profileSurvey,
   };
 });
 

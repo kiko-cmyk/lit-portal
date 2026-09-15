@@ -20,7 +20,7 @@
  *    portal es bilingüe. Se muestra `t({en, es})` y se manda `value`.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -68,6 +68,13 @@ export function ProfileSurveyOverlay({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
 
+  // El panel es lo que scrollea (`overflow-y-auto`), no la ventana. Al pasar de
+  // paso React reemplaza el contenido pero NO toca el scroll, así que el
+  // cliente aterrizaba a media pantalla: veía las últimas preguntas del paso
+  // nuevo y se perdía el titular y las primeras. Con tres pantallas largas eso
+  // se nota en todos los saltos. (Juan 2026-09-15)
+  const panelRef = useRef<HTMLDivElement>(null);
+
   // Respuestas previas: el formulario se puede volver a abrir para cambiarlas.
   useEffect(() => {
     let alive = true;
@@ -82,6 +89,14 @@ export function ProfileSurveyOverlay({
       alive = false;
     };
   }, []);
+
+  // Arriba del todo en CADA cambio de paso, incluido volver atrás y llegar a la
+  // pantalla final. `behavior: "auto"` y no "smooth": el contenido ya ha
+  // cambiado, así que animar el viaje enseña el paso nuevo deslizándose desde
+  // un punto donde nunca estuvo.
+  useEffect(() => {
+    panelRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [step]);
 
   const visible = useMemo(
     () => PROFILE_QUESTIONS.filter((q) => isAsked(q, answers)),
@@ -136,6 +151,7 @@ export function ProfileSurveyOverlay({
       onClick={busy ? undefined : onClose}
     >
       <div
+        ref={panelRef}
         className="zone-cream relative mx-auto max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-[28px] bg-[color:var(--color-brisky-cream)] px-7 pt-10 pb-8 sm:rounded-[28px]"
         onClick={(e) => e.stopPropagation()}
       >

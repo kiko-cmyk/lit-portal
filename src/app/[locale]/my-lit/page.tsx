@@ -12,7 +12,6 @@ import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import { OrderHistory } from "@/components/OrderHistory";
-import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
 import {
   QAIcons,
   QuickActionButton,
@@ -560,24 +559,6 @@ export default function HubPage() {
               upcoming={data.upcomingShipments}
             />
 
-            {/* Perfilado, bajo el calendario (Juan 2026-09-10). FUERA del grid
-                de quick actions a propósito: no es una acción de gestión como
-                esas cuatro, así que va en su propia banda a ancho completo (ver
-                ProfileSurveyBanner). Y aquí, no arriba, porque el cliente entra
-                al Hub a resolver algo concreto: primero lo suyo (su próxima
-                caja, sus acciones, su calendario) y solo después le pedimos el
-                favor. Sin SectionDivider propio: la banda ya se separa sola de
-                lo de arriba y un título encima la convertiría en una sección
-                más del Hub.
-
-                `enabled` y `answered` los resuelve el servidor en la respuesta
-                del Hub, así que el flag y su allowlist nunca llegan al
-                navegador. Desaparece en cuanto ha contestado: una llamada a la
-                acción que sigue ahí después de hacerla es ruido. */}
-            {data.profileSurvey?.enabled && !data.profileSurvey.answered && (
-              <ProfileSurveyBanner onStart={() => setShowSurvey(true)} />
-            )}
-
             <SectionDivider
               title={t({ en: "My orders", es: "Mis pedidos" })}
             />
@@ -690,13 +671,17 @@ export default function HubPage() {
           Si no está abierto para él, no se abre y no se le dice nada: un aviso de
           "no estás en la lista" solo sirve para contarle que existe algo que no
           le hemos ofrecido. */}
-      {(showSurvey || (pendingSurvey && data.profileSurvey?.enabled)) && (
+      {(showSurvey || (pendingSurvey && customer?.profileSurvey?.enabled)) && (
         <ProfileSurveyOverlay
           subscription={sub}
           onClose={() => {
             setShowSurvey(false);
             setPendingSurvey(false);
-            api<HubDashboard>("/api/hub/dashboard").then(setData).catch(() => {});
+            // El estado del formulario vive en /api/customer desde el
+            // 2026-09-15, no en el dashboard. El banner ya no está en el Hub,
+            // pero el deep-link `?action=survey` del email sí sigue aterrizando
+            // aquí, así que se refresca lo que de verdad lo gobierna.
+            api<CustomerProfile>("/api/customer").then(setCustomer).catch(() => {});
           }}
           onSubscriptionUpdated={handlePlanUpdated}
         />

@@ -288,6 +288,15 @@ export interface CustomerProfile {
    */
   isB2B?: boolean;
   /**
+   * Estado del formulario de perfilado. Se sirve desde /api/customer y NO desde
+   * /api/hub/dashboard (2026-09-15): esa ruta 404ea sin suscripción viva, así
+   * que desde allí el banner no llegaba a los pausados ni a los cancelados.
+   *
+   * Opcional para que una respuesta cacheada de antes del cambio degrade a "no
+   * se enseña", que es el lado seguro.
+   */
+  profileSurvey?: { enabled: boolean; answered: boolean };
+  /**
    * Wholesale account data, read from the customer's own Shopify record. This is
    * NOT the Seal subscription address (`Subscription.shippingAddress`): a
    * partner has no subscription, and these are the addresses that prefill their
@@ -428,12 +437,9 @@ export interface HubDashboard {
     dropsReleaseAt?: string | null;
   };
   nextEvent: EventListItem | null;
-  /**
-   * Perfilado: si este cliente puede ver la tarjeta del formulario y si ya lo
-   * contestó. Se resuelve SERVER-SIDE (el flag y su allowlist nunca llegan al
-   * navegador, misma convención que el resto de flags del repo).
-   */
-  profileSurvey: { enabled: boolean; answered: boolean };
+  // `profileSurvey` vivía aquí hasta el 2026-09-15. Se fue a CustomerProfile:
+  // esta respuesta es 404 cuando no hay suscripción viva, así que desde aquí el
+  // formulario no llegaba ni a los pausados ni a los cancelados.
   /**
    * All upcoming shipments Seal has scheduled (pending billing attempts).
    * Excludes the next one already surfaced via `subscription.nextShipDate`.

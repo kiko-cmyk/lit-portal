@@ -9,6 +9,7 @@ import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
+import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SignOutPill, SwitchAccountRow } from "@/components/SwitchAccount";
@@ -44,6 +45,7 @@ const AddressOverlay = dynamic(() => import("@/components/AddressOverlay").then(
 const PlanOverlay = dynamic(() => import("@/components/PlanOverlay").then((m) => m.PlanOverlay));
 const FlavorOverlay = dynamic(() => import("@/components/FlavorOverlay").then((m) => m.FlavorOverlay));
 const SkipOverlay = dynamic(() => import("@/components/SkipOverlay").then((m) => m.SkipOverlay));
+const ProfileSurveyOverlay = dynamic(() => import("@/components/ProfileSurveyOverlay").then((m) => m.ProfileSurveyOverlay));
 const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").then((m) => m.ChargeNowOverlay));
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 const BusinessAddressOverlay = dynamic(() =>
@@ -60,6 +62,7 @@ export default function AccountPage() {
   const [planOpen, setPlanOpen] = useState(false);
   const [flavorOpen, setFlavorOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
+  const [surveyOpen, setSurveyOpen] = useState(false);
   const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -451,6 +454,20 @@ export default function AccountPage() {
               disabled={!!subscription?.withinCutoff}
             />
           </section>
+        )}
+
+        {/* Formulario de perfilado. Vive en CUENTA desde el 2026-09-15, bajo las
+            acciones rápidas. Antes estaba en el Hub, alimentado por
+            /api/hub/dashboard, y esa ruta 404ea sin suscripción viva: los 77
+            pausados y los cancelados no lo veían nunca, que es justo la gente de
+            la que más interesa aprender. Ahora el estado viaja en
+            /api/customer, que solo pide poder entrar al área personal.
+
+            Deliberadamente FUERA del `subActive && !subPaused` de la rejilla de
+            arriba: contestar no toca la suscripción, así que no hay razón para
+            escondérselo a quien está en pausa. */}
+        {customer?.profileSurvey?.enabled && !customer.profileSurvey.answered && (
+          <ProfileSurveyBanner onStart={() => setSurveyOpen(true)} />
         )}
 
         {justSkipped && subscription?.nextShipDate && (
@@ -877,6 +894,21 @@ export default function AccountPage() {
             };
             reconcile();
           }}
+        />
+      )}
+      {surveyOpen && (
+        <ProfileSurveyOverlay
+          subscription={subscription}
+          onClose={() => {
+            setSurveyOpen(false);
+            // Relee el perfil para que el banner desaparezca en cuanto ha
+            // contestado, sin recargar. `answered` lo resuelve el servidor, así
+            // que no se adivina aquí.
+            api<CustomerProfile>("/api/customer")
+              .then(setCustomer)
+              .catch(() => {});
+          }}
+          onSubscriptionUpdated={setSubscription}
         />
       )}
       {skipOpen && subscription && (

@@ -7,7 +7,11 @@ interface ProfileSurveyBannerProps {
 }
 
 /**
- * Llamada al formulario de perfilado. Vive bajo "Próximos pedidos" en el Hub.
+ * Llamada al formulario de perfilado. Vive en CUENTA, bajo las acciones
+ * rápidas (Juan 2026-09-15). Estuvo en el Hub hasta esa fecha: se movió porque
+ * allí lo alimentaba /api/hub/dashboard, que 404ea sin suscripción viva, así
+ * que los pausados y los cancelados no lo veían nunca. Ahora el estado viaja en
+ * /api/customer.
  *
  * ── Por qué NO es una quick action más (Juan, 2026-09-10) ──
  *
@@ -38,9 +42,12 @@ interface ProfileSurveyBannerProps {
  * El copy nombra el beneficio para el CLIENTE (ajustar su suscripción a lo que
  * consume), nunca el nuestro (datos).
  *
- * `mt-10/12` porque no lleva SectionDivider propio, y ese componente es el que
- * pone el aire entre secciones (`mt-14/16`). Sin este margen la banda quedaba
- * pegada al calendario de arriba, como si fuera parte de él.
+ * `mt-10/12` porque no lleva SectionDivider propio y necesita separarse de lo
+ * que tenga encima por su cuenta.
+ *
+ * El CTA va en blanco (`sharp-white`) y no en amarillo: sobre la banda oscura el
+ * amarillo gritaba más que el propio titular, y este banner pide un favor, no
+ * vende nada.
  *
  * Sin guiones largos en el copy, por la guía de LIT.
  */
@@ -97,7 +104,7 @@ export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
         <button
           type="button"
           onClick={onStart}
-          className="w-full shrink-0 rounded-full bg-[color:var(--color-bold-yellow)] px-7 py-3.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
+          className="w-full shrink-0 rounded-full bg-[color:var(--color-sharp-white)] px-7 py-3.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
         >
           <T en="Start" es="Empezar" />
         </button>
