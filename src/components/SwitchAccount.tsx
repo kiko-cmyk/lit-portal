@@ -129,7 +129,11 @@ export function SwitchAccountRow() {
         type="button"
         onClick={go}
         disabled={busy}
-        className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)] disabled:opacity-50"
+        // Ancho completo en MÓVIL, automático en desktop: mismo criterio que el
+        // CTA del banner del formulario y que el botón de "Mi suscripción"
+        // (Juan 2026-09-15). Solo afecta a SwitchAccountRow, que vive en Cuenta;
+        // SwitchAccountLink (Hub y detalle de pedido) es otro componente.
+        className="w-full rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)] disabled:opacity-50 md:w-auto"
       >
         {busy ? (
           <T en="Signing out…" es="Cerrando sesión…" />

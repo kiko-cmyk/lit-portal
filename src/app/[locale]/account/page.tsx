@@ -549,7 +549,12 @@ export default function AccountPage() {
                 <button
                   type="button"
                   onClick={() => setPlanOpen(true)}
-                  className="rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)]"
+                  // Ancho completo en MÓVIL y automático en desktop, igual que
+                  // el CTA del banner del formulario (Juan 2026-09-15): en un
+                  // teléfono un botón corto alineado a la izquierda es un
+                  // objetivo táctil pequeño en una tarjeta que ocupa toda la
+                  // pantalla.
+                  className="w-full rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)] md:w-auto"
                 >
                   <T
                     en="Change boxes or frequency"
