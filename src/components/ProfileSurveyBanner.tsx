@@ -42,8 +42,12 @@ interface ProfileSurveyBannerProps {
  * El copy nombra el beneficio para el CLIENTE (ajustar su suscripción a lo que
  * consume), nunca el nuestro (datos).
  *
- * `mt-10/12` porque no lleva SectionDivider propio y necesita separarse de lo
- * que tenga encima por su cuenta.
+ * `mb-3` y nada más, igual que cada `Section` de Cuenta: en esa pantalla TODAS
+ * las secciones se separan por ese hueco de 12px y el banner es una más. Traía
+ * un `mt-10 md:mt-12` de cuando vivía en el Hub, donde el ritmo es otro
+ * (`SectionDivider`, 40-48px), y aquí se veía como un agujero encima de la
+ * banda. El margen va abajo y no arriba por la misma razón que en `Section`:
+ * así el último elemento de la página no arrastra un hueco sobrante.
  *
  * El CTA va en blanco (`sharp-white`) y no en amarillo: sobre la banda oscura el
  * amarillo gritaba más que el propio titular, y este banner pide un favor, no
@@ -54,7 +58,7 @@ interface ProfileSurveyBannerProps {
 export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
   return (
     <section
-      className="relative mx-6 mt-10 overflow-hidden rounded-[24px] px-6 py-6 text-[#F2EEE1] md:mx-0 md:mt-12 md:px-8 md:py-7"
+      className="relative mx-6 mb-3 overflow-hidden rounded-[24px] px-6 py-6 text-[#F2EEE1] md:mx-0 md:px-8 md:py-7"
       style={{
         background:
           "linear-gradient(135deg, var(--color-lit-grey), var(--color-dark-indigo))",
