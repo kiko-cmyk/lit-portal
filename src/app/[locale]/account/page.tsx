@@ -26,7 +26,6 @@ import {
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { shortLabel } from "@/lib/mix";
 import { DEFAULT_FLAVOR } from "@/lib/seal-plans";
-import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import Link from "next/link";
 import { orderDetailHref } from "@/lib/portal-link";
 import type {
@@ -326,69 +325,54 @@ export default function AccountPage() {
             pestaña activa de la nav + el browser tab title ya indican
             dónde está el usuario, el titular interno es redundante. */}
 
-        {/* Profile chip — alineado al estilo MetaCell del Hub: Display
-            semibold (no black), eyebrow en Cond. */}
-        <section
-          className="relative isolate mx-6 mb-4 flex items-center gap-3.5 overflow-hidden rounded-[22px] bg-[#16130C] px-5 py-4 md:mx-0"
-          style={{
-            boxShadow:
-              "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
-            isolation: "isolate",
-          }}
-        >
-          {/* Foto de marca velada (PRE) — mismo patrón de bloque oscuro que el hero del Hub */}
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 -z-10 bg-cover"
-            style={{
-              backgroundImage: `url(${MEMBER_PHOTO_DATA_URI})`,
-              backgroundPosition: "center 32%",
-              filter: "grayscale(1)",
-            }}
-          />
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 -z-10"
-            style={{
-              background:
-                "linear-gradient(100deg, rgba(13,10,6,.95) 24%, rgba(13,10,6,.6) 72%, rgba(13,10,6,.35))",
-            }}
-          />
-          <div className="min-w-0 flex-1">
-            <div
-              className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[#F2EEE1]"
-              style={{ fontSize: "clamp(18px, 4.5vw, 22px)" }}
-            >
-              {customer.name}
-            </div>
-            <div
-              className="mt-1 font-semibold uppercase tracking-[0.22em] text-[#b3ab98]"
-              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-            >
-              <T en="Member since" es="Miembro desde" />{" "}
-              {new Date(customer.memberSince)
-                .toLocaleDateString(dateLocale, {
-                  month: "short",
-                  year: "numeric",
-                })
-                .toUpperCase()}{" "}
-              ·{" "}
-              {/* A wholesale account buys cases per order, not boxes on a plan,
-                  so counting "boxes delivered" reads wrong on their file. */}
-              {accountOnly ? (
-                <T
-                  en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "order" : "orders"}`}
-                  es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "pedido" : "pedidos"}`}
-                />
-              ) : (
-                <T
-                  en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"} delivered`}
-                  es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"} entregadas`}
-                />
-              )}
-            </div>
+        {/* Identidad del cliente, en TEXTO y no en una banda oscura con foto
+            (Juan 2026-09-15).
+
+            Hasta hoy esto era un bloque negro con la foto de marca velada. El
+            problema apareció al traer el banner del formulario a esta pantalla:
+            quedaban DOS bandas oscuras casi idénticas separadas por una fila de
+            tarjetas claras, compitiendo entre ellas, y encima el degradado del
+            hero se abría hasta 0.35 por la derecha y dejaba una mancha gris a
+            media banda.
+
+            Con el nombre en texto, la única superficie oscura de Cuenta vuelve a
+            ser una: la del formulario, que es la que tiene que llamar la
+            atención. La página queda cuadrada y la identidad sigue estando,
+            que es lo único que ese bloque aportaba.
+
+            Sin `Section`: no es una sección con datos que tocar, es la cabecera
+            de la página. De ahí que no lleve caja ni el `mb-3` del resto. */}
+        <div className="mx-6 mb-6 md:mx-0">
+          <h1
+            className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
+            style={{ fontSize: "clamp(20px, 5vw, 26px)" }}
+          >
+            {customer.name}
+          </h1>
+          <div
+            className="mt-1.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          >
+            <T en="Member since" es="Miembro desde" />{" "}
+            {new Date(customer.memberSince)
+              .toLocaleDateString(dateLocale, { month: "short", year: "numeric" })
+              .toUpperCase()}{" "}
+            ·{" "}
+            {/* A wholesale account buys cases per order, not boxes on a plan,
+                so counting "boxes delivered" reads wrong on their file. */}
+            {accountOnly ? (
+              <T
+                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "order" : "orders"}`}
+                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "pedido" : "pedidos"}`}
+              />
+            ) : (
+              <T
+                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"} delivered`}
+                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"} entregadas`}
+              />
+            )}
           </div>
-        </section>
+        </div>
 
         {subPaused && (
           <section className="mx-6 mb-3 rounded-[18px] border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
