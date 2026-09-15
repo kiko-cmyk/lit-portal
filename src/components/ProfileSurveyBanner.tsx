@@ -98,16 +98,16 @@ export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
 
       <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-8">
         <div className="min-w-0">
-          {/* Mismo tamaño y peso que SectionDivider ("Gestionar mi suscripción",
-              "Próximos pedidos"…): clamp 18-22px, Clash Display 600, uppercase,
-              tracking -0.01em. Antes iba a 30px y se leía como un titular de
-              campaña, más alto en la jerarquía que las secciones que lo rodean.
-              Aquí el fondo oscuro ya da todo el contraste que necesita. */}
+          {/* Mismo tamaño y peso que los títulos de Cuenta ("Mis datos", "Mis
+              pedidos"…): clamp 16-19px, Clash Display 600, uppercase, tracking
+              -0.01em. Venía del Hub con la escala de SectionDivider (18-22px),
+              que aquí lo colocaba por encima de las secciones que lo rodean.
+              El fondo oscuro ya da todo el contraste que necesita. */}
           <h2
             className="font-semibold uppercase leading-[1] tracking-[-0.01em]"
             style={{
               fontFamily: "var(--font-display)",
-              fontSize: "clamp(18px, 4vw, 22px)",
+              fontSize: "clamp(16px, 3.6vw, 19px)",
             }}
           >
             <T en="Tell us about you" es="Cuéntanos sobre ti" />

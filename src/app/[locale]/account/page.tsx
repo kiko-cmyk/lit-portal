@@ -342,14 +342,14 @@ export default function AccountPage() {
 
             Sin `Section`: no es una sección con datos que tocar, es la cabecera
             de la página. De ahí que no lleve caja ni el `mb-3` del resto. */}
-        {/* Alineada a la DERECHA (Juan 2026-09-15): así cierra con el borde
-            derecho de las tarjetas y del banner, y el bloque de identidad deja
-            de ser lo primero que se lee. La pantalla empieza por la acción, no
-            por el nombre de quien ya sabe quién es. */}
-        <div className="mx-6 mb-6 text-right md:mx-0">
+        {/* A la izquierda y GRANDE (Juan 2026-09-15). El nombre es el titular de
+            la pantalla, así que usa el titular del portal: `text-4xl font-black
+            uppercase`, el mismo de los overlays (ChargeNow, Address, Flavor).
+            Probamos primero a la derecha y en tamaño intermedio y se quedaba en
+            tierra de nadie, ni titular ni etiqueta. */}
+        <div className="mx-6 mb-6 md:mx-0">
           <h1
-            className="font-display font-semibold uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
-            style={{ fontSize: "clamp(20px, 5vw, 26px)" }}
+            className="font-display text-4xl font-black uppercase leading-[1] tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
           >
             {customer.name}
           </h1>
