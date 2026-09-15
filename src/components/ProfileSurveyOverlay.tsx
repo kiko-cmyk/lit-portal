@@ -232,7 +232,7 @@ export function ProfileSurveyOverlay({
                 className="mb-3 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
                 style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
               >
-                <T en="Your answers, in short" es="Tus respuestas, en corto" />
+                <T en="Your answers" es="Tus respuestas" />
               </div>
               <dl className="grid gap-2 sm:grid-cols-2">
                 {notice.bullets.map((b) => (

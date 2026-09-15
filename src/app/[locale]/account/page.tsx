@@ -347,7 +347,7 @@ export default function AccountPage() {
             uppercase`, el mismo de los overlays (ChargeNow, Address, Flavor).
             Probamos primero a la derecha y en tamaño intermedio y se quedaba en
             tierra de nadie, ni titular ni etiqueta. */}
-        <div className="mx-6 mb-6 md:mx-0">
+        <div className="mx-6 mb-6 mt-3 md:mx-0 md:mt-5">
           <h1
             className="font-display text-4xl font-black uppercase leading-[1] tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
           >

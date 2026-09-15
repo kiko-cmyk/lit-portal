@@ -69,7 +69,10 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     en: "How's LIT working out for you?",
     es: "¿Qué tal te va con LIT?",
     options: [
-      o("Encantado", "Loving it", "Encantado"),
+      // El value sigue siendo "Encantado": es el vocabulario canónico del CS
+      // Platform, lo que se guarda en `cs_situacion` y por lo que segmenta
+      // Klaviyo. Solo cambia la ETIQUETA que ve el cliente (Juan 2026-09-15).
+      o("Encantado", "Loving it", "Muy bien"),
       o("Bien", "Good", "Bien"),
       o("Regular", "So-so", "Regular"),
       // Tercera persona en el valor porque lo escribió un operador. Se muestra
