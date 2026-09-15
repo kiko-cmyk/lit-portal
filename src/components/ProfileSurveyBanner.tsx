@@ -1,6 +1,7 @@
 "use client";
 
 import { T } from "@/lib/i18n";
+import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 
 interface ProfileSurveyBannerProps {
   onStart: () => void;
@@ -22,11 +23,14 @@ interface ProfileSurveyBannerProps {
  * ADMINISTRAN la suscripción (adelantar, plan, saltar, sabor) y ésta pide un
  * favor al cliente. Vestirla igual promete lo mismo que las demás y no lo es.
  *
- * Así que se separa del grid y hereda el lenguaje de `ReactivateCard`:
- * gradiente oscuro a ancho completo y un único CTA. En una pantalla de tarjetas
- * claras, la banda oscura dice "esto es otra cosa" sin necesidad de explicarlo.
- * No es un patrón nuevo: es el que el portal ya usa cuando algo no es una
- * acción de rutina.
+ * Así que se separa del grid: banda oscura a ancho completo y un único CTA. En
+ * una pantalla de tarjetas claras eso dice "esto es otra cosa" sin necesidad de
+ * explicarlo. No es un patrón nuevo: es el que el portal ya usa cuando algo no
+ * es una acción de rutina.
+ *
+ * El fondo es el de la antigua tarjeta de socio (negro + foto de marca velada),
+ * heredado el 2026-09-15 al pasar el nombre a texto: era la superficie buena y
+ * se quedaba sin usar.
  *
  * ── Sin mención a los drops (Juan, 2026-09-10) ──
  *
@@ -58,20 +62,38 @@ interface ProfileSurveyBannerProps {
 export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
   return (
     <section
-      className="relative mx-6 mb-3 overflow-hidden rounded-[24px] px-6 py-6 text-[#F2EEE1] md:mx-0 md:px-8 md:py-7"
+      className="relative isolate mx-6 mb-3 overflow-hidden rounded-[24px] bg-[#16130C] px-6 py-6 text-[#F2EEE1] md:mx-0 md:px-8 md:py-7"
       style={{
-        background:
-          "linear-gradient(135deg, var(--color-lit-grey), var(--color-dark-indigo))",
         boxShadow:
-          "0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
+          "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
+        isolation: "isolate",
       }}
     >
-      {/* Halo amarillo muy tenue en la esquina. Mismo recurso que la hero del
-          Hub: da profundidad a la banda sin meter una imagen que cargar. */}
-      <div
+      {/* Foto de marca velada: el fondo que llevaba la tarjeta de socio hasta
+          hoy (Juan 2026-09-15). Al pasar el nombre a texto, esa superficie se
+          quedaba sin usar y era la buena; el gradiente índigo que tenía este
+          banner era el sustituto, no el original.
+
+          El degradado cierra mucho más que en el hero viejo (.92 → .78 → .55,
+          antes .95 → .6 → .35): aquí hay un párrafo de dos líneas por encima, y
+          con la foto tan abierta a la derecha aparecía la mancha gris que
+          descuadraba la banda. Así la foto se intuye y el texto se lee. */}
+      <span
         aria-hidden
-        className="pointer-events-none absolute -right-16 -top-20 h-52 w-52 rounded-full opacity-[0.13] blur-3xl"
-        style={{ background: "var(--color-bold-yellow)" }}
+        className="pointer-events-none absolute inset-0 -z-10 bg-cover"
+        style={{
+          backgroundImage: `url(${MEMBER_PHOTO_DATA_URI})`,
+          backgroundPosition: "center 32%",
+          filter: "grayscale(1)",
+        }}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          background:
+            "linear-gradient(100deg, rgba(13,10,6,.92) 30%, rgba(13,10,6,.78) 68%, rgba(13,10,6,.55))",
+        }}
       />
 
       <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-8">
