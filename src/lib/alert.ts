@@ -21,6 +21,47 @@
 const DEDUPE_MS = 60_000;
 const lastSent = new Map<string, number>();
 
+/**
+ * Códigos TRANSITORIOS: un upstream lento o un limiter que falla abierto no es
+ * una noticia por ocurrencia. El dedupe de arriba vive en memoria y por
+ * instancia, así que cuatro timeouts de Shopify en cuatro instancias frías
+ * fueron cuatro mensajes en #n8n-errors en cuatro días (LIT-470). Para estos
+ * códigos hay además un cooldown de 1 h COMPARTIDO (tabla `portal_kv`): el
+ * primero postea, los siguientes se cuentan, y el próximo que postea dice
+ * cuántos se calló. Fail-open: si el KV no contesta, se postea como siempre.
+ * Los códigos de dinero (`mix_*`, `renewal_reminder_failed`) no pasan por aquí.
+ */
+const TRANSIENT_COOLDOWN_MS = 60 * 60_000;
+const TRANSIENT_CODES: ReadonlyArray<(code: string) => boolean> = [
+  (c) => c.startsWith("upstream_timeout:"),
+  (c) => c === "rate_limit_rpc_error",
+];
+
+export function isTransientCode(code: string): boolean {
+  return TRANSIENT_CODES.some((f) => f(code));
+}
+
+interface CooldownState {
+  lastSent: number;   // epoch ms
+  suppressed: number; // ocurrencias calladas desde lastSent
+}
+
+/** Devuelve el sufijo a añadir al mensaje, o `null` si hay que callar. */
+async function transientCooldown(code: string): Promise<string | null> {
+  const { kvGet, kvSet } = await import("./kv");
+  const key = `alert-cooldown:${code}`;
+  const now = Date.now();
+  const prev = await kvGet<CooldownState>(key);
+  if (prev && now - prev.value.lastSent < TRANSIENT_COOLDOWN_MS) {
+    void kvSet<CooldownState>(key, { lastSent: prev.value.lastSent, suppressed: prev.value.suppressed + 1 },
+      TRANSIENT_COOLDOWN_MS * 2);
+    return null;
+  }
+  void kvSet<CooldownState>(key, { lastSent: now, suppressed: 0 }, TRANSIENT_COOLDOWN_MS * 2);
+  const n = prev?.value.suppressed ?? 0;
+  return n > 0 ? `\n_+${n} iguales en la última hora, no posteadas (cooldown compartido)_` : "";
+}
+
 export interface ErrorAlert {
   path: string;
   code: string;
@@ -53,13 +94,23 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
   if (prev !== undefined && now - prev < DEDUPE_MS) return;
   lastSent.set(key, now);
 
+  let suffix = "";
+  if (isTransientCode(alert.code)) {
+    const decision = await transientCooldown(alert.code);
+    if (decision === null) {
+      console.warn(`[alert] ${alert.code} on ${alert.path} suprimida (cooldown compartido 1h)`);
+      return;
+    }
+    suffix = decision;
+  }
+
   const commit = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "?";
   const region = process.env.VERCEL_REGION ?? "?";
   const text =
     `:rotating_light: *lit-portal* \`${alert.code}\` on \`${alert.path}\`` +
     (alert.customerId ? ` · customer ${alert.customerId}` : "") +
     `\n> ${alert.msg.slice(0, 300)}` +
-    `\ncommit \`${commit}\` · region \`${region}\``;
+    `\ncommit \`${commit}\` · region \`${region}\`` + suffix;
 
   try {
     await fetch(url, {
