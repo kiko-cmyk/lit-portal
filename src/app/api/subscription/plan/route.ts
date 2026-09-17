@@ -478,6 +478,45 @@ const patchPlan = async (
     ? getLines(preMutationSub)
     : [];
   const currentComposition = compositionFromLines(currentLines);
+
+  // ───── EL CONTRATO PRESERVADO, COMO ANCLA (2026-09-17) ─────
+  //
+  // `currentLines` es una FOTO de Seal en este instante, y una foto tomada a mitad de
+  // una ráfaga de escrituras miente. Incidente del 11-sep-2026 (sub 12118357): tres
+  // peticiones en 27 segundos; la segunda murió entre `applied` y `verified` dejando en
+  // Seal el `edit_items` aplicado pero sus dos `add_items` no, y el reintento leyó UNA
+  // caja donde el contrato tenía TRES. Con esa lectura, `boxCountUnchanged` (abajo) es
+  // false, la preservación no se evalúa, el cliente aterriza en catálogo y encima la
+  // rama de limpieza le BORRA la preservación que la petición anterior ya había ganado.
+  // Cobró 85,05 en vez de 67,93.
+  //
+  // La lección es que el nº de cajas del contrato no puede salir SOLO de la foto. Ya
+  // tenemos la intención guardada (`preserved_box_count`, que el cron y el auditor
+  // consumen desde el 3-sep); aquí se usa como testigo: si la foto no coincide con lo
+  // que el contrato dice que son sus cajas, la foto es sospechosa y NO se decide precio
+  // con ella.
+  let preservedContract: { chargeCents: number; boxCount: number } | null = null;
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from("subscriptions")
+      .select("preserved_charge_cents, preserved_box_count")
+      .eq("customer_id", ctx.customerId)
+      .eq("seal_subscription_id", String(sealSubscriptionId))
+      .maybeSingle();
+    if (error) {
+      log("preserved-contract-read-failed", { msg: error.message });
+    } else if (data?.preserved_charge_cents != null && data?.preserved_box_count != null) {
+      const chargeCents = Number(data.preserved_charge_cents);
+      const boxCount = Number(data.preserved_box_count);
+      if (Number.isFinite(chargeCents) && chargeCents > 0 && Number.isInteger(boxCount) && boxCount > 0) {
+        preservedContract = { chargeCents, boxCount };
+      }
+    }
+  } catch (e) {
+    // Degradar con aviso, nunca bloquear: sin esta señal el comportamiento es el de
+    // antes del 17-sep (decidir con la foto), que es peor pero no rompe al cliente.
+    log("preserved-contract-read-threw", { msg: e instanceof Error ? e.message : String(e) });
+  }
   const currentShape = shapeFor(currentComposition);
   const currentBoxCount = currentLines.length
     ? currentLines.reduce((s, l) => s + l.boxes, 0)
@@ -644,6 +683,44 @@ const patchPlan = async (
   // portal ya no sabe reconstruir 90,57. Ahora la condición es de DESIGUALDAD: mismas
   // cajas y distinto importe, se preserva, suba o baje.
   const liveChargeCents = chargeTotalCents(currentLines);
+
+  // ───── LA FOTO CONTRA EL CONTRATO (2026-09-17) ─────
+  //
+  // Si el contrato dice que son N cajas y Seal nos enseña otra cosa, o bien el cliente
+  // cambió de cantidad por fuera del portal (y entonces la preservación ya no es suya y
+  // hay que limpiarla, pero de forma deliberada y no como efecto colateral), o bien
+  // estamos leyendo un estado a medio aplicar. Los dos casos se parecen demasiado como
+  // para distinguirlos aquí, y equivocarse le cuesta dinero al cliente: se rechaza y se
+  // mira a mano. Un 409 es recuperable (el cliente reintenta y la foto ya está limpia);
+  // cobrar 17,12 de más durante meses, no.
+  const liveBoxCount = mixBoxCount(currentComposition);
+  if (preservedContract && currentLines.length > 0 && liveBoxCount !== preservedContract.boxCount) {
+    log("preserved-contract-mismatch", {
+      liveBoxCount,
+      contractBoxCount: preservedContract.boxCount,
+      contractChargeCents: preservedContract.chargeCents,
+      liveChargeCents,
+      currentComposition,
+      targetComposition,
+    });
+    alertSlackError({
+      path: "/api/subscription/plan",
+      code: "contract_box_count_mismatch",
+      msg:
+        `sub ${sealSubscriptionId}: el contrato preservado dice ${preservedContract.boxCount} cajas ` +
+        `por ${centsToPrice(preservedContract.chargeCents)} y Seal enseña ${liveBoxCount}. O el cliente ` +
+        `cambió de cantidad fuera del portal, o es una lectura a medio aplicar. Cambio RECHAZADO para ` +
+        `no repreciarle. Revisar a mano: si la cantidad es legítima, limpiar preserved_charge_cents y ` +
+        `preserved_box_count; si no, dejar que reintente.`,
+      customerId: ctx.customerId,
+    });
+    throw new ApiHttpError(
+      409,
+      "subscription_changed",
+      "Your subscription is being updated right now. Please reload and try again.",
+    );
+  }
+
   const boxCountUnchanged = currentLines.length > 0 && targetBoxCount === mixBoxCount(currentComposition);
   // Cambió de verdad el nº de cajas respecto al contrato vivo. Con esto se limpia el
   // precio preservado: quien compra otra cantidad pasa a catálogo, que es su precio
@@ -695,6 +772,43 @@ const patchPlan = async (
           `${centsToPrice(liveChargeCents)} charge on this subscription's lines. Refused.`,
       );
     }
+  }
+
+  // ───── EL CAMINO MUDO (2026-09-17) ─────
+  //
+  // Hasta hoy, "no preservar" no dejaba rastro: el `if` de arriba se saltaba entero sin
+  // log ni aviso, así que una subida de precio por lectura corrupta era indistinguible
+  // en los logs de un cambio legítimo a catálogo. Por eso el caso del 11-sep estuvo seis
+  // días sin que nadie lo viera, y solo salió porque el cliente lo pagó.
+  //
+  // Esto NO es una guarda, es observabilidad: si el importe sube y el cliente no ha
+  // pedido más cajas, se avisa. Legítimo o no, alguien tiene que mirarlo.
+  if (
+    compositionChanged &&
+    pricePreservedFromCents === null &&
+    currentLines.length > 0 &&
+    targetBoxCount === mixBoxCount(currentComposition) &&
+    targetPlan.totalCents > liveChargeCents
+  ) {
+    log("price-increase-without-preservation", {
+      liveChargeCents,
+      writtenCents: targetPlan.totalCents,
+      deltaCents: targetPlan.totalCents - liveChargeCents,
+      targetBoxCount,
+      hadPreservedContract: preservedContract !== null,
+      currentComposition,
+      targetComposition,
+    });
+    alertSlackError({
+      path: "/api/subscription/plan",
+      code: "price_increase_without_preservation",
+      msg:
+        `sub ${sealSubscriptionId}: mismas ${targetBoxCount} cajas y el importe SUBE de ` +
+        `${centsToPrice(liveChargeCents)} a ${centsToPrice(targetPlan.totalCents)} ` +
+        `(+${centsToPrice(targetPlan.totalCents - liveChargeCents)}) sin preservación. ` +
+        `El cliente cambió de composición, no de cantidad. Revisar.`,
+      customerId: ctx.customerId,
+    });
   }
 
   const diff = diffLines(currentLines, targetPlan.lines);
@@ -1536,7 +1650,28 @@ const patchPlan = async (
     // cantidad y el catálogo pasa a ser su precio legítimo.
     // Best effort, nunca fatal: el cambio ya está aplicado y verificado en Seal, y
     // fallar aquí solo nos deja sin la señal, no le rompe nada al cliente.
-    if (pricePreservedFromCents !== null || boxCountChangedFromLive) {
+    // ASIMETRÍA (2026-09-17): fallar al ESCRIBIR una preservación es inocuo (el cron
+    // vuelve a verla como catálogo); BORRARLA por error le sube el precio al cliente de
+    // forma permanente. El 11-sep una lectura a medio aplicar hizo exactamente eso:
+    // `boxCountChangedFromLive` salió true porque Seal enseñaba 1 caja de 3, y este
+    // bloque borró un preservado legítimo de 67,92 escrito 5 segundos antes.
+    //
+    // Así que el borrado ya no se fía de la foto a secas: solo limpia cuando las cajas
+    // que vamos a ESCRIBIR difieren de las del contrato guardado. Si no hay contrato
+    // guardado, se mantiene el comportamiento anterior (la foto es lo único que hay).
+    const contractBoxCount = preservedContract?.boxCount ?? null;
+    const clearPreservation =
+      pricePreservedFromCents === null &&
+      boxCountChangedFromLive &&
+      (contractBoxCount === null || targetBoxCount !== contractBoxCount);
+    if (pricePreservedFromCents === null && boxCountChangedFromLive && !clearPreservation) {
+      log("preserved-charge-clear-skipped", {
+        contractBoxCount,
+        targetBoxCount,
+        liveBoxCount: mixBoxCount(currentComposition),
+      });
+    }
+    if (pricePreservedFromCents !== null || clearPreservation) {
       try {
         // El importe y SUS cajas van siempre juntos: un importe sin las cajas a las
         // que pertenece es una entitlement que el cron puede aplicar sobre una
