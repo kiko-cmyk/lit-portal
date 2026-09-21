@@ -62,6 +62,11 @@ export default function AccountPage() {
   const [flavorOpen, setFlavorOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
+  // `?action=survey` del email de perfilado. NO abre el overlay aquí: este
+  // efecto corre al montar, cuando `customer` todavía no ha llegado, así que
+  // no se puede saber si el formulario está abierto para este cliente. Se deja
+  // PENDIENTE y lo resuelve el render, igual que en my-lit/page.tsx.
+  const [pendingSurvey, setPendingSurvey] = useState(false);
   const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -126,6 +131,11 @@ export default function AccountPage() {
     // Show a toast and clean the URL.
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
+      // El email de perfilado aterriza aquí desde el 2026-09-21: el banner vive
+      // en esta página y `?action=survey` antes solo lo leía el Hub, donde el
+      // early return de `subscription_not_found` se lo comía a los no
+      // suscriptores. No se limpia de la URL, igual que en my-lit.
+      if (params.get("action") === "survey") setPendingSurvey(true);
       if (params.get("email_changed") === "1") {
         setEmailChangeConfirmed(true);
         params.delete("email_changed");
@@ -889,11 +899,14 @@ export default function AccountPage() {
           }}
         />
       )}
-      {surveyOpen && (
+      {(surveyOpen || (pendingSurvey && customer?.profileSurvey?.enabled)) && (
         <ProfileSurveyOverlay
           subscription={subscription}
           onClose={() => {
             setSurveyOpen(false);
+            // Los DOS, o al cerrar volvería a abrirse: `pendingSurvey` seguiría
+            // en true y la condición de arriba es un OR.
+            setPendingSurvey(false);
             // Relee el perfil para que el banner desaparezca en cuanto ha
             // contestado, sin recargar. `answered` lo resuelve el servidor, así
             // que no se adivina aquí.
