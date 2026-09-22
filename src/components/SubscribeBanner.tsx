@@ -99,7 +99,11 @@ export function SubscribeBanner() {
         }}
       />
 
-      <div className="relative flex flex-col gap-5 md:flex-row md:items-start md:justify-between md:gap-8">
+      {/* `items-center` en desktop: el botón centrado contra la columna de texto
+          (Juan 2026-09-22). Estuvo arriba mientras el banner era una sola línea,
+          porque entonces centrarlo lo dejaba flotando; con los cuatro bullets el
+          bloque ya tiene altura propia y el centro es lo que cuadra. */}
+      <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:justify-between md:gap-8">
         <div className="min-w-0">
           {/* Una línea, con el 25% en el peso fuerte: es lo único que tiene que
               quedarse de un vistazo. */}
@@ -151,7 +155,7 @@ export function SubscribeBanner() {
 
         <a
           href={SUBSCRIBE_URL}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:mt-1 md:w-auto"
+          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
           style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
           <T en="Subscribe" es="Suscribirme" />
