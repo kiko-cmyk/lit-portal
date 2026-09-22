@@ -62,6 +62,7 @@ export default function AccountPage() {
   const [flavorOpen, setFlavorOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
+  const [pendingSurvey, setPendingSurvey] = useState(false);
   const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -136,8 +137,43 @@ export default function AccountPage() {
           window.location.pathname + (next ? `?${next}` : ""),
         );
       }
+
+      // Deep-link de las campañas de perfilado (?action=survey). Hasta hoy solo
+      // lo leía el Hub, así que quien llegaba desde el email aterrizaba aquí y
+      // tenía que buscar la tarjeta a mano.
+      //
+      // NO se abre aquí, se deja PENDIENTE: este efecto corre al montar, cuando
+      // `customer` todavía no ha llegado, así que aún no se sabe si ya contestó.
+      // Abrirlo ya y comprobarlo después le enseñaría el formulario a quien lo
+      // rellenó la semana pasada. El efecto de abajo lo resuelve con el dato.
+      //
+      // El parámetro se limpia en el mismo gesto (patrón de `email_changed`):
+      // si se queda, recargar o volver atrás reabre el formulario una y otra
+      // vez, y ese enlace vive en el historial de todo el que lo pulse.
+      if (params.get("action") === "survey") {
+        setPendingSurvey(true);
+        params.delete("action");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
+        );
+      }
     }
   }, []);
+
+  // El overlay del deep-link se DERIVA, no se abre desde un efecto: mientras el
+  // parámetro esté pendiente y el servidor diga que está abierto y sin
+  // contestar, se muestra. Así no hace falta un setState dentro de un efecto
+  // (la regla `react-hooks/set-state-in-effect`, que además provoca un render
+  // en cascada) y el caso "ya contestó" se resuelve solo.
+  //
+  // `pendingSurvey` se apaga al cerrar, igual que `surveyOpen`.
+  const showSurveyFromLink =
+    pendingSurvey &&
+    customer?.profileSurvey?.enabled === true &&
+    customer.profileSurvey.answered === false;
 
   // Re-pull the subscription on demand. Used when the Cancel takeover closes:
   // the takeover can be dismissed with its × right after a successful cancel
@@ -889,11 +925,12 @@ export default function AccountPage() {
           }}
         />
       )}
-      {surveyOpen && (
+      {(surveyOpen || showSurveyFromLink) && (
         <ProfileSurveyOverlay
           subscription={subscription}
           onClose={() => {
             setSurveyOpen(false);
+            setPendingSurvey(false);
             // Relee el perfil para que el banner desaparezca en cuanto ha
             // contestado, sin recargar. `answered` lo resuelve el servidor, así
             // que no se adivina aquí.

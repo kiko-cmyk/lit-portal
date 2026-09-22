@@ -1,3 +1,4 @@
+import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { suggestLongerCadence } from "@/lib/cadence-fit";
 import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
@@ -8,6 +9,7 @@ import { validateAnswers } from "@/lib/profile-questions";
 import { langFromRequest } from "@/lib/request-lang";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { mapToSubscription } from "@/lib/seal";
+import { issueSurveyDiscount, type IssuedDiscount } from "@/lib/survey-discount";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -74,6 +76,16 @@ export interface SurveySubmitResult {
   /** Ha cruzado los 300 CON este envío. Solo entonces se celebra el tier. */
   tierCrossed: boolean;
   cadenceOffer: CadenceOffer | null;
+  /**
+   * El cupón de 5 €, o null. Null significa DOS cosas distintas y la pantalla
+   * final las trata distinto:
+   *   - `hadLiveSubscription: true`  → no le tocaba (es suscriptor). Cierre
+   *     normal, sin mencionar ningún descuento.
+   *   - `hadLiveSubscription: false` → le tocaba pero Shopify falló. Se le dice
+   *     que se lo mandamos por correo, nunca un error en crudo.
+   */
+  discount: { code: string; expiresAt: string } | null;
+  hadLiveSubscription: boolean;
 }
 
 // ── GET: estado ──────────────────────────────────────────────────────────────
@@ -146,6 +158,86 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
 
   const sb = supabaseAdmin();
 
+  // ── 0. El cupón: ¿le toca, y no lo tiene ya? ───────────────────────────────
+  //
+  // Se resuelve ANTES del upsert para que el código viaje DENTRO de la misma
+  // escritura que las respuestas. Si fueran dos escrituras y la segunda
+  // fallara, tendríamos un cupón emitido en Shopify que el cliente nunca ve, y
+  // al recargar le emitiríamos otro.
+  //
+  // Tres reglas, en este orden:
+  //
+  //  1. IDEMPOTENCIA. Si ya tiene código, se le devuelve EL SUYO. Un cliente
+  //     genera cupón una sola vez en la vida, aunque vuelva a rellenar el
+  //     formulario para corregir una respuesta semanas después.
+  //  2. QUIÉN LO RECIBE. Solo quien NO tiene suscripción viva. Se evalúa aquí
+  //     contra el estado real del cliente, nunca contra el origen del clic:
+  //     ese dato se pierde al pasar por el login de Shopify.
+  //  3. SI SHOPIFY FALLA, se sigue. Las respuestas se guardan igual y
+  //     `answered` queda a true. Perder un cupón se arregla a mano; dejar al
+  //     cliente en bucle repitiendo nueve preguntas, no.
+  const { data: priorRow } = await sb
+    .from("profile_survey_answers")
+    .select("discount_code, discount_issued_at, discount_expires_at")
+    .eq("customer_id", ctx.customerId)
+    .maybeSingle();
+
+  let discount: IssuedDiscount | null = priorRow?.discount_code
+    ? {
+        code: priorRow.discount_code as string,
+        issuedAt: priorRow.discount_issued_at as string,
+        expiresAt: priorRow.discount_expires_at as string,
+      }
+    : null;
+
+  // Fuera del `if` porque la pantalla final lo necesita para distinguir "no le
+  // tocaba" de "le tocaba y Shopify falló". Para quien YA tenía código, es
+  // false: se lo llevó en su día, luego no era suscriptor.
+  let hadLiveSubscription = false;
+
+  if (!discount) {
+    // `paused` y `reactivating` CUENTAN como viva: una suscripción pausada
+    // sigue siendo cliente de suscripción y no le toca el cupón de
+    // recuperación. Mismos tres estados que trata la página de Cuenta.
+    try {
+      const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
+      const live = email ? await resolveActiveSubFast(ctx.customerId, email, null) : null;
+      const status = live ? mapToSubscription(live, ctx.customerId).status : null;
+      hadLiveSubscription =
+        status === "active" || status === "paused" || status === "reactivating";
+    } catch (err) {
+      // Si Seal no contesta NO se emite cupón. Es la dirección segura: como
+      // mucho un one-shot se queda sin él y lo reclama por soporte. Al revés
+      // (asumir que no tiene suscripción) le daríamos un cupón de recuperación
+      // a un suscriptor activo, que es dinero regalado y un agravio para el
+      // resto.
+      console.warn("[survey/profile] no se pudo resolver la suscripción, sin cupón:", err);
+      hadLiveSubscription = true;
+    }
+
+    if (!hadLiveSubscription) {
+      try {
+        discount = await issueSurveyDiscount(ctx.customerId);
+      } catch (err) {
+        // El cliente verá "te lo mandamos por correo en unos minutos" en vez de
+        // un error en crudo, pero alguien tiene que emitírselo a mano: por eso
+        // esto AVISA, no solo loguea.
+        //
+        // El fallo más probable el día del despliegue es que la app del portal
+        // no tenga el scope `write_discounts`, y ese se manifestaría en TODOS
+        // los clientes a la vez y en silencio. Con la alerta se ve en el
+        // primero; sin ella, se descubriría por reclamaciones.
+        console.error("[survey/profile] EMISIÓN DE CUPÓN FALLIDA:", ctx.customerId, err);
+        alertSlackError({
+          path: "/api/survey/profile",
+          code: "survey_discount_failed",
+          msg: `No se pudo emitir el cupón de perfilado: ${err instanceof Error ? err.message : String(err)}`,
+          customerId: ctx.customerId,
+        });
+      }
+    }
+  }
+
   // ── 1. La respuesta, primero y confirmada ──────────────────────────────────
   // `klaviyo_synced_at: null` en CADA escritura, no solo en la primera. Sin eso,
   // corregir una respuesta ya sincronizada la dejaría congelada en Klaviyo con
@@ -174,6 +266,13 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
       // marca la fila al terminar, no se reintenta nunca: Postgres con datos,
       // Klaviyo vacío, y ni un error en ningún lado.
       deleted_at: null,
+      // El cupón viaja en el MISMO upsert que las respuestas: una sola
+      // escritura, así que no existe el estado intermedio "código emitido pero
+      // encuesta sin marcar". Si `discount` es null se escribe null, que es lo
+      // que ya había para quien no le toca.
+      discount_code: discount?.code ?? null,
+      discount_issued_at: discount?.issuedAt ?? null,
+      discount_expires_at: discount?.expiresAt ?? null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "customer_id" },
@@ -223,7 +322,14 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // ── 3. La propuesta de cadencia ────────────────────────────────────────────
   const cadenceOffer = await buildCadenceOffer(ctx.customerId, v.clean);
 
-  return { dropsAwarded, balance, tierCrossed, cadenceOffer };
+  return {
+    dropsAwarded,
+    balance,
+    tierCrossed,
+    cadenceOffer,
+    discount: discount ? { code: discount.code, expiresAt: discount.expiresAt } : null,
+    hadLiveSubscription,
+  };
 });
 
 // ── helpers ──────────────────────────────────────────────────────────────────

@@ -47,6 +47,10 @@ interface SubmitResult {
   balance: number;
   tierCrossed: boolean;
   cadenceOffer: CadenceOffer | null;
+  /** El cupón de 5 €, o null. Ver `hadLiveSubscription` para qué significa null. */
+  discount: { code: string; expiresAt: string } | null;
+  /** true = es suscriptor y no le tocaba cupón. false + discount null = falló la emisión. */
+  hadLiveSubscription: boolean;
 }
 
 const TIER_THRESHOLD = 300;
@@ -506,6 +510,50 @@ function DoneStep({
           />
         )}
       </p>
+      {/* ── EL CUPÓN ──
+          El email "Perfilado B" (one-shot) promete literalmente: "te espera un
+          descuento para tu próxima caja. Lo verás en la última pantalla, con tu
+          código listo para usar". Este bloque es lo que cumple esa frase, así
+          que no puede faltar ni quedar escondido.
+
+          Tres estados, y los tres distintos a propósito:
+            1. hay código        → se enseña, grande y copiable.
+            2. no le tocaba      → no se menciona nada. Un suscriptor no tiene
+                                   por qué enterarse de que existe un cupón de
+                                   recuperación que no va a recibir.
+            3. le tocaba y falló → "te lo mandamos por correo". Nunca un error
+                                   en crudo: el cliente ya ha hecho su parte. */}
+      {result.discount && (
+        <div className="mt-6 rounded-[18px] border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-5 py-5 text-center">
+          <div
+            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
+            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          >
+            <T en="5 € off your next box" es="5 € en tu próxima caja" />
+          </div>
+          {/* `select-all` para que un toque lo seleccione entero: esto se copia
+              a mano en el checkout desde el móvil. */}
+          <div className="mt-2 select-all font-display text-3xl font-black uppercase tracking-[0.06em] text-[color:var(--color-lit-grey)]">
+            {result.discount.code}
+          </div>
+          <div className="mt-2 text-[12px] text-[color:var(--color-warm-gray)]">
+            <T
+              en={`Valid until ${new Date(result.discount.expiresAt).toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { day: "numeric", month: "long" })}`}
+              es={`Válido hasta el ${new Date(result.discount.expiresAt).toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { day: "numeric", month: "long" })}`}
+            />
+          </div>
+        </div>
+      )}
+
+      {!result.discount && !result.hadLiveSubscription && (
+        <div className="mt-6 rounded-[18px] border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-5 py-4 text-[13px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+          <T
+            en="Your discount is on its way: we'll email it to you in a few minutes."
+            es="Tu descuento está en camino: te lo mandamos por correo en unos minutos."
+          />
+        </div>
+      )}
+
       {/* Un reenvío no vuelve a pagar: el importe se mide, no se asume, así que
           aquí dirá 0 y el texto tiene que ser coherente con eso. */}
       {result.dropsAwarded === 0 && (
