@@ -126,21 +126,19 @@ export function SubscribeBanner() {
               </>
             )}
           </p>
-          <p className="mt-1.5 text-[12px] leading-[1.45] text-[#b3ab98]">
-            <T
-              en="LIT at your door automatically, without having to remember to order."
-              es="LIT en tu casa automáticamente, sin tener que acordarte de pedirlo."
-            />
-          </p>
-
           {/* Los bullets. Dos columnas en desktop para que la banda crezca a lo
               ancho y no a lo alto, que es lo que la mantiene siendo una banda y
               no la tarjeta de media pantalla del intento anterior.
 
               Son los cuatro que el portal cumple de verdad y que este cliente va
-              a tener delante en cuanto entre. La permanencia baja aquí desde el
-              subtítulo: decirla en los dos sitios era repetirse. */}
-          <ul className="mt-4 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+              a tener delante en cuanto entre.
+
+              Cuelgan directamente del titular: el banner tuvo un subtítulo
+              ("LIT en tu casa automáticamente...") que se quitó (Juan
+              2026-09-22). Los bullets ya dicen lo mismo y mejor, en cuatro
+              trozos que se leen de un vistazo en vez de una frase que había que
+              leer entera. */}
+          <ul className="mt-3.5 grid gap-x-6 gap-y-2 sm:grid-cols-2">
             {benefits.map((b) => (
               <li
                 key={b}
