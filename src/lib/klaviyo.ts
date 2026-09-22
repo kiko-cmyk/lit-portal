@@ -21,6 +21,12 @@ function key(): string {
 }
 
 export type KlaviyoEvent =
+  // Encuesta de perfilado completada (2026-09-22). Dispara el flow de dos
+  // emails con el cupón de 5 €. El nombre va con mayúsculas y espacios, a
+  // diferencia del resto: es el nombre EXACTO de la métrica que Kiko tiene
+  // cableada en Klaviyo, y los emails leen `event.discount_code` y
+  // `event.discount_expires_label` literalmente.
+  | "Profile Survey Completed"
   | "tier_unlocked"
   | "reward_claimed"
   | "winback_d14"
@@ -110,19 +116,33 @@ class KlaviyoClient {
     event: KlaviyoEvent,
     email: string,
     properties: Record<string, unknown> = {},
+    opts: {
+      /**
+       * Clave de deduplicación de Klaviyo. Con ella, un reintento del mismo
+       * envío NO vuelve a disparar el flow ni manda un segundo email. Sin ella,
+       * Klaviyo trata cada POST como un evento nuevo.
+       */
+      uniqueId?: string;
+      /**
+       * Id de cliente de Shopify. Se manda además del email para que el perfil
+       * de Klaviyo quede atado al cliente aunque luego cambie de correo.
+       */
+      externalId?: string;
+    } = {},
   ): Promise<void> {
+    const profileAttrs: Record<string, unknown> = { email };
+    if (opts.externalId) profileAttrs.external_id = opts.externalId;
+
+    const attributes: Record<string, unknown> = {
+      properties,
+      metric: { data: { type: "metric", attributes: { name: event } } },
+      profile: { data: { type: "profile", attributes: profileAttrs } },
+    };
+    if (opts.uniqueId) attributes.unique_id = opts.uniqueId;
+
     await this.req("/events/", {
       method: "POST",
-      body: JSON.stringify({
-        data: {
-          type: "event",
-          attributes: {
-            properties,
-            metric: { data: { type: "metric", attributes: { name: event } } },
-            profile: { data: { type: "profile", attributes: { email } } },
-          },
-        },
-      }),
+      body: JSON.stringify({ data: { type: "event", attributes } }),
     });
   }
 

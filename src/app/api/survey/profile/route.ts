@@ -9,7 +9,9 @@ import { validateAnswers } from "@/lib/profile-questions";
 import { langFromRequest } from "@/lib/request-lang";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { mapToSubscription } from "@/lib/seal";
-import { issueSurveyDiscount, type IssuedDiscount } from "@/lib/survey-discount";
+import { klaviyo } from "@/lib/klaviyo";
+import { formatShipDateEs } from "@/lib/ship-date-label";
+import { DISCOUNT_VALUE_EUR, issueSurveyDiscount, type IssuedDiscount } from "@/lib/survey-discount";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -215,12 +217,18 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // false: se lo llevó en su día, luego no era suscriptor.
   let hadLiveSubscription = false;
 
+  // El email se resuelve UNA vez y fuera del `if`: lo necesitan el cupón (para
+  // preguntar a Seal) y el evento de Klaviyo (para identificar el perfil), y
+  // pedirlo dos veces a Shopify sería una llamada de más en una ruta que ya
+  // habla con Seal, Supabase y Shopify.
+  const customerEmail = await shopifyAdmin.getCustomerEmail(ctx.customerId).catch(() => null);
+
   if (!discount) {
     // `paused` y `reactivating` CUENTAN como viva: una suscripción pausada
     // sigue siendo cliente de suscripción y no le toca el cupón de
     // recuperación. Mismos tres estados que trata la página de Cuenta.
     try {
-      const email = await shopifyAdmin.getCustomerEmail(ctx.customerId);
+      const email = customerEmail;
       const live = email ? await resolveActiveSubFast(ctx.customerId, email, null) : null;
       const status = live ? mapToSubscription(live, ctx.customerId).status : null;
       hadLiveSubscription =
@@ -338,6 +346,56 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // lleva dentro tres meses es peor que no decirle nada.
   const tierCrossed =
     dropsAwarded > 0 && balance >= TIER_THRESHOLD && balance - dropsAwarded < TIER_THRESHOLD;
+
+  // ── 2.5. El evento de Klaviyo, que dispara el flow de los dos emails ───────
+  //
+  // SIEMPRE que las respuestas se hayan guardado, incluso si el cliente tiene
+  // suscripción y no le toca cupón: así el flow puede filtrar por
+  // `has_active_subscription` y de paso queda la analítica de quién completa la
+  // encuesta, que se perdería emitiendo solo a los que reciben código.
+  //
+  // La ÚNICA excepción es el fallo de emisión, y es deliberada: si Shopify
+  // falló, `discount_code` iría vacío y el email dice "aquí están tus 5 €"
+  // desde el titular. Un email así es peor que ninguno. Ese caso ya avisa por
+  // Slack para emitirlo a mano.
+  const emisionFallida = !discount && !hadLiveSubscription;
+  if (customerEmail && !emisionFallida) {
+    // Fire-and-forget con el error tragado: el cliente ya ha contestado y tiene
+    // su código en pantalla. Un corte con Klaviyo no puede tumbar la respuesta
+    // después de haber guardado, que es el patrón del resto de la ruta.
+    void klaviyo
+      .trackEvent(
+        "Profile Survey Completed",
+        customerEmail,
+        {
+          discount_code: discount?.code ?? null,
+          discount_expires_at: discount?.expiresAt ?? null,
+          // La fecha YA formateada ("22 de octubre"). El filtro |date de Django
+          // devuelve '' en silencio sobre un string, que es como el recordatorio
+          // de 7d salió con la fecha en blanco a 524 personas en julio. Se
+          // reutiliza `formatShipDateEs`, que nació de aquel mismo bug.
+          discount_expires_label: formatShipDateEs(discount?.expiresAt),
+          discount_value: DISCOUNT_VALUE_EUR,
+          has_active_subscription: hadLiveSubscription,
+          survey_completed_at: new Date().toISOString(),
+        },
+        {
+          // Klaviyo deduplica por aquí: un reintento del submit no dispara el
+          // flow dos veces ni manda un segundo email con el código.
+          uniqueId: `survey-${ctx.customerId}`,
+          externalId: ctx.customerId,
+        },
+      )
+      .catch((err) => {
+        console.error("[survey/profile] evento Klaviyo fallido:", ctx.customerId, err);
+        alertSlackError({
+          path: "/api/survey/profile",
+          code: "survey_event_failed",
+          msg: `El evento Profile Survey Completed no salió: ${err instanceof Error ? err.message : String(err)}`,
+          customerId: ctx.customerId,
+        });
+      });
+  }
 
   // ── 3. La propuesta de cadencia ────────────────────────────────────────────
   const cadenceOffer = await buildCadenceOffer(ctx.customerId, v.clean);

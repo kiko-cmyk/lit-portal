@@ -44,6 +44,8 @@ import {
   validateAnswers,
   visibleQuestions,
 } from "@/lib/profile-questions";
+import { formatShipDateEs } from "@/lib/ship-date-label";
+import { DISCOUNT_VALUE_EUR } from "@/lib/survey-discount";
 import type { Frequency } from "@/lib/types";
 
 let failures = 0;
@@ -205,6 +207,34 @@ check(
   !vGate.ok && vGate.notAsked.includes("deporte_tipo"),
 );
 check("y no la deja en clean", vGate.clean["deporte_tipo"] === undefined);
+
+// ── El contrato con Klaviyo (2026-09-22) ─────────────────────────────────────
+//
+// Los dos emails del flow (Vc3fhp y W7j57C) leen `event.discount_code` y
+// `event.discount_expires_label` LITERALMENTE. Si el portal renombra una
+// propiedad, el email sale con el hueco vacío y sin error en ningún log: es
+// exactamente cómo el recordatorio de 7d se envió con la fecha en blanco a 524
+// personas. Este bloque es la única defensa que existe contra eso.
+console.log("\n── contrato del evento de Klaviyo ──");
+
+check(
+  "la fecha se formatea en español, sin año y con el mes en minúscula",
+  formatShipDateEs("2026-10-22T09:17:29Z") === "22 de octubre",
+  formatShipDateEs("2026-10-22T09:17:29Z"),
+);
+check(
+  "sin caducidad devuelve cadena vacía, no 'Invalid Date'",
+  formatShipDateEs(null) === "" && formatShipDateEs(undefined) === "",
+);
+// El label se construye del ISO CRUDO, no de un Date: `new Date(iso)` se
+// renderiza en la zona del runtime y en Vercel eso puede imprimir el día
+// anterior. Un cupón que dice caducar un día antes es una reclamación.
+check(
+  "el día sale del ISO y no de la zona horaria del servidor",
+  formatShipDateEs("2026-10-01T00:30:00Z") === "1 de octubre",
+  formatShipDateEs("2026-10-01T00:30:00Z"),
+);
+check("el importe del evento es 5", DISCOUNT_VALUE_EUR === 5, String(DISCOUNT_VALUE_EUR));
 
 // ── Multi-respuesta (Juan 2026-09-22) ────────────────────────────────────────
 console.log("\n── multi-respuesta ──");

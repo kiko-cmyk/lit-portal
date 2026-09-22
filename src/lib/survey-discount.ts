@@ -31,6 +31,15 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
 /** 5 € fijos. En euros porque la mutación toma un decimal, no céntimos. */
 const DISCOUNT_AMOUNT_EUR = "5.0";
 
+/**
+ * El mismo importe como número, para el evento de Klaviyo.
+ *
+ * Va como propiedad del evento y no escrito en la plantilla del email para que
+ * cambiar la cifra no obligue a editar dos correos en Klaviyo. Se deriva de
+ * `DISCOUNT_AMOUNT_EUR` para que no puedan divergir.
+ */
+export const DISCOUNT_VALUE_EUR = Number(DISCOUNT_AMOUNT_EUR);
+
 /** Días de validez desde la emisión. El email promete 30. */
 export const DISCOUNT_DAYS = 30;
 
