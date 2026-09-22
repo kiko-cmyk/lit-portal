@@ -195,20 +195,26 @@ export function ProfileSurveyOverlay({
             de competir con la invitación. */}
         {step === "intro" && (
           <>
-            <h1 className="font-display text-4xl font-black uppercase leading-[1.05] tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+            {/* `tracking-0` y `leading-[1.12]`, no el `-0.01em`/`1.05` de antes
+                (Juan 2026-09-22). Clash Display en negra ya viene apretada de
+                fábrica: restarle tracking a 36px pega las letras entre sí, y en
+                un titular de dos líneas el interlineado corto remata el bloque.
+                El texto es lo primero que se lee del formulario y estaba siendo
+                lo peor maquetado. */}
+            <h1 className="font-display text-[34px] font-black uppercase leading-[1.12] tracking-normal text-[color:var(--color-lit-grey)] sm:text-[40px]">
               <T en="Tell us how you drink LIT" es="Cuéntanos cómo tomas LIT" />
             </h1>
 
             {/* La frase de entrada, al tamaño del cuerpo del portal y en el
                 gris oscuro: es el motivo para contestar, no una nota al pie. */}
-            <p className="mt-4 text-[15px] leading-[1.55] text-[color:var(--color-lit-grey)]/85">
+            <p className="mt-5 max-w-[34rem] text-[16px] leading-[1.6] text-[color:var(--color-lit-grey)]/80">
               {notice.intro}
             </p>
 
             {/* Tres datos rápidos, en horizontal: lo que de verdad decide si
                 alguien empieza. Se sacan de las viñetas para que no queden
                 enterrados entre la letra legal. */}
-            <div className="mt-6 flex flex-wrap gap-x-7 gap-y-3">
+            <div className="mt-8 flex flex-wrap items-stretch gap-x-6 gap-y-4 sm:gap-x-8">
               {[
                 { k: "9", l: t({ en: "questions", es: "preguntas" }) },
                 { k: "1 min", l: t({ en: "of your time", es: "de tu tiempo" }) },
@@ -218,12 +224,14 @@ export function ProfileSurveyOverlay({
                 },
               ].map((it) => (
                 <div key={it.k}>
-                  <div className="font-display text-xl font-bold uppercase leading-none tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+                  <div className="font-display text-[22px] font-bold uppercase leading-none tracking-normal text-[color:var(--color-lit-grey)]">
                     {it.k}
                   </div>
+                  {/* 11px y no 10: la condensada a 10px con tracking .22em se
+                      convierte en un rayado gris que nadie lee. */}
                   <div
-                    className="mt-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-                    style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                    className="mt-1.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+                    style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
                   >
                     {it.l}
                   </div>
@@ -243,10 +251,10 @@ export function ProfileSurveyOverlay({
                 Cada punto en su propia caja sobre `brisky-cream`, en rejilla de
                 dos columnas en pantalla ancha. Deja de parecer una condición de
                 contrato y se lee como lo que es: información. */}
-            <div className="mt-7 border-t border-[color:var(--color-lit-grey)]/10 pt-5">
+            <div className="mt-9 border-t border-[color:var(--color-lit-grey)]/12 pt-6">
               <div
-                className="mb-3 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-                style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                className="mb-4 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+                style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
               >
                 <T en="Your answers" es="Tus respuestas" />
               </div>
@@ -258,17 +266,24 @@ export function ProfileSurveyOverlay({
                     // transferencia) ocupa la fila entera: partido en media
                     // columna quedaba en cinco renglones y descuadraba la
                     // rejilla, dejando además a la última caja suelta.
-                    className={`rounded-[14px] bg-[color:var(--color-brisky-cream)]/45 px-3.5 py-3 ${
+                    // Sobre `sharp-white`, no sobre `brisky-cream/45`. Ese
+                    // crema al 45% era CASI EL MISMO tono que el panel, así que
+                    // las cajas no se distinguían del fondo y el texto quedaba
+                    // en 3,5:1 de contraste, por debajo del 4,5:1 que exige
+                    // WCAG AA para cuerpo pequeño. Medido, no estimado.
+                    className={`rounded-[16px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-sharp-white)] px-4 py-3.5 ${
                       b.v.length > 90 ? "sm:col-span-2" : ""
                     }`}
                   >
+                    {/* 11px y color pleno: a 9,5px y al 70% la etiqueta era un
+                        rayado, no una palabra. */}
                     <dt
-                      className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/70"
-                      style={{ fontFamily: "var(--font-cond)", fontSize: 9.5 }}
+                      className="font-semibold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]"
+                      style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
                     >
                       {b.k}
                     </dt>
-                    <dd className="mt-1 text-[12px] leading-[1.45] text-[color:var(--color-warm-gray)]">
+                    <dd className="mt-1.5 text-[13px] leading-[1.5] text-[color:var(--color-lit-grey)]/75">
                       {b.v}
                     </dd>
                   </div>
