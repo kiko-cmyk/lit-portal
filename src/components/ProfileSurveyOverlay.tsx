@@ -322,6 +322,19 @@ export function ProfileSurveyOverlay({
               </label>
             )}
 
+            {/* Por qué el botón está apagado. Sin esta línea, quien no marca la
+                casilla ve un "Enviar" muerto y no tiene forma de saber que la
+                culpa es de la casilla que tiene justo encima. Solo aparece
+                cuando hace falta: si ya está marcada, no hay nada que explicar. */}
+            {step === 3 && !consent && (
+              <p className="mt-3 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+                <T
+                  en="Tick the box above to send your answers."
+                  es="Marca la casilla de arriba para poder enviar tus respuestas."
+                />
+              </p>
+            )}
+
             {error && <p className="mt-4 text-sm text-[color:var(--color-lit-grey)]">{error}</p>}
 
             <div className="mt-8 flex items-center justify-between">
@@ -338,7 +351,12 @@ export function ProfileSurveyOverlay({
                   <T en="Continue" es="Continuar" />
                 </PrimaryButton>
               ) : (
-                <PrimaryButton onClick={submit} disabled={busy}>
+                // Sin la casilla no se puede enviar (Juan 2026-09-22). El
+                // botón se deshabilita en vez de dejar enviar y fallar: el
+                // error llegaría después de nueve preguntas y sin decir por qué.
+                // La ruta lo rechaza igual, porque un `disabled` del navegador
+                // no es una validación.
+                <PrimaryButton onClick={submit} disabled={busy || !consent}>
                   {busy ? (
                     <T en="Saving…" es="Guardando…" />
                   ) : (

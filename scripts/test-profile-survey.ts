@@ -222,8 +222,23 @@ check(
 );
 
 check(
-  "las dos preguntas pedidas son multi",
-  QUESTIONS_BY_KEY["uso"]?.multi === true && QUESTIONS_BY_KEY["sabor_favorito"]?.multi === true,
+  "las tres preguntas pedidas son multi",
+  QUESTIONS_BY_KEY["uso"]?.multi === true &&
+    QUESTIONS_BY_KEY["sabor_favorito"]?.multi === true &&
+    QUESTIONS_BY_KEY["deporte_tipo"]?.multi === true,
+);
+
+// `deporte_tipo` es la única multi que además está GATEADA. La puerta cuelga de
+// `deporte_frecuencia`, que NO es multi, así que `isAsked` sigue comparando
+// valores completos y funciona. Si algún día se gatea por una multi, este test
+// es el que se caerá primero.
+check(
+  "la puerta de deporte_tipo cuelga de una pregunta que no es multi",
+  QUESTIONS_BY_KEY[QUESTIONS_BY_KEY["deporte_tipo"]!.gatedBy!.key]?.multi !== true,
+);
+check(
+  "deporte_tipo multi se valida bien cuando la puerta está abierta",
+  validateAnswers({ deporte_frecuencia: "3-4/sem", deporte_tipo: "Running;Ciclismo" }).ok,
 );
 
 const vMulti = validateAnswers({ uso: "Deporte;Resaca" });

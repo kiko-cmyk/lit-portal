@@ -143,6 +143,26 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   if (typeof body.consent !== "boolean") {
     throw new ApiHttpError(400, "missing_consent", "consent (boolean) required");
   }
+  // La casilla es OBLIGATORIA para enviar (Juan 2026-09-22). Antes se aceptaba
+  // `false` y la respuesta se guardaba para el agregado sin escribir en
+  // Klaviyo; ahora sin permiso no se guarda nada.
+  //
+  // Se comprueba AQUÍ además de deshabilitar el botón: el `disabled` es del
+  // navegador y esta ruta es pública para cualquiera con sesión.
+  //
+  // OJO, esto NO convierte el consentimiento en obligatorio para el cliente:
+  // sigue siendo libre porque puede no contestar el formulario, que no le
+  // quita nada (los drops del formulario no son un derecho adquirido y el
+  // cupón tampoco se promete sin contestar). Lo que ya no existe es el estado
+  // intermedio "te guardo los datos pero no los uso", que es el que costaba
+  // explicar y el que nadie miraba.
+  if (body.consent !== true) {
+    throw new ApiHttpError(
+      400,
+      "consent_required",
+      "the consent checkbox must be ticked to submit",
+    );
+  }
 
   // El tipo de TypeScript es solo de compilación: un cliente puede postear
   // cualquier cosa. Se valida contra el banco de preguntas y se guarda lo

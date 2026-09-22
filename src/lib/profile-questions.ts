@@ -236,6 +236,11 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     screen: 3,
     en: "Which one?",
     es: "¿Cuál?",
+    // Varias: casi nadie hace un solo deporte, y forzar a elegir uno perdía
+    // justo la mezcla que explica cuánto suda esa persona.
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca los que quieras",
     gatedBy: { key: "deporte_frecuencia", unless: ["No entreno"] },
     options: [
       o("Running", "Running", "Running"),
