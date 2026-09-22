@@ -18,6 +18,12 @@
  *
  * Por eso además `usageLimit: 1` y `appliesOncePerCustomer: true` son cinturón
  * y tirantes sobre un código que ya es de un solo uso por construcción.
+ *
+ * DEUDA CONOCIDA: `customerSelection` está deprecado y Shopify pide `context`.
+ * No se migra aquí a propósito. Hoy funciona, y ese campo es EXACTAMENTE el que
+ * dejó los cupones de GoAffPro sin canjear durante meses: cambiarlo de paso, en
+ * el mismo commit que arregla otra cosa, es cómo se repite esa historia. Cuando
+ * toque, se migra solo y se verifica con un checkout real sin sesión.
  */
 
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -99,7 +105,20 @@ export async function issueSurveyDiscount(customerId: string): Promise<IssuedDis
         customerGets: {
           value: { discountAmount: { amount: DISCOUNT_AMOUNT_EUR, appliesOnEachItem: false } },
           items: { collections: { add: [COUPON_COLLECTION_GID] } },
+          // AMBOS, y hay que decirlo explícitamente (Juan 2026-09-22).
+          //
+          // `appliesOnSubscription` es FALSE por defecto en Shopify, así que el
+          // primer cupón emitido rebotaba con "no es válido para los artículos
+          // de tu carrito" en cuanto la caja llevaba plan de suscripción. Y es
+          // justo el caso que la campaña persigue: el email va a compradores
+          // one-shot para que se pasen a suscripción.
+          appliesOnOneTimePurchase: true,
+          appliesOnSubscription: true,
         },
+        // Solo el PRIMER cobro de la suscripción. Sin esto, 5 € menos en cada
+        // entrega para siempre: a 45 días son unos 40 €/año por cliente, y con
+        // 4.068 emails eso deja de ser un cupón de captación.
+        recurringCycleLimit: 1,
         // Sin mínimo de compra: la colección ya lo resuelve, porque lo más
         // barato que contiene son 28,35 €.
         appliesOncePerCustomer: true,
