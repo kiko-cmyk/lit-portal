@@ -865,7 +865,13 @@ export default function AccountPage() {
             grande que los demás. */}
         <OrdersSection orders={orders} />
 
-        <Marquee />
+        {/* `compact` sólo cuando debajo viene el banner de AHORRA (Juan
+            2026-09-22): con la banda oscura detrás, el marquee dejaba de ser el
+            final de la página y pasaba a ser un separador más, y los 40/48px
+            por arriba y por abajo abrían dos agujeros seguidos entre "Mis
+            pedidos" y la oferta. Cuando el banner no sale, el marquee vuelve a
+            cerrar la pantalla y conserva el hueco largo del resto del portal. */}
+        <Marquee compact={!accountOnly && subscription == null} />
 
         {/* La invitación a suscribirse, para quien no tiene NINGUNA suscripción
             (Juan 2026-09-22).
