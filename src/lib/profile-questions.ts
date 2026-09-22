@@ -54,8 +54,28 @@ export interface ProfileQuestion {
   screen: 1 | 2 | 3;
   /** Solo se pregunta si la respuesta de `key` NO está en `unless`. */
   gatedBy?: { key: string; unless: string[] };
+  /**
+   * Admite varias respuestas (Juan 2026-09-22). Se guardan en UNA cadena
+   * separada por `MULTI_SEP`, no como array, y el motivo no es pereza:
+   * `answers` es `Record<string, string>` de punta a punta (Postgres jsonb, la
+   * validación, `klaviyoProps`, el cron de sync y las propiedades `cs_*` de
+   * Klaviyo, que son texto). Meter un array obligaría a tocar esas seis capas
+   * y a migrar lo ya guardado.
+   *
+   * Con `;` Klaviyo además sigue pudiendo segmentar por "contiene X", que es
+   * como se consulta una multi-respuesta allí.
+   */
+  multi?: boolean;
   options: ProfileOption[];
 }
+
+/**
+ * Separador de las respuestas múltiples. Punto y coma y no coma: "Trabajo /
+ * foco" y "Calor / verano" ya llevan barra, y una coma aparecería dentro de
+ * valores futuros con más facilidad. Ningún valor canónico del CS lo contiene
+ * (comprobado sobre el banco entero, y hay un test que lo ancla).
+ */
+export const MULTI_SEP = ";";
 
 const o = (value: string, en: string, es: string): ProfileOption => ({ value, en, es });
 
@@ -88,6 +108,11 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     screen: 1,
     en: "What do you drink it for?",
     es: "¿Para qué lo tomas?",
+    // Varias respuestas: casi nadie lo toma para UNA sola cosa, y forzar a
+    // elegir convertía el dato en una media verdad.
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca las que quieras",
     options: [
       o("Deporte", "Sport", "Deporte"),
       o("Trabajo / foco", "Work or focus", "Trabajo o foco"),
@@ -106,6 +131,9 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     screen: 2,
     en: "Which flavour is yours?",
     es: "¿Cuál es tu sabor?",
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca los que quieras",
     options: [
       // Nombres de marca: NO se traducen (misma decisión que `FLAVORS` en
       // seal-plans.ts, Juan 2026-07-11). Salty Peach existe desde el 2026-09-02.
@@ -258,7 +286,15 @@ export const QUESTIONS_BY_KEY: Record<string, ProfileQuestion> = Object.fromEntr
 export const SITUACION_CON_PROBLEMA = "Tiene un problema";
 export const HELP_URL = "https://litsalt.com/pages/ayuda";
 
-/** ¿Se le pregunta esto, dadas las respuestas que ya ha dado? */
+/**
+ * ¿Se le pregunta esto, dadas las respuestas que ya ha dado?
+ *
+ * Compara el valor COMPLETO, sin partir por `MULTI_SEP`, y hoy es correcto
+ * porque la única condicional del banco cuelga de `deporte_frecuencia`, que no
+ * es multi. Si algún día se gatea una pregunta por una multi-respuesta, esto
+ * hay que cambiarlo: "Deporte;Resaca" no es igual a "Deporte" y la puerta se
+ * quedaría cerrada en silencio.
+ */
 export function isAsked(q: ProfileQuestion, answers: Record<string, string>): boolean {
   if (!q.gatedBy) return true;
   const gate = answers[q.gatedBy.key];
@@ -306,7 +342,30 @@ export function validateAnswers(raw: unknown): ValidationResult {
       out.unknown.push(k);
       continue;
     }
-    if (typeof v !== "string" || !q.options.some((opt) => opt.value === v)) {
+    if (typeof v !== "string") {
+      out.invalid.push(k);
+      continue;
+    }
+    if (q.multi) {
+      // Multi-respuesta: se valida CADA parte contra el banco y se vuelve a
+      // unir en el ORDEN DEL BANCO, no en el que llegó. Así dos clientes que
+      // marcaron lo mismo producen la misma cadena y los segmentos de Klaviyo
+      // por igualdad no se parten en variantes.
+      const parts = v
+        .split(MULTI_SEP)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const valid = q.options.filter((opt) => parts.includes(opt.value)).map((opt) => opt.value);
+      // Vacío = ninguna parte era válida (o llegó una cadena vacía). Se rechaza
+      // igual que un valor inventado; saltarse la pregunta es NO mandar la clave.
+      if (valid.length === 0 || valid.length !== parts.length) {
+        out.invalid.push(k);
+        continue;
+      }
+      asStrings[k] = valid.join(MULTI_SEP);
+      continue;
+    }
+    if (!q.options.some((opt) => opt.value === v)) {
       out.invalid.push(k);
       continue;
     }

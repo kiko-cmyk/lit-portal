@@ -31,6 +31,7 @@ import { T, useLang, useLangValue } from "@/lib/i18n";
 import { frequencyLabel } from "@/lib/frequency-label";
 import {
   HELP_URL,
+  MULTI_SEP,
   PROFILE_QUESTIONS,
   SITUACION_CON_PROBLEMA,
   isAsked,
@@ -113,6 +114,13 @@ export function ProfileSurveyOverlay({
   const pick = (key: string, value: string) =>
     setAnswers((prev) => {
       const next = { ...prev, [key]: value };
+      // Cadena vacía = en una multi se desmarcó la última opción. Se BORRA la
+      // clave en vez de mandar "": el servidor valida contra el banco y ""
+      // no es ninguna opción, así que un envío con la clave vacía se rechazaría
+      // entero con `invalid_option` y el cliente perdería las nueve respuestas
+      // por haber cambiado de idea en una. Sin clave = sin contestar, que es
+      // legítimo porque todas son opcionales.
+      if (value === "") delete next[key];
       // Si una respuesta cierra la puerta de una condicional, su respuesta vieja
       // se va con ella. Sin esto, quien contesta "Crossfit" y luego cambia a "no
       // entreno" dejaría un deporte colgando que el servidor rechazaría con
@@ -375,6 +383,31 @@ function QuestionBlock({
 }) {
   const t = useLang();
   const help = t({ en: q.helpEn ?? "", es: q.helpEs ?? "" });
+
+  const selectedSet = new Set(
+    q.multi && value ? value.split(MULTI_SEP).filter(Boolean) : [],
+  );
+
+  /**
+   * Añade o quita una opción y devuelve la cadena nueva.
+   *
+   * Se reconstruye recorriendo `q.options`, así que el orden es SIEMPRE el del
+   * banco y no el de los toques: dos clientes que marcan lo mismo guardan la
+   * misma cadena, que es lo que hace comparables los segmentos de Klaviyo.
+   *
+   * Quitar la última deja "" — el padre lo trata como "sin contestar" y no
+   * manda la clave, porque todas las preguntas son opcionales.
+   */
+  const toggle = (v: string): string => {
+    const next = new Set(selectedSet);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    return q.options
+      .filter((opt) => next.has(opt.value))
+      .map((opt) => opt.value)
+      .join(MULTI_SEP);
+  };
+
   return (
     <div className="mt-7">
       <p className="text-sm font-semibold text-[color:var(--color-lit-grey)]">
@@ -382,27 +415,39 @@ function QuestionBlock({
       </p>
       {help && <p className="mt-1 text-[12px] text-[color:var(--color-warm-gray)]">{help}</p>}
       <ul className="mt-3 space-y-2">
-        {q.options.map((o) => (
-          <li key={o.value}>
-            <button
-              type="button"
-              onClick={() => onPick(o.value)}
-              aria-pressed={value === o.value}
-              className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm ${
-                value === o.value
-                  ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15"
-                  : "border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
-              }`}
-            >
-              <span>{t({ en: o.en, es: o.es })}</span>
-              {value === o.value && (
-                <span aria-hidden className="text-[color:var(--color-bold-yellow)]">
-                  ●
-                </span>
-              )}
-            </button>
-          </li>
-        ))}
+        {q.options.map((o) => {
+          // En una multi el valor guardado es "A;B", así que "seleccionada" es
+          // pertenencia al conjunto, no igualdad con la cadena entera.
+          const selected = q.multi ? selectedSet.has(o.value) : value === o.value;
+          return (
+            <li key={o.value}>
+              <button
+                type="button"
+                onClick={() => onPick(q.multi ? toggle(o.value) : o.value)}
+                // `aria-pressed` en las dos: el botón se comporta como un
+                // interruptor en ambos casos, y en la multi además se puede
+                // apagar volviéndolo a tocar.
+                aria-pressed={selected}
+                className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm ${
+                  selected
+                    ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15"
+                    : "border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
+                }`}
+              >
+                <span>{t({ en: o.en, es: o.es })}</span>
+                {/* Marca distinta a propósito: el punto dice "esta es LA
+                    elegida" y el check dice "esta también". Con el mismo
+                    símbolo, una lista de cinco opciones donde caben varias se
+                    lee como si solo una pudiera estar activa. */}
+                {selected && (
+                  <span aria-hidden className="text-[color:var(--color-bold-yellow)]">
+                    {q.multi ? "✓" : "●"}
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       {/* "Tengo un problema" no abre más preguntas: deriva al formulario de

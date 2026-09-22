@@ -46,13 +46,37 @@ import { SUBSCRIBE_URL } from "@/lib/storefront-links";
  *
  * Sin guiones largos, por la guía de copy de LIT.
  */
+/** Viñeta de los bullets: un punto amarillo, el del lenguaje del portal. */
+function Dot() {
+  return (
+    <span
+      aria-hidden
+      className="mt-[6px] h-[5px] w-[5px] shrink-0 rounded-full bg-[color:var(--color-bold-yellow)]"
+    />
+  );
+}
+
 export function SubscribeBanner() {
   // El titular lleva el 25% en amarillo, o sea markup, y <T> solo admite
   // strings. Se resuelve con el idioma en la mano, como el resto del portal.
   const lang = useLangValue();
+  const benefits =
+    lang === "es"
+      ? [
+          "Sin permanencia, cancelas cuando quieras",
+          "Salta o adelanta cualquier caja",
+          "Cambia de plan y de sabor",
+          "Elige tú la fecha de entrega",
+        ]
+      : [
+          "No commitment, cancel whenever you want",
+          "Skip or bring forward any box",
+          "Change plan and flavour",
+          "Pick your own delivery date",
+        ];
   return (
     <section
-      className="relative isolate mx-6 mb-3 overflow-hidden rounded-[20px] bg-[#16130C] px-5 py-5 text-[#F2EEE1] md:mx-0 md:px-7 md:py-5"
+      className="relative isolate mx-6 mb-3 overflow-hidden rounded-[20px] bg-[#16130C] px-5 py-6 text-[#F2EEE1] md:mx-0 md:px-7 md:py-7"
       style={{ isolation: "isolate" }}
     >
       {/* Mismo fondo que ProfileSurveyBanner: foto de marca en gris con el
@@ -75,7 +99,7 @@ export function SubscribeBanner() {
         }}
       />
 
-      <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between md:gap-6">
+      <div className="relative flex flex-col gap-5 md:flex-row md:items-start md:justify-between md:gap-8">
         <div className="min-w-0">
           {/* Una línea, con el 25% en el peso fuerte: es lo único que tiene que
               quedarse de un vistazo. */}
@@ -100,15 +124,34 @@ export function SubscribeBanner() {
           </p>
           <p className="mt-1.5 text-[12px] leading-[1.45] text-[#b3ab98]">
             <T
-              en="LIT delivered automatically. No commitment, cancel from here whenever you want."
-              es="LIT en tu casa automáticamente. Sin permanencia, cancelas desde aquí cuando quieras."
+              en="LIT at your door automatically, without having to remember to order."
+              es="LIT en tu casa automáticamente, sin tener que acordarte de pedirlo."
             />
           </p>
+
+          {/* Los bullets. Dos columnas en desktop para que la banda crezca a lo
+              ancho y no a lo alto, que es lo que la mantiene siendo una banda y
+              no la tarjeta de media pantalla del intento anterior.
+
+              Son los cuatro que el portal cumple de verdad y que este cliente va
+              a tener delante en cuanto entre. La permanencia baja aquí desde el
+              subtítulo: decirla en los dos sitios era repetirse. */}
+          <ul className="mt-4 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+            {benefits.map((b) => (
+              <li
+                key={b}
+                className="flex items-start gap-2 text-[12px] leading-[1.4] text-[#F2EEE1]/90"
+              >
+                <Dot />
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
         </div>
 
         <a
           href={SUBSCRIBE_URL}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
+          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:mt-1 md:w-auto"
           style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
           <T en="Subscribe" es="Suscribirme" />

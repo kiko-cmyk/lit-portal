@@ -34,6 +34,7 @@ import {
 import { FREQUENCIES, FREQUENCY_DAYS, longestFrequencyWithin } from "@/lib/plan-options";
 import {
   ALL_KLAVIYO_PROPS,
+  MULTI_SEP,
   DERIVED_KLAVIYO_PROPS,
   PROFILE_QUESTIONS,
   QUESTIONS_BY_KEY,
@@ -204,6 +205,55 @@ check(
   !vGate.ok && vGate.notAsked.includes("deporte_tipo"),
 );
 check("y no la deja en clean", vGate.clean["deporte_tipo"] === undefined);
+
+// ── Multi-respuesta (Juan 2026-09-22) ────────────────────────────────────────
+console.log("\n── multi-respuesta ──");
+
+// EL ANCLA MÁS IMPORTANTE: si un valor canónico llevara el separador dentro, al
+// guardar "A;B" y volver a partir saldrían trozos que no son opciones, y la
+// respuesta se rechazaría o se guardaría a medias. Silencioso en los dos casos.
+const conSeparador = PROFILE_QUESTIONS.flatMap((q) =>
+  q.options.filter((o) => o.value.includes(MULTI_SEP)).map((o) => `${q.key}:${o.value}`),
+);
+check(
+  `ningún valor canónico contiene el separador "${MULTI_SEP}"`,
+  conSeparador.length === 0,
+  conSeparador.join(","),
+);
+
+check(
+  "las dos preguntas pedidas son multi",
+  QUESTIONS_BY_KEY["uso"]?.multi === true && QUESTIONS_BY_KEY["sabor_favorito"]?.multi === true,
+);
+
+const vMulti = validateAnswers({ uso: "Deporte;Resaca" });
+check("acepta dos valores válidos", vMulti.ok && vMulti.clean["uso"] === "Deporte;Resaca");
+
+// El orden se NORMALIZA al del banco: si dependiera del orden de los toques,
+// dos clientes que marcaron lo mismo generarían cadenas distintas y los
+// segmentos de Klaviyo por igualdad se partirían en variantes.
+const vOrden = validateAnswers({ uso: "Resaca;Deporte" });
+check(
+  "normaliza al orden del banco",
+  vOrden.ok && vOrden.clean["uso"] === "Deporte;Resaca",
+  vOrden.clean["uso"],
+);
+
+check("una sola opción sigue valiendo", validateAnswers({ uso: "Deporte" }).ok);
+check(
+  "si UNA parte es inválida se rechaza entera",
+  !validateAnswers({ uso: "Deporte;Astronauta" }).ok,
+);
+check("la cadena vacía se rechaza", !validateAnswers({ uso: "" }).ok);
+check(
+  "una pregunta NO multi sigue rechazando el multi",
+  !validateAnswers({ edad: "25-34;35-44" }).ok,
+);
+
+// La multi viaja a Klaviyo como la cadena entera: la propiedad `cs_*` es texto
+// y allí se segmenta con "contiene".
+const propsMulti = klaviyoProps({ uso: "Deporte;Resaca" });
+check("cs_uso lleva la cadena completa", propsMulti["cs_uso"] === "Deporte;Resaca");
 
 check("un tipo que no es objeto se rechaza entero", !validateAnswers("nope").ok);
 check("un array se rechaza entero", !validateAnswers(["uso"]).ok);
