@@ -1442,15 +1442,25 @@ const patchPlan = async (
       // Refresh the pre-armed intent with the real reason, for the operator
       // reading `last_error` and for the alert below.
       const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
-      alertSlackError({
-        path: "/api/subscription/plan",
-        code: "mix_inconsistent_state",
-        msg:
-          `sub ${sealSubscriptionId}: could not converge lines. desired=${JSON.stringify(targetPlan.lines)} ` +
-          `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
-          `If a charge fires before the cron converges, REFUND the duplicate line.`,
-        customerId: ctx.customerId,
-      });
+      // Con el intent escrito el caso YA tiene cola: mix-repair-drain converge
+      // cada 5 min y alerta él solo si agota MAX_ATTEMPTS o el TTL
+      // (mix_repair_failed / mix_repair_expired). Avisar aquí además era el
+      // mismo caso dos veces (LIT-470, regla «si ya tiene cola, el aviso se
+      // quita»). Sin cola sí se avisa: entonces nadie más lo va a mirar.
+      const inconsistentMsg =
+        `sub ${sealSubscriptionId}: could not converge lines. desired=${JSON.stringify(targetPlan.lines)} ` +
+        `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
+        `If a charge fires before the cron converges, REFUND the duplicate line.`;
+      if (scheduled) {
+        console.error("[plan-change] mix_inconsistent_state (queued for mix-repair-drain)", { sealSubscriptionId });
+      } else {
+        alertSlackError({
+          path: "/api/subscription/plan",
+          code: "mix_inconsistent_state",
+          msg: inconsistentMsg,
+          customerId: ctx.customerId,
+        });
+      }
       throw new ApiHttpError(
         502,
         "seal_inconsistent_state",
@@ -1536,41 +1546,68 @@ const patchPlan = async (
   }
 
   if (verified) {
-    const actualInterval = (verified.delivery_interval ?? "").toLowerCase().trim();
-    const expectedNormalized = expectedInterval.toLowerCase().trim();
-    const stripPlural = (s: string) => s.replace(/s\b/g, "").trim();
-    const intervalMatches =
-      stripPlural(actualInterval) === stripPlural(expectedNormalized);
+    const assess = (sub: SealSubscription) => {
+      const actualInterval = (sub.delivery_interval ?? "").toLowerCase().trim();
+      const expectedNormalized = expectedInterval.toLowerCase().trim();
+      const stripPlural = (s: string) => s.replace(/s\b/g, "").trim();
+      const intervalMatches =
+        stripPlural(actualInterval) === stripPlural(expectedNormalized);
 
-    // Verify the whole LINE SET, not just one item: same variants, same quantities,
-    // same per-unit prices, every line still recurring, and every line on the target
-    // selling plan. Checking only the first item is how a multi-line sub could pass
-    // verification while silently holding a duplicate.
-    const finalLines = getLines(verified);
-    const wanted = new Map(targetPlan.lines.map((l) => [String(l.variantId), l]));
-    const linesMatch =
-      finalLines.length === targetPlan.lines.length &&
-      finalLines.every((l) => {
-        const t = wanted.get(String(l.variantId));
-        return (
-          !!t &&
-          Number(l.quantity) === t.quantity &&
-          priceToCents(l.unitPrice) === t.unitPriceCents
-        );
-      });
+      // Verify the whole LINE SET, not just one item: same variants, same quantities,
+      // same per-unit prices, every line still recurring, and every line on the target
+      // selling plan. Checking only the first item is how a multi-line sub could pass
+      // verification while silently holding a duplicate.
+      const finalLines = getLines(sub);
+      const wanted = new Map(targetPlan.lines.map((l) => [String(l.variantId), l]));
+      const linesMatch =
+        finalLines.length === targetPlan.lines.length &&
+        finalLines.every((l) => {
+          const t = wanted.get(String(l.variantId));
+          return (
+            !!t &&
+            Number(l.quantity) === t.quantity &&
+            priceToCents(l.unitPrice) === t.unitPriceCents
+          );
+        });
 
-    // THE MONEY ASSERTION. Σ quantity × unit price must equal the tier total, so a mix
-    // costs exactly what the equivalent pure plan costs. Deliberately computed from
-    // the items and NOT from Seal's `total_value`, which nets out discount codes and
-    // would false-positive for anyone on the retention 15%.
-    const actualCents = getChargeTotalCents(verified);
-    const moneyMatches = Math.abs(actualCents - targetPlan.totalCents) <= 1;
+      // THE MONEY ASSERTION. Σ quantity × unit price must equal the tier total, so a mix
+      // costs exactly what the equivalent pure plan costs. Deliberately computed from
+      // the items and NOT from Seal's `total_value`, which nets out discount codes and
+      // would false-positive for anyone on the retention 15%.
+      const actualCents = getChargeTotalCents(sub);
+      const moneyMatches = Math.abs(actualCents - targetPlan.totalCents) <= 1;
 
-    // A line that landed as one-time means its product isn't attached to the selling
-    // plan: it would ship once and vanish, silently changing what the customer gets.
-    const oneTimeLeak = (verified.items ?? []).some(
-      (it) => it.is_one_time_item && wanted.has(String(it.variant_id)),
-    );
+      // A line that landed as one-time means its product isn't attached to the selling
+      // plan: it would ship once and vanish, silently changing what the customer gets.
+      const oneTimeLeak = (sub.items ?? []).some(
+        (it) => it.is_one_time_item && wanted.has(String(it.variant_id)),
+      );
+
+      return { intervalMatches, finalLines, linesMatch, actualCents, moneyMatches, oneTimeLeak };
+    };
+    let assessed = assess(verified);
+    if (!assessed.intervalMatches || !assessed.linesMatch || !assessed.moneyMatches) {
+      // ¿Carrera o mentira? (LIT-470). Los dos `mix_price_mismatch` de septiembre
+      // (2835c vs 8505c, 2264c vs 6792c) son exactamente UNA unidad donde debía
+      // haber tres, leídas 500 ms después del edit. Antes de acusar a Seal se
+      // re-lee UNA vez a los 1,5 s: si entonces cuadra, era Seal aplicando la
+      // quantity tarde y se sigue como éxito; si no, la alerta va con las dos
+      // lecturas para que el diagnóstico deje de ser una hipótesis.
+      const again = await reReadAfterSettle(sealSubscriptionId, 1_500);
+      if (again) {
+        const second = assess(again);
+        const settled = second.intervalMatches && second.linesMatch && second.moneyMatches;
+        log("plan-verify-reread", {
+          sealSubscriptionId,
+          settled,
+          first: { cents: assessed.actualCents, lines: assessed.finalLines.map((l) => `${l.variantId}×${l.quantity}`) },
+          second: { cents: second.actualCents, lines: second.finalLines.map((l) => `${l.variantId}×${l.quantity}`) },
+        });
+        verified = again;
+        assessed = second;
+      }
+    }
+    const { intervalMatches, finalLines, linesMatch, actualCents, moneyMatches, oneTimeLeak } = assessed;
 
     if (!intervalMatches || !linesMatch || !moneyMatches || oneTimeLeak) {
       console.error("[plan-change] verification MISMATCH — Seal silent lie", {
@@ -1919,3 +1956,24 @@ function synthesizeNoOpSub(
 // silent re-poll. If we need server-side verification again later, ship
 // it as a separate light-weight call with a strict timeout (e.g.,
 // AbortController.signal after 2 s) so we never block the response.
+
+/**
+ * Segunda lectura de la sub tras un mismatch de verificación (LIT-470). Espera
+ * `waitMs` y vuelve a pedir la sub con 3 s de tope. `null` si no pudo leer: el
+ * caller sigue con la primera lectura, nunca peor que antes.
+ */
+async function reReadAfterSettle(
+  subId: Parameters<typeof seal.getSubscriptionById>[0],
+  waitMs: number,
+): Promise<SealSubscription | null> {
+  await new Promise((r) => setTimeout(r, waitMs));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3_000);
+  try {
+    return await seal.getSubscriptionById(subId, controller.signal);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
