@@ -27,9 +27,14 @@ import { SUBSCRIBE_URL } from "@/lib/storefront-links";
  * remata sin interrumpir.
  *
  * Comparte fondo con ProfileSurveyBanner a propósito, pero no se confunden:
- * aquel es alto, con párrafo y CTA blanco de "Empezar"; éste es una banda baja
- * con el 25% y un CTA amarillo. Y casi nunca coinciden, porque el de la
- * encuesta sale con la encuesta pendiente y éste solo sin suscripción.
+ * aquel es alto, con párrafo y CTA de "Empezar"; éste es una banda baja con el
+ * 25% y los cuatro bullets. Y casi nunca coinciden, porque el de la encuesta
+ * sale con la encuesta pendiente y éste solo sin suscripción.
+ *
+ * El CTA es blanco, el mismo que el de la encuesta (Juan 2026-09-22). Estuvo
+ * amarillo para separarlos, pero el amarillo ya trabaja dentro del banner
+ * marcando el "desde el 25%" y las viñetas, y en el botón competía con él. El
+ * blanco es el CTA del portal sobre fondo oscuro.
  *
  * ── Qué promete ──
  *
@@ -153,7 +158,7 @@ export function SubscribeBanner() {
 
         <a
           href={SUBSCRIBE_URL}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
+          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-sharp-white)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
           style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
           <T en="Subscribe" es="Suscribirme" />
