@@ -28,6 +28,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { WaxSeal } from "@/components/WaxSeal";
 import { frequencyLabel } from "@/lib/frequency-label";
 import {
   HELP_URL,
@@ -489,7 +490,31 @@ function QuestionBlock({
   );
 }
 
-// ── pantalla final: drops, tier y la propuesta de cadencia ───────────────────
+/**
+ * "22 de octubre" / "22 October". Del ISO CRUDO y no de un `Date`, por lo mismo
+ * que `formatShipDateEs`: `new Date(iso).toLocaleDateString()` se renderiza en
+ * la zona del navegador, así que a alguien al oeste de UTC le imprimiría el día
+ * anterior. Un cupón que parece caducar antes de tiempo es una reclamación.
+ */
+function formatExpiry(iso: string, lang: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return "";
+  const day = Number(m[3]);
+  const monthIdx = Number(m[2]) - 1;
+  const MESES_ES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+  ];
+  const MONTHS_EN = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  return lang === "es"
+    ? `${day} de ${MESES_ES[monthIdx]}`
+    : `${MONTHS_EN[monthIdx]} ${day}`;
+}
+
+// ── pantalla final: el cupón y la propuesta de cadencia ──────────────────────
 
 function DoneStep({
   result,
@@ -553,76 +578,88 @@ function DoneStep({
 
           Lo que manda ahora es el descuento, que es lo que el email promete y
           lo único de esta pantalla que el cliente puede usar hoy. */}
-      <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
-        <T en="Saved" es="Guardado" />
-      </div>
-      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
+      {/* Cabecera. Sin eyebrow "GUARDADO": era una etiqueta de estado de
+          sistema encima de un "Gracias", o sea dos formas de decir lo mismo y
+          ninguna dirigida al cliente. El titular basta.
+
+          Y el párrafo YA NO anuncia el descuento ("y aquí tienes tu
+          descuento:"), porque la tarjeta de abajo se anuncia sola: el sello es
+          lo primero que se ve. Presentarlo dos veces restaba fuerza a las dos.
+          Dice lo que hacemos con las respuestas, que es lo único que el
+          titular no cuenta. */}
+      <h1 className="font-display text-4xl font-black uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]">
         <T en="Thank you" es="Gracias" />
       </h1>
 
-      <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
-        {result.discount ? (
-          <T
-            en="We'll use this to fine-tune what we send you. And here's your discount:"
-            es="Lo usaremos para ajustar lo que te mandamos. Y aquí tienes tu descuento:"
-          />
-        ) : (
-          <T
-            en="We'll use this to fine-tune what we send you."
-            es="Lo usaremos para ajustar lo que te mandamos."
-          />
-        )}
+      <p className="mt-3 max-w-sm text-[15px] leading-[1.55] text-[color:var(--color-lit-grey)]/80">
+        <T
+          en="We'll use what you told us to tune what we send you: when, how much and which flavour."
+          es="Usaremos lo que nos has contado para ajustar lo que te mandamos: cuándo, cuánto y de qué sabor."
+        />
       </p>
-      {/* ── EL CUPÓN ──
-          El email "Perfilado B" (one-shot) promete literalmente: "te espera un
-          descuento para tu próxima caja. Lo verás en la última pantalla, con tu
-          código listo para usar". Este bloque es lo que cumple esa frase, así
-          que no puede faltar ni quedar escondido.
 
-          Tres estados, y los tres distintos a propósito:
-            1. hay código        → se enseña, grande y copiable.
-            2. no le tocaba      → no se menciona nada. Un suscriptor no tiene
-                                   por qué enterarse de que existe un cupón de
-                                   recuperación que no va a recibir.
-            3. le tocaba y falló → "te lo mandamos por correo". Nunca un error
-                                   en crudo: el cliente ya ha hecho su parte. */}
+      {/* ── EL CUPÓN, COMO ALGO SELLADO ──
+          El email promete "tu código listo para usar", así que este bloque es
+          el que cumple la frase y manda en la pantalla.
+
+          Rediseñado el 2026-09-22. El anterior era una tarjeta oscura con el
+          código dentro de un recuadro de borde DISCONTINUO, y ese borde
+          significa exactamente una cosa en el mundo de los cupones: "recorte
+          por aquí". Leía como un vale de supermercado, no como algo de LIT.
+
+          La idea de ahora: no es un ticket que se recorta, es algo SELLADO y
+          entregado a esta persona. Por eso el WaxSeal de la marca, el mismo de
+          la hero del Hub, preside la tarjeta con su texto girando en el borde,
+          y el código va debajo sobre una línea limpia. Sin cajas dentro de
+          cajas: una sola superficie, un solo gesto.
+
+          Tres estados, distintos a propósito:
+            1. hay código        → la tarjeta sellada.
+            2. no le tocaba      → nada. Un suscriptor no tiene por qué saber
+                                   que existe un cupón que no va a recibir.
+            3. le tocaba y falló → "te lo mandamos por correo", nunca un error. */}
       {result.discount && (
-        // Tarjeta OSCURA y a ancho completo: es lo único de esta pantalla que
-        // el cliente se lleva, así que manda sobre el resto en vez de ser una
-        // caja clara más sobre fondo crema. Mismo lenguaje que el banner que le
-        // trajo hasta aquí, para que se reconozca como la misma conversación.
-        <div
-          className="relative mt-7 overflow-hidden rounded-[22px] px-6 py-7 text-center text-[#F2EEE1]"
-          style={{
-            background:
-              "linear-gradient(135deg, var(--color-lit-grey), var(--color-dark-indigo))",
-            boxShadow: "0 22px 46px -20px rgba(30,24,12,0.5)",
-          }}
-        >
-          <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]">
-            <T en="Yours, to use whenever" es="Tuyo, para cuando quieras" />
-          </div>
-
-          {/* El importe, en grande: es el dato que decide si esto le interesa. */}
-          <div className="mt-2 font-display text-5xl font-black uppercase leading-none tracking-[-0.02em]">
-            <T en="5 € off" es="5 € de descuento" />
-          </div>
-          <div className="mt-1.5 text-[13px] text-[#b3ab98]">
-            <T en="on your next order" es="en tu próximo pedido" />
-          </div>
-
-          {/* `select-all` para que un toque lo seleccione entero: esto se copia
-              a mano en el checkout desde el móvil. Sobre la banda oscura el
-              código va en una pastilla clara para que se lea como un campo. */}
-          <div className="mt-5 select-all rounded-[14px] border border-dashed border-[#F2EEE1]/35 bg-[#F2EEE1]/10 px-4 py-3.5 font-display text-2xl font-black uppercase tracking-[0.12em]">
-            {result.discount.code}
-          </div>
-
-          <div className="mt-3 text-[12px] text-[#b3ab98]">
-            <T
-              en={`Valid until ${new Date(result.discount.expiresAt).toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { day: "numeric", month: "long" })}`}
-              es={`Válido hasta el ${new Date(result.discount.expiresAt).toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { day: "numeric", month: "long" })}`}
+        // SIN `overflow-hidden`: el sello sobresale por arriba a propósito y
+        // recortarlo lo dejaba partido por la mitad. El contenedor exterior
+        // aporta el margen para que el disco tenga sitio donde asomar.
+        <div className="relative mt-14">
+          {/* El sello, montado a caballo del borde: entra en la tarjeta como se
+              posa un lacre sobre un sobre, no como un icono centrado dentro de
+              una caja. Absoluto y centrado, encima de la banda. */}
+          <div className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2">
+            <WaxSeal
+              size={96}
+              rim="5 € DE DESCUENTO · 5 € DE DESCUENTO · "
+              centerTop="5€"
+              centerBottom="PARA TI"
             />
+          </div>
+
+          <div
+            className="rounded-[24px] px-6 pb-7 pt-14 text-center text-[#F2EEE1]"
+            style={{
+              background:
+                "linear-gradient(150deg, var(--color-lit-grey) 10%, var(--color-dark-indigo))",
+              boxShadow: "0 24px 50px -22px rgba(30,24,12,0.55)",
+            }}
+          >
+
+          {/* El código ES el protagonista: sin recuadro, sobre la banda, con el
+              tracking abierto para que se lea carácter a carácter al teclearlo
+              en el checkout. `select-all` lo selecciona entero de un toque. */}
+            <div className="select-all font-display text-[30px] font-black uppercase leading-none tracking-[0.14em] sm:text-[34px]">
+              {result.discount.code}
+            </div>
+
+          {/* Una sola línea de apoyo, con la regla y la caducidad juntas. Antes
+              eran tres renglones separados (importe, "en tu próximo pedido",
+              caducidad) y competían entre ellos. */}
+            <div className="mx-auto mt-4 max-w-[19rem] border-t border-[#F2EEE1]/15 pt-4 text-[12px] leading-[1.6] text-[#b3ab98]">
+              <T
+                en={`5 € off your next order · valid until ${formatExpiry(result.discount.expiresAt, lang)}`}
+                es={`5 € en tu próximo pedido · válido hasta el ${formatExpiry(result.discount.expiresAt, lang)}`}
+              />
+            </div>
           </div>
         </div>
       )}
