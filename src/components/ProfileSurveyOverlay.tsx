@@ -528,12 +528,32 @@ function DoneStep({
   onClose: () => void;
 }) {
   const lang = useLangValue();
+  const t = useLang();
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [applied, setApplied] = useState<Subscription | null>(null);
   const [failed, setFailed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
   const offer = result.cadenceOffer;
+
+  /**
+   * Copia el código al portapapeles. Con la misma red que `LoginScreen`: la
+   * Clipboard API está bloqueada en algunos webviews de apps, y ahí un
+   * `prompt` deja al cliente seleccionarlo a mano en vez de dejarle tocando un
+   * texto que no hace nada.
+   */
+  const copyCode = async () => {
+    const code = result.discount?.code;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      window.prompt(t({ en: "Copy your code:", es: "Copia tu código:" }), code);
+    }
+  };
 
   const accept = async () => {
     if (!offer || !subscription) return;
@@ -588,13 +608,13 @@ function DoneStep({
           Dice lo que hacemos con las respuestas, que es lo único que el
           titular no cuenta. */}
       <h1 className="font-display text-4xl font-black uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]">
-        <T en="Thank you" es="Gracias" />
+        <T en="Thank you" es="Muchas gracias" />
       </h1>
 
       <p className="mt-3 max-w-sm text-[15px] leading-[1.55] text-[color:var(--color-lit-grey)]/80">
         <T
-          en="We'll use what you told us to tune what we send you: when, how much and which flavour."
-          es="Usaremos lo que nos has contado para ajustar lo que te mandamos: cuándo, cuánto y de qué sabor."
+          en="We'll use what you told us to improve and fit what we send you to what you actually need."
+          es="Usaremos lo que nos has contado para mejorar y poder ajustarnos al máximo a tus necesidades."
         />
       </p>
 
@@ -629,7 +649,7 @@ function DoneStep({
           <div className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2">
             <WaxSeal
               size={96}
-              rim="5 € DE DESCUENTO · 5 € DE DESCUENTO · "
+              rim="CUPÓN DESCUENTO · CUPÓN DESCUENTO · CUPÓN DESCUENTO · "
               centerTop="5€"
               centerBottom="PARA TI"
             />
@@ -647,8 +667,34 @@ function DoneStep({
           {/* El código ES el protagonista: sin recuadro, sobre la banda, con el
               tracking abierto para que se lea carácter a carácter al teclearlo
               en el checkout. `select-all` lo selecciona entero de un toque. */}
-            <div className="select-all font-display text-[30px] font-black uppercase leading-none tracking-[0.14em] sm:text-[34px]">
+            {/* El código ES el botón de copiar (Juan 2026-09-22). Un botón
+                aparte al lado obligaría a elegir entre dos cosas que hacen lo
+                mismo; así el gesto obvio, tocar el código, es el que funciona.
+                `select-all` se queda como red: si el portapapeles está
+                bloqueado (pasa en webviews de apps), un toque largo lo
+                selecciona entero igual.
+
+                La pista va DEBAJO y en pequeño, que es lo "sutil" que pedía
+                Juan: el código sigue mandando y la instrucción no compite. */}
+            <button
+              type="button"
+              onClick={copyCode}
+              aria-label={t({ en: "Copy discount code", es: "Copiar código de descuento" })}
+              className="block w-full select-all font-display text-[30px] font-black uppercase leading-none tracking-[0.14em] transition-opacity hover:opacity-80 sm:text-[34px]"
+            >
               {result.discount.code}
+            </button>
+
+            {/* Un solo hueco para los dos estados: sin esto, al cambiar "Copiar
+                cupón" por "Copiado" el bloque saltaba unos píxeles. */}
+            <div className="mt-2.5 h-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
+              {copied ? (
+                <T en="Copied" es="Copiado" />
+              ) : (
+                <span className="text-[#b3ab98]">
+                  <T en="Tap to copy" es="Toca para copiar el cupón" />
+                </span>
+              )}
             </div>
 
           {/* Una sola línea de apoyo, con la regla y la caducidad juntas. Antes
@@ -656,8 +702,8 @@ function DoneStep({
               caducidad) y competían entre ellos. */}
             <div className="mx-auto mt-4 max-w-[19rem] border-t border-[#F2EEE1]/15 pt-4 text-[12px] leading-[1.6] text-[#b3ab98]">
               <T
-                en={`5 € off your next order · valid until ${formatExpiry(result.discount.expiresAt, lang)}`}
-                es={`5 € en tu próximo pedido · válido hasta el ${formatExpiry(result.discount.expiresAt, lang)}`}
+                en={`Discount voucher for your next order · valid until ${formatExpiry(result.discount.expiresAt, lang)}.`}
+                es={`Cupón de descuento para tu próximo pedido · válido hasta el ${formatExpiry(result.discount.expiresAt, lang)}.`}
               />
             </div>
           </div>
