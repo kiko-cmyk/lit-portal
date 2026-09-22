@@ -1,6 +1,7 @@
 "use client";
 
 import { T, useLangValue } from "@/lib/i18n";
+import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import { SUBSCRIBE_URL } from "@/lib/storefront-links";
 
 /**
@@ -12,131 +13,105 @@ import { SUBSCRIBE_URL } from "@/lib/storefront-links";
  * encontraba el "BIENVENIDO A LIT". Ese enlace ahora rebota a Cuenta, así que
  * la oferta se quedaba sin ningún sitio donde aparecer.
  *
- * ── Por qué NO se viste como ProfileSurveyBanner (Juan, 2026-09-22) ──
+ * ── Forma: la banda oscura, y pequeña (Juan, 2026-09-22) ──
  *
- * El primer intento reusaba su banda oscura con la foto velada. Fuera: los dos
- * banners viven en la misma pantalla y con la misma ropa se leen como lo mismo,
- * cuando no lo son. Aquel pide un favor y no vende nada, y de hecho su CTA va
- * en blanco justo para no gritar. Éste vende. Copiarle la forma le quitaba a
- * cada uno lo que lo distingue.
+ * Dos intentos antes de éste. El primero copiaba entero el banner del
+ * formulario y se leían como lo mismo. El segundo se fue al extremo contrario,
+ * tarjeta clara con titular a 2,9rem y lista de tres beneficios: con forma
+ * propia, sí, pero ocupaba media pantalla para decir una cosa, y colocada donde
+ * estaba partía el cierre de la página.
  *
- * Así que aquí la forma es la de la pantalla que sustituye: fondo claro, el
- * titular grande de LIT y el descuento como protagonista. No es un patrón
- * nuevo, es el que el cliente de one-shot ya se encontraba antes.
+ * Lo que queda: el fondo oscuro de la encuesta, que es lo que le da el canteo,
+ * en una pieza baja de una sola línea de argumento. Va DESPUÉS del marquee
+ * LIT · PERFORM · REPEAT, así que el cierre de marca sigue cerrando y esto
+ * remata sin interrumpir.
+ *
+ * Comparte fondo con ProfileSurveyBanner a propósito, pero no se confunden:
+ * aquel es alto, con párrafo y CTA blanco de "Empezar"; éste es una banda baja
+ * con el 25% y un CTA amarillo. Y casi nunca coinciden, porque el de la
+ * encuesta sale con la encuesta pendiente y éste solo sin suscripción.
  *
  * ── Qué promete ──
  *
- * El 25% en grande porque es el argumento, y "desde" porque la escalera llega
- * al 45% a partir de 5 cajas (ver [[reference_lit_pricing_ladder]]: el
- * descuento vive en el precio de la variante, 25 / 40 / 45).
+ * El 25% porque es el argumento, y "desde" porque la escalera llega al 45% a
+ * partir de 5 cajas (ver [[reference_lit_pricing_ladder]]).
  *
- * Los tres beneficios de debajo son los que el portal cumple de verdad y que
- * este cliente ya tiene delante: saltar, adelantar, cambiar plan y sabor, y
- * cancelar cuando quiera. Deliberadamente NO se menciona el envío gratis: en la
- * PDP es un badge sin condiciones a la vista y no cuelga de la suscripción, así
- * que prometerlo aquí sería deuda.
+ * Un solo beneficio además del precio, el que más pesa para quien no se ha
+ * suscrito nunca: que no hay permanencia. Los otros (saltar, adelantar, cambiar
+ * plan y sabor) se cayeron con la lista: son buenos, pero de los que convencen
+ * DESPUÉS de entrar, y aquí lo que hay que quitar es el miedo a atarse.
+ *
+ * Sin envío gratis: en la PDP es un badge sin condiciones a la vista y no
+ * cuelga de la suscripción, así que prometerlo aquí sería deuda.
  *
  * Sin guiones largos, por la guía de copy de LIT.
  */
-
-function Check() {
-  return (
-    <svg
-      aria-hidden
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="mt-[3px] shrink-0 text-[color:var(--color-lit-grey)]"
-    >
-      <path d="M20 6L9 17l-5-5" />
-    </svg>
-  );
-}
-
 export function SubscribeBanner() {
+  // El titular lleva el 25% en amarillo, o sea markup, y <T> solo admite
+  // strings. Se resuelve con el idioma en la mano, como el resto del portal.
   const lang = useLangValue();
-  const benefits =
-    lang === "es"
-      ? [
-          "Salta, adelanta o cambia la fecha de tu próxima caja",
-          "Cambia de plan y de sabor cuando te apetezca",
-          "Sin permanencia, cancelas desde aquí en dos toques",
-        ]
-      : [
-          "Skip, bring forward or move your next box",
-          "Change plan and flavour whenever you feel like it",
-          "No commitment, cancel from here in two taps",
-        ];
-
   return (
-    <section className="mx-6 mb-3 overflow-hidden rounded-[24px] border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-6 py-7 md:mx-0 md:px-8 md:py-8">
-      {/* `items-start` y no `items-center`: centrado contra la columna de texto
-          (titular + párrafo + tres beneficios), el botón se quedaba flotando a
-          media altura con un vacío debajo. Arriba queda a la altura del titular,
-          que es lo que el ojo lee primero. */}
-      <div className="md:flex md:items-start md:justify-between md:gap-10">
-        <div className="min-w-0">
-          <span
-            className="font-semibold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-          >
-            <T en="Subscription" es="Suscripción" />
-          </span>
+    <section
+      className="relative isolate mx-6 mb-3 overflow-hidden rounded-[20px] bg-[#16130C] px-5 py-5 text-[#F2EEE1] md:mx-0 md:px-7 md:py-5"
+      style={{ isolation: "isolate" }}
+    >
+      {/* Mismo fondo que ProfileSurveyBanner: foto de marca en gris con el
+          degradado cerrado por la izquierda, que es donde va el texto. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10 bg-cover"
+        style={{
+          backgroundImage: `url(${MEMBER_PHOTO_DATA_URI})`,
+          backgroundPosition: "center 32%",
+          filter: "grayscale(1)",
+        }}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          background:
+            "linear-gradient(100deg, rgba(13,10,6,.92) 30%, rgba(13,10,6,.78) 68%, rgba(13,10,6,.55))",
+        }}
+      />
 
-          {/* El titular de la pantalla que esto sustituye: Clash Display, negro,
-              en caja alta y a dos líneas. El "25%" es lo que se ve primero. */}
-          <h2
-            className="mt-3 font-display font-medium uppercase leading-[0.9] tracking-[-0.03em] text-[color:var(--color-lit-grey)]"
-            style={{ fontSize: "clamp(2rem, 7vw, 2.9rem)" }}
-          >
+      <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between md:gap-6">
+        <div className="min-w-0">
+          {/* Una línea, con el 25% en el peso fuerte: es lo único que tiene que
+              quedarse de un vistazo. */}
+          <p className="font-display text-[17px] font-semibold uppercase leading-[1.15] tracking-[-0.01em] md:text-[19px]">
             {lang === "es" ? (
               <>
-                Ahorra desde
-                <br />
-                el 25% en cada caja
+                Ahorra{" "}
+                <span className="text-[color:var(--color-bold-yellow)]">
+                  desde el 25%
+                </span>{" "}
+                en cada caja
               </>
             ) : (
               <>
-                Save 25% or more
-                <br />
+                Save{" "}
+                <span className="text-[color:var(--color-bold-yellow)]">
+                  25% or more
+                </span>{" "}
                 on every box
               </>
             )}
-          </h2>
-
-          <p className="mt-4 max-w-md text-[14px] leading-[1.55] text-[color:var(--color-warm-gray)]">
+          </p>
+          <p className="mt-1.5 text-[12px] leading-[1.45] text-[#b3ab98]">
             <T
-              en="Get LIT automatically, without having to remember to order. The more boxes on your plan, the bigger the discount."
-              es="Recibe LIT automáticamente, sin tener que acordarte de pedirlo. Cuantas más cajas lleve tu plan, mayor es el descuento."
+              en="LIT delivered automatically. No commitment, cancel from here whenever you want."
+              es="LIT en tu casa automáticamente. Sin permanencia, cancelas desde aquí cuando quieras."
             />
           </p>
-
-          <ul className="mt-5 flex flex-col gap-2.5">
-            {benefits.map((b) => (
-              <li
-                key={b}
-                className="flex items-start gap-2.5 text-[13px] leading-[1.45] text-[color:var(--color-lit-grey)]"
-              >
-                <Check />
-                <span>{b}</span>
-              </li>
-            ))}
-          </ul>
         </div>
 
-        {/* En desktop el CTA se va a la derecha, centrado con el bloque. En
-            móvil cae debajo a ancho completo, que es donde cae el pulgar. */}
         <a
           href={SUBSCRIBE_URL}
-          className="mt-7 inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-lit-grey)] px-7 py-4 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] transition-transform duration-200 ease-out hover:-translate-y-[2px] active:translate-y-0 md:mt-6 md:w-auto"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
+          className="inline-flex w-full shrink-0 items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0 md:w-auto"
+          style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
         >
-          <T en="Start my subscription" es="Activar mi suscripción" />
+          <T en="Subscribe" es="Suscribirme" />
         </a>
       </div>
     </section>
