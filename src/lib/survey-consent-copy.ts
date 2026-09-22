@@ -63,6 +63,14 @@ export const SURVEY_CONSENT = {
  * nombre del proveedor, que al cliente no le dice nada. Si algún día se deja de
  * escribir en Klaviyo, esta frase hay que revisarla: pasaría a sobrar.
  *
+ * La viñeta "Y si cambias de idea: puedes cambiarlas o borrarlas volviendo aquí"
+ * se quitó el 2026-09-22 porque ERA FALSA. El endpoint de borrado existe
+ * (api/survey/profile/delete) pero ninguna pantalla lo llama, y al contestar la
+ * tarjeta desaparece de Cuenta (`!answered`), así que el cliente tampoco puede
+ * reabrir el formulario para corregir nada. Prometer las dos cosas en un aviso
+ * de privacidad es exactamente lo que no se puede hacer. Si algún día se
+ * enchufa el borrado a la UI, la viñeta vuelve.
+ *
  * La viñeta de "todas son opcionales y te llevas los 50 drops" se quitó el
  * 2026-09-10: lo de opcionales lo dice ahora la propia pantalla, en grande, y
  * los drops no se anuncian mientras la función no esté visible para el cliente.
@@ -72,8 +80,8 @@ export const SURVEY_CONSENT = {
 export const SURVEY_NOTICE = {
   es: {
     intro:
-      "Cada cuerpo tiene su ritmo y el tuyo no lo conocemos todavía. Cuéntanoslo y " +
-      "ajustamos lo que te mandamos: cuándo, cuánto y de qué sabor.",
+      "Unas preguntas rápidas sobre cómo tomas LIT. Nos ayudan a mejorar y a " +
+      "ajustarnos al máximo a lo que necesitáis.",
     // Etiqueta + valor por separado, no una frase con dos puntos: así la
     // pantalla puede pintar la etiqueta como tal y el aviso se ESCANEA en vez
     // de leerse. Ver el bloque en ProfileSurveyOverlay.
@@ -87,13 +95,12 @@ export const SURVEY_NOTICE = {
           "nadie más.",
       },
       { k: "Cuánto las guardamos", v: "Mientras tengas cuenta activa con nosotros." },
-      { k: "Y si cambias de idea", v: "Puedes cambiarlas o borrarlas volviendo aquí." },
     ],
   },
   en: {
     intro:
-      "Every body has its own rhythm and we don't know yours yet. Tell us, and we'll " +
-      "tune what we send you: when, how much and which flavour.",
+      "A few quick questions about how you drink LIT. They help us improve and get " +
+      "closer to what you actually need.",
     bullets: [
       { k: "Who handles them", v: "LIT Hydration España S.L." },
       {
@@ -103,7 +110,6 @@ export const SURVEY_NOTICE = {
           "outside the EU. We don't sell them or pass them to anyone else.",
       },
       { k: "How long we keep them", v: "As long as your account with us is active." },
-      { k: "If you change your mind", v: "You can change or delete them by coming back here." },
     ],
   },
 } as const;

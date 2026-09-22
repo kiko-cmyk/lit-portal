@@ -201,8 +201,17 @@ export function ProfileSurveyOverlay({
                 un titular de dos líneas el interlineado corto remata el bloque.
                 El texto es lo primero que se lee del formulario y estaba siendo
                 lo peor maquetado. */}
-            <h1 className="font-display text-[34px] font-black uppercase leading-[1.12] tracking-normal text-[color:var(--color-lit-grey)] sm:text-[40px]">
-              <T en="Tell us how you drink LIT" es="Cuéntanos cómo tomas LIT" />
+            {/* "Cuéntanos sobre ti", igual que el banner que trae hasta aquí
+                (Juan 2026-09-22): tres palabras caben en una línea y el titular
+                deja de partirse. `word-spacing` positivo porque Clash Display
+                en negra junta mucho las palabras y en mayúsculas se leen como
+                un bloque; el aire va ENTRE palabras, no entre letras, que es lo
+                que pedía Juan. */}
+            <h1
+              className="font-display text-[34px] font-black uppercase leading-[1.12] tracking-normal text-[color:var(--color-lit-grey)] sm:text-[40px]"
+              style={{ wordSpacing: "0.12em" }}
+            >
+              <T en="Tell us about you" es="Cuéntanos sobre ti" />
             </h1>
 
             {/* La frase de entrada, al tamaño del cuerpo del portal y en el
@@ -224,7 +233,10 @@ export function ProfileSurveyOverlay({
                 },
               ].map((it) => (
                 <div key={it.k}>
-                  <div className="font-display text-[22px] font-bold uppercase leading-none tracking-normal text-[color:var(--color-lit-grey)]">
+                  {/* `font-semibold` y no `font-bold`: en Clash Display a 22px
+                      en mayúsculas, la negrita competía con el titular y estos
+                      tres datos son apoyo, no titulares. */}
+                  <div className="font-display text-[21px] font-semibold uppercase leading-none tracking-normal text-[color:var(--color-lit-grey)]">
                     {it.k}
                   </div>
                   {/* 11px y no 10: la condensada a 10px con tracking .22em se
@@ -258,7 +270,12 @@ export function ProfileSurveyOverlay({
               >
                 <T en="Your answers" es="Tus respuestas" />
               </div>
-              <dl className="grid gap-2 sm:grid-cols-2">
+              {/* Una columna: todas al MISMO ancho (Juan 2026-09-22). En dos
+                  columnas, la caja larga ocupaba la fila entera y las cortas
+                  media, así que la rejilla se veía descuadrada. Con tres
+                  viñetas, apilarlas cuesta menos alto de lo que parece y la
+                  lectura es de arriba abajo, que es como se lee un aviso. */}
+              <dl className="grid gap-2">
                 {notice.bullets.map((b) => (
                   <div
                     key={b.k}
@@ -271,9 +288,7 @@ export function ProfileSurveyOverlay({
                     // las cajas no se distinguían del fondo y el texto quedaba
                     // en 3,5:1 de contraste, por debajo del 4,5:1 que exige
                     // WCAG AA para cuerpo pequeño. Medido, no estimado.
-                    className={`rounded-[16px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-sharp-white)] px-4 py-3.5 ${
-                      b.v.length > 90 ? "sm:col-span-2" : ""
-                    }`}
+                    className="rounded-[16px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-sharp-white)] px-4 py-3.5"
                   >
                     {/* 11px y color pleno: a 9,5px y al 70% la etiqueta era un
                         rayado, no una palabra. */}
