@@ -66,7 +66,7 @@ export function BottomNav() {
   const pathname = usePathname();
   const lang = useLangValue();
   const t = useLang();
-  const { accountOnly } = useSubscriptionSwitch();
+  const { accountOnly, hasSubscription } = useSubscriptionSwitch();
   // Match the active route against the user-visible slug in EITHER locale —
   // usePathname returns the localized slug (mi-lit / cuenta / coleccion), not
   // the canonical EN one, so a plain "=== canonical" check never matched for
@@ -89,20 +89,35 @@ export function BottomNav() {
       {VISIBLE_ITEMS.map((it) => {
         const active = current === it.route;
         const icon = NAV_ICONS[it.route];
-        if (it.inactive) {
+        // Suscripción apagada para quien no tiene ninguna (Juan 2026-09-22).
+        // Mismo tratamiento que la Colección — gris y sin pulsar — pero SIN
+        // "Pronto": ahí no hay nada esperando a estrenarse, simplemente no es
+        // suya. Lo que la enciende es suscribirse, y de eso ya habla el banner
+        // de Cuenta.
+        const locked = it.route === "home" && !hasSubscription;
+        if (it.inactive || locked) {
           return (
             <span
               key={it.route}
               aria-disabled
               className="flex cursor-not-allowed flex-col items-center justify-center gap-1 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[color:var(--color-warm-gray)]/50"
-              title={t({ en: "Coming soon", es: "Próximamente" })}
+              title={
+                it.inactive
+                  ? t({ en: "Coming soon", es: "Próximamente" })
+                  : t({
+                      en: "Subscribe to unlock",
+                      es: "Suscríbete para activarlo",
+                    })
+              }
             >
               <span className="flex h-8 w-8 items-center justify-center">{icon}</span>
               <span className="flex items-center gap-1">
                 {t({ en: it.en, es: it.es })}
-                <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/60">
-                  {t({ en: "Soon", es: "Pronto" })}
-                </span>
+                {it.inactive && (
+                  <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/60">
+                    {t({ en: "Soon", es: "Pronto" })}
+                  </span>
+                )}
               </span>
             </span>
           );
@@ -143,7 +158,8 @@ export function TopNav() {
   const lang = useLangValue();
   const t = useLang();
   const current = activeRoute(pathname);
-  const { canSwitch, openChooser, accountOnly } = useSubscriptionSwitch();
+  const { canSwitch, openChooser, accountOnly, hasSubscription } =
+    useSubscriptionSwitch();
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
@@ -174,19 +190,30 @@ export function TopNav() {
           {VISIBLE_ITEMS.map((it) => {
             const active = current === it.route;
             const label = t({ en: it.en, es: it.es });
-            if (it.inactive) {
+            // Ver BottomNav: misma regla, misma ausencia de "PRONTO".
+            const locked = it.route === "home" && !hasSubscription;
+            if (it.inactive || locked) {
               return (
                 <span
                   key={it.route}
                   aria-disabled
-                  title={t({ en: "Coming soon", es: "Próximamente" })}
+                  title={
+                    it.inactive
+                      ? t({ en: "Coming soon", es: "Próximamente" })
+                      : t({
+                          en: "Subscribe to unlock",
+                          es: "Suscríbete para activarlo",
+                        })
+                  }
                   className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]/35"
                 >
                   <span aria-hidden className="inline-block h-[6px] w-[6px] rounded-full border border-current opacity-70" />
                   {label}
-                  <span className="ml-0.5 text-[8px] font-extrabold tracking-[0.2em] text-[color:var(--color-warm-gray)]/80">
-                    {t({ en: "SOON", es: "PRONTO" })}
-                  </span>
+                  {it.inactive && (
+                    <span className="ml-0.5 text-[8px] font-extrabold tracking-[0.2em] text-[color:var(--color-warm-gray)]/80">
+                      {t({ en: "SOON", es: "PRONTO" })}
+                    </span>
+                  )}
                 </span>
               );
             }

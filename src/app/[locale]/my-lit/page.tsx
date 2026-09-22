@@ -34,6 +34,7 @@ import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
+import { SUBSCRIBE_URL } from "@/lib/storefront-links";
 import { FREQUENCIES } from "@/lib/plan-options";
 import type {
   CustomerProfile,
@@ -215,7 +216,12 @@ export default function HubPage() {
     } catch (e) {
       const code = (e as { code?: string }).code;
       if (code === "reactivation_window_expired" || code === "second_cancel_no_reactivation") {
-        window.location.href = "https://litsalt.com/products/lit-subscription";
+        // `lit-subscription` no existe en el catálogo y llevaba dando 404
+        // (comprobado contra el sitemap 2026-09-22: los handles vivos son
+        // lit-daily-hydration y lit-daily-hydration-compra-unica). Es la salida
+        // de quien YA no puede reactivar, así que el 404 caía justo sobre quien
+        // quería volver y no tenía otra puerta.
+        window.location.href = SUBSCRIBE_URL;
         return;
       }
       console.error("[hub] reactivate failed", e);

@@ -27,11 +27,22 @@ type SubscriptionSwitch = {
   canSwitch: boolean;
   openChooser: () => void;
   accountOnly: boolean;
+  /**
+   * ¿Tiene algo que gestionar en Suscripción? Falso solo para quien no tiene
+   * nada que tocar ahí: compró one-shot, se registró sin comprar, o canceló
+   * hace tanto que ya no puede reactivar. El nav apaga la pestaña con esto.
+   *
+   * Arranca en `true` a propósito: mientras no se sepa, la pestaña se queda
+   * viva. Apagarla de más deja a un suscriptor sin su suscripción; dejarla
+   * encendida de más solo cuesta un rebote a Cuenta, que ya funciona.
+   */
+  hasSubscription: boolean;
 };
 const SwitchContext = createContext<SubscriptionSwitch>({
   canSwitch: false,
   openChooser: () => {},
   accountOnly: false,
+  hasSubscription: true,
 });
 export function useSubscriptionSwitch(): SubscriptionSwitch {
   return useContext(SwitchContext);
@@ -113,7 +124,11 @@ function isTransient(err: unknown): boolean {
 const GATE_ATTEMPT_TIMEOUT_MS = 8_000;
 const GATE_TOTAL_BUDGET_MS = 25_000;
 
-async function loadSubs(): Promise<{ subs: Subscription[]; isB2B: boolean }> {
+async function loadSubs(): Promise<{
+  subs: Subscription[];
+  isB2B: boolean;
+  canReactivate: boolean;
+}> {
   const delays = [600, 1200, 2000, 3000];
   const startedAt = Date.now();
   let lastErr: unknown;
@@ -121,11 +136,18 @@ async function loadSubs(): Promise<{ subs: Subscription[]; isB2B: boolean }> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), GATE_ATTEMPT_TIMEOUT_MS);
     try {
-      const d = await api<{ subscriptions: Subscription[]; isB2B?: boolean }>(
-        "/api/subscriptions",
-        { signal: ctrl.signal },
-      );
-      return { subs: d.subscriptions ?? [], isB2B: d.isB2B === true };
+      const d = await api<{
+        subscriptions: Subscription[];
+        isB2B?: boolean;
+        canReactivate?: boolean;
+      }>("/api/subscriptions", { signal: ctrl.signal });
+      return {
+        subs: d.subscriptions ?? [],
+        isB2B: d.isB2B === true,
+        // Ausente (respuesta cacheada de antes de este campo) => se asume que
+        // sí, que es el lado que nunca cierra una puerta.
+        canReactivate: d.canReactivate !== false,
+      };
     } catch (err) {
       lastErr = err;
       if (
@@ -198,10 +220,16 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   // the right nav — NOT from a useState initialiser, which would read
   // localStorage during render and hydrate differently from the server HTML.
   const [accountOnly, setAccountOnly] = useState(false);
+  // Ver el comentario del contexto: `true` hasta que se demuestre lo contrario.
+  const [hasSubscription, setHasSubscription] = useState(true);
 
   const refresh = useCallback(async (): Promise<Subscription[]> => {
-    const { subs: list, isB2B } = await loadSubs();
+    const { subs: list, isB2B, canReactivate } = await loadSubs();
     setSubs(list);
+    // Nada gestionable Y nada que reactivar = no le queda nada en Suscripción.
+    // Un pausado NO cae aquí: `manageable` lo incluye, y su tarjeta de reanudar
+    // vive justo en esa pestaña.
+    setHasSubscription(list.length > 0 || canReactivate);
     writeHint(list.length > 1);
     setHintMulti(list.length > 1);
     // Only a B2B customer with NOTHING to manage gets the account-only portal.
@@ -312,7 +340,9 @@ export function SubscriptionGate({ children }: { children: ReactNode }) {
   // and the mobile header pill on Hub/Account) so it never floats over the user
   // chip. The gate just provides the context; it renders no button of its own.
   return (
-    <SwitchContext.Provider value={{ canSwitch, openChooser, accountOnly }}>
+    <SwitchContext.Provider
+      value={{ canSwitch, openChooser, accountOnly, hasSubscription }}
+    >
       {children}
     </SwitchContext.Provider>
   );

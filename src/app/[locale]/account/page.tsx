@@ -10,6 +10,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
+import { SubscribeBanner } from "@/components/SubscribeBanner";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SignOutPill, SwitchAccountRow } from "@/components/SwitchAccount";
@@ -494,6 +495,7 @@ export default function AccountPage() {
           <ProfileSurveyBanner onStart={() => setSurveyOpen(true)} />
         )}
 
+
         {justSkipped && subscription?.nextShipDate && (
           <div className="mx-6 mb-3 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
             <span className="text-[12px] text-[color:var(--color-lit-grey)]">
@@ -862,6 +864,28 @@ export default function AccountPage() {
             ni menos"). El `mt-7 md:mt-9` que llevaba antes hacía este hueco más
             grande que los demás. */}
         <OrdersSection orders={orders} />
+
+        {/* La invitación a suscribirse, para quien no tiene NINGUNA suscripción
+            (Juan 2026-09-22). Ocupa el hueco que deja la pantalla de bienvenida
+            de Mi LIT, que desde hoy nadie visita porque el enlace de la tienda
+            rebota aquí.
+
+            ABAJO DEL TODO y no bajo la cabecera (Juan 2026-09-22): quien entra
+            viene a ver lo suyo, sus datos y sus pedidos, así que la oferta se
+            lee después de eso y no por delante. Va detrás de "Mis pedidos"
+            porque es el último bloque con contenido de la pantalla para este
+            cliente (la zona de cancelar solo existe con suscripción activa), y
+            antes del Marquee, que es el cierre de la página.
+
+            `subscription == null` es la condición exacta: /api/subscription
+            devuelve la más reciente aunque esté cancelada, así que sólo es null
+            cuando de verdad no hay nada. Por eso NO se usa `!subActive`, que
+            también es cierto para un cancelado y le pondría un anuncio encima
+            del aviso de su propia cancelación.
+
+            Fuera para el mayorista: el partner B2B compra por pedido, no por
+            plan, y ya tuvo su propio lío con el enlace equivocado de retail. */}
+        {!accountOnly && subscription == null && <SubscribeBanner />}
 
         <Marquee />
 
