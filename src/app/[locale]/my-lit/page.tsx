@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BottomNav, TopNav } from "@/components/BottomNav";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
@@ -19,7 +19,6 @@ import {
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { SectionDivider } from "@/components/SectionDivider";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
-import { SwitchAccountLink } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 
 // Overlays are modal-only (rendered behind a click), so we code-split them out
@@ -757,97 +756,31 @@ function SyncingBanner() {
 }
 
 /**
- * Estado para visitantes autenticados sin suscripción activa. Cubre:
- *   1. Cliente nuevo que acaba de registrarse y aún no ha comprado.
- *   2. Compra one-shot (no eligieron selling plan).
- *   3. Suscripción cancelada hace tiempo (ya no en post_cancel).
+ * Sin suscripción que gestionar, esto no es su sitio: a Cuenta.
  *
- * Copy neutral ("Bienvenido a LIT") para no asumir que han comprado, ya
- * que el OAuth permite registro on-the-fly. Link directo a Cuenta para
- * que los clientes one-shot puedan ver su histórico de pedidos.
+ * Cubre a quien compró one-shot, a quien se registró y aún no ha comprado, y a
+ * quien canceló hace tanto que ya no hay nada que reactivar. Antes aterrizaban
+ * aquí en una pantalla de bienvenida que les vendía la suscripción, cuando lo
+ * que venían buscando era su pedido: el enlace de la tienda apunta a Mi LIT
+ * para todo el mundo, así que el cliente one-shot entraba por la puerta del
+ * suscriptor y se encontraba un escaparate. (Juan, 2026-09-22)
+ *
+ * Solo llega aquí un `subscription_not_found` del dashboard, que es más
+ * estrecho que "no tiene suscripción activa": una sub pausada, o cancelada y
+ * todavía dentro de la ventana de 90 días, SÍ devuelve contenido y se queda en
+ * el Hub con su tarjeta de reanudar o reactivar. Esas no se redirigen.
+ *
+ * `replace` y no `push` para que el botón de atrás no les devuelva a un Hub que
+ * volvería a rebotar. La salida de "cuenta equivocada" no se pierde: Cuenta
+ * tiene su propio SwitchAccountRow.
  */
 function EmptyState() {
+  const router = useRouter();
   const lang = useLangValue();
-  return (
-    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <TopNav />
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
-        <Logo />
-      </header>
-      <main className="flex flex-1 flex-col items-center justify-center px-6 pt-[88px] pb-24 text-center md:mx-auto md:w-full md:max-w-2xl md:px-8 md:pt-[92px] md:pb-12">
-        <span
-          className="font-semibold uppercase tracking-[0.32em] text-[color:var(--color-warm-gray)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
-        >
-          {lang === "es" ? "Tu cuenta LIT" : "Your LIT account"}
-        </span>
-
-        <h1
-          className="mt-4 font-display font-medium uppercase leading-[0.88] tracking-[-0.035em] text-[color:var(--color-lit-grey)]"
-          style={{ fontSize: "clamp(2.6rem, 9vw, 4.4rem)" }}
-        >
-          {lang === "es" ? (
-            <>
-              Bienvenido
-              <br />
-              a LIT
-            </>
-          ) : (
-            <>
-              Welcome
-              <br />
-              to LIT
-            </>
-          )}
-        </h1>
-
-        <p className="mt-6 max-w-md text-[14px] leading-[1.55] text-[color:var(--color-warm-gray)]">
-          {lang === "es" ? (
-            <>
-              Suscríbete y recibe LIT automáticamente cada mes con un{" "}
-              <strong className="text-[color:var(--color-lit-grey)]">
-                descuento desde el 25%
-              </strong>
-              , y gestiona pedidos, planes y direcciones desde este portal.
-            </>
-          ) : (
-            <>
-              Subscribe and get LIT delivered automatically every month with{" "}
-              <strong className="text-[color:var(--color-lit-grey)]">
-                25% off or more
-              </strong>
-              , and manage orders, plans and addresses from this portal.
-            </>
-          )}
-        </p>
-
-        <div className="mt-9 flex flex-col items-center gap-3">
-          <a
-            href="https://litsalt.com/products/lit-daily-hydration"
-            className="inline-flex items-center justify-center rounded-full bg-[color:var(--color-lit-grey)] px-7 py-3.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] transition-transform duration-200 ease-out hover:-translate-y-[2px]"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 12 }}
-          >
-            {lang === "es" ? "Activar mi suscripción" : "Start my subscription"}
-          </a>
-          <Link
-            href={portalHref(lang, "account")}
-            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
-          >
-            {lang === "es" ? "Ver mis pedidos" : "View my orders"}
-          </Link>
-          {/* The wrong-account exit. This screen is where a customer signed
-              into an empty Shopify account (typo at checkout, "Login with
-              Shop" identity, a work address) always ends up, and it used to
-              be a dead end: the copy invites them to subscribe when they
-              already have a subscription sitting in their other account.
-              2026-07-29. */}
-          <SwitchAccountLink />
-        </div>
-      </main>
-      <BottomNav />
-    </div>
-  );
+  useEffect(() => {
+    router.replace(portalHref(lang, "account"));
+  }, [router, lang]);
+  return <LoadingState />;
 }
 
 function ErrorState({ code }: { code: string }) {

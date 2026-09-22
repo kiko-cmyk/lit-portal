@@ -2,8 +2,13 @@
 
 /**
  * Formulario de perfilado ("Conoce a tus clientes"). Tres pantallas, un toque
- * por opción, cero teclado. Paga 50 drops al enviar y, si procede, propone
- * espaciar la cadencia.
+ * por opción, cero teclado. Al enviar entrega un descuento de 5 € a quien no
+ * tiene suscripción viva y, si procede, propone espaciar la cadencia.
+ *
+ * Los drops se siguen pagando por detrás, pero NO se mencionan en pantalla
+ * (Juan 2026-09-22): ni los drops ni la Colección están visibles todavía para
+ * el cliente, así que anunciar un saldo que no puede ver ni gastar prometía
+ * algo que no existe.
  *
  * Carcasa: el bottom-sheet crema de SkipOverlay, que es la convención del área
  * personal. Arquitectura de pasos: la de CancelTakeover, con el estado de las
@@ -52,8 +57,6 @@ interface SubmitResult {
   /** true = es suscriptor y no le tocaba cupón. false + discount null = falló la emisión. */
   hadLiveSubscription: boolean;
 }
-
-const TIER_THRESHOLD = 300;
 
 export function ProfileSurveyOverlay({
   subscription,
@@ -443,7 +446,6 @@ function DoneStep({
   const [dismissed, setDismissed] = useState(false);
 
   const offer = result.cadenceOffer;
-  const toGo = Math.max(0, TIER_THRESHOLD - result.balance);
 
   const accept = async () => {
     if (!offer || !subscription) return;
@@ -481,32 +483,30 @@ function DoneStep({
 
   return (
     <>
+      {/* Cabecera SIN drops (Juan 2026-09-22): los drops y la Colección no están
+          visibles para el cliente, así que anunciar un saldo y un "inner circle"
+          que no puede ver ni gastar era prometer algo que no existe todavía. El
+          formulario los SIGUE pagando; simplemente no se cuentan aquí.
+
+          Lo que manda ahora es el descuento, que es lo que el email promete y
+          lo único de esta pantalla que el cliente puede usar hoy. */}
       <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
-        {result.dropsAwarded > 0 ? `+${result.dropsAwarded} drops` : <T en="Saved" es="Guardado" />}
+        <T en="Saved" es="Guardado" />
       </div>
       <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
-        {result.tierCrossed ? (
-          <T en="Welcome to the inner circle" es="Bienvenido al inner circle" />
-        ) : (
-          <T en="Thank you" es="Gracias" />
-        )}
+        <T en="Thank you" es="Gracias" />
       </h1>
 
       <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
-        {result.tierCrossed ? (
+        {result.discount ? (
           <T
-            en={`These 50 put you at ${result.balance}. You've just crossed 300.`}
-            es={`Estos 50 te han puesto en ${result.balance}. Acabas de cruzar los 300.`}
-          />
-        ) : toGo > 0 ? (
-          <T
-            en={`You've got ${result.balance} drops. ${toGo} to go for the inner circle.`}
-            es={`Ya tienes ${result.balance} drops. Te faltan ${toGo} para el inner circle.`}
+            en="We'll use this to fine-tune what we send you. And here's your discount:"
+            es="Lo usaremos para ajustar lo que te mandamos. Y aquí tienes tu descuento:"
           />
         ) : (
           <T
-            en={`You've got ${result.balance} drops.`}
-            es={`Ya tienes ${result.balance} drops.`}
+            en="We'll use this to fine-tune what we send you."
+            es="Lo usaremos para ajustar lo que te mandamos."
           />
         )}
       </p>
@@ -524,19 +524,38 @@ function DoneStep({
             3. le tocaba y falló → "te lo mandamos por correo". Nunca un error
                                    en crudo: el cliente ya ha hecho su parte. */}
       {result.discount && (
-        <div className="mt-6 rounded-[18px] border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-5 py-5 text-center">
-          <div
-            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-          >
-            <T en="5 € off your next box" es="5 € en tu próxima caja" />
+        // Tarjeta OSCURA y a ancho completo: es lo único de esta pantalla que
+        // el cliente se lleva, así que manda sobre el resto en vez de ser una
+        // caja clara más sobre fondo crema. Mismo lenguaje que el banner que le
+        // trajo hasta aquí, para que se reconozca como la misma conversación.
+        <div
+          className="relative mt-7 overflow-hidden rounded-[22px] px-6 py-7 text-center text-[#F2EEE1]"
+          style={{
+            background:
+              "linear-gradient(135deg, var(--color-lit-grey), var(--color-dark-indigo))",
+            boxShadow: "0 22px 46px -20px rgba(30,24,12,0.5)",
+          }}
+        >
+          <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]">
+            <T en="Yours, to use whenever" es="Tuyo, para cuando quieras" />
           </div>
+
+          {/* El importe, en grande: es el dato que decide si esto le interesa. */}
+          <div className="mt-2 font-display text-5xl font-black uppercase leading-none tracking-[-0.02em]">
+            <T en="5 € off" es="5 € de descuento" />
+          </div>
+          <div className="mt-1.5 text-[13px] text-[#b3ab98]">
+            <T en="on your next order" es="en tu próximo pedido" />
+          </div>
+
           {/* `select-all` para que un toque lo seleccione entero: esto se copia
-              a mano en el checkout desde el móvil. */}
-          <div className="mt-2 select-all font-display text-3xl font-black uppercase tracking-[0.06em] text-[color:var(--color-lit-grey)]">
+              a mano en el checkout desde el móvil. Sobre la banda oscura el
+              código va en una pastilla clara para que se lea como un campo. */}
+          <div className="mt-5 select-all rounded-[14px] border border-dashed border-[#F2EEE1]/35 bg-[#F2EEE1]/10 px-4 py-3.5 font-display text-2xl font-black uppercase tracking-[0.12em]">
             {result.discount.code}
           </div>
-          <div className="mt-2 text-[12px] text-[color:var(--color-warm-gray)]">
+
+          <div className="mt-3 text-[12px] text-[#b3ab98]">
             <T
               en={`Valid until ${new Date(result.discount.expiresAt).toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { day: "numeric", month: "long" })}`}
               es={`Válido hasta el ${new Date(result.discount.expiresAt).toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { day: "numeric", month: "long" })}`}
@@ -548,21 +567,10 @@ function DoneStep({
       {!result.discount && !result.hadLiveSubscription && (
         <div className="mt-6 rounded-[18px] border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-5 py-4 text-[13px] leading-[1.5] text-[color:var(--color-warm-gray)]">
           <T
-            en="Your discount is on its way: we'll email it to you in a few minutes."
-            es="Tu descuento está en camino: te lo mandamos por correo en unos minutos."
+            en="Your 5 € discount is on its way: we'll email it to you in a few minutes."
+            es="Tu descuento de 5 € está en camino: te lo mandamos por correo en unos minutos."
           />
         </div>
-      )}
-
-      {/* Un reenvío no vuelve a pagar: el importe se mide, no se asume, así que
-          aquí dirá 0 y el texto tiene que ser coherente con eso. */}
-      {result.dropsAwarded === 0 && (
-        <p className="mt-2 text-[12px] text-[color:var(--color-warm-gray)] opacity-70">
-          <T
-            en="We'd already added them the first time you answered."
-            es="Ya te los habíamos dado la primera vez que contestaste."
-          />
-        </p>
       )}
 
       {offer && !dismissed && !applied && (
