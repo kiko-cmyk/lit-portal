@@ -225,7 +225,10 @@ export function ProfileSurveyOverlay({
                 enterrados entre la letra legal. */}
             <div className="mt-8 flex flex-wrap items-stretch gap-x-6 gap-y-4 sm:gap-x-8">
               {[
-                { k: "9", l: t({ en: "questions", es: "preguntas" }) },
+                // Contado desde el banco y no tecleado: con "9" a mano, la
+                // pregunta décima (2026-09-23) habría dejado esta cifra mintiendo
+                // sin que nada fallara. Es el MÁXIMO: quien no entrena ve una menos.
+                { k: String(PROFILE_QUESTIONS.length), l: t({ en: "questions", es: "preguntas" }) },
                 { k: "1 min", l: t({ en: "of your time", es: "de tu tiempo" }) },
                 {
                   k: t({ en: "Optional", es: "Opcionales" }),

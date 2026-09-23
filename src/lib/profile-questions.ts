@@ -63,7 +63,18 @@ export interface ProfileQuestion {
    * y a migrar lo ya guardado.
    *
    * Con `;` Klaviyo además sigue pudiendo segmentar por "contiene X", que es
-   * como se consulta una multi-respuesta allí.
+   * como se consulta una multi-respuesta allí. Y TIENE que hacerse así: un
+   * segmento con "igual a" pierde a todo el que marca más de una opción, sin
+   * error. Les pasó a "perfil · uso ocasional para resaca" (cs_uso) y
+   * "perfil · padel o tenis" (cs_deporte), creados con "igual a" antes de que
+   * esas preguntas fueran multi: pasaron de 1 y 0 perfiles a 3 y 3 al cambiarlos
+   * a "contiene" el 2026-09-23. Vale para cs_uso, cs_momento, cs_sabor_pref y
+   * cs_deporte.
+   *
+   * Al marcar una pregunta como multi, añade "(varias)" a su etiqueta en
+   * `_PORTAL` de lit-dashboard/backend/app/services/crm_scripts.py: el dashboard
+   * no puede saber cuáles lo son, y sin ese aviso su tarjeta en la hoja de
+   * Clientes suma más de 100% sin explicarlo (le pasó a `deporte_tipo`).
    */
   multi?: boolean;
   options: ProfileOption[];
@@ -122,7 +133,49 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
       o("Otro", "Something else", "Otro"),
     ],
   },
-
+  {
+    // Kiko, 2026-09-23. Va justo después de `uso` porque son la pareja natural:
+    // para qué y cuándo. Llegó con el formulario ya en campaña, así que quien
+    // contestó antes de esta fecha NO la tiene, y su banner ya no sale: las
+    // respuestas de esta pregunta solo crecen con gente nueva.
+    key: "momento",
+    klaviyoProp: "cs_momento",
+    // HEREDADA, aunque llegara la última. El CS Platform ya la pregunta desde el
+    // 2026-06-30 en la cola de fidelización ("¿Cuándo lo toma?", SCRIPTS
+    // ["fidelizacion"] en lit-dashboard/backend/app/services/crm_scripts.py) y
+    // su sync ya escribe `cs_momento`. Si el portal guardara códigos propios
+    // (`manana`, `despues_entreno`), la MISMA propiedad de Klaviyo tendría dos
+    // vocabularios: "contiene Post-entreno" perdería a toda la gente del portal
+    // y "contiene despues_entreno" a la del teléfono, sin error. Lo cazó una
+    // revisión antes de desplegar. Así que se guarda la cadena del CS byte a
+    // byte, como `uso` o `edad`, y lo que cambia es solo la ETIQUETA.
+    inherited: true,
+    screen: 1,
+    en: "When do you drink it?",
+    es: "¿En qué momento del día lo tomas?",
+    // Varias, por lo mismo que `uso`: quien lo toma por la mañana y después de
+    // entrenar no tiene un único momento, y forzarle a uno inventa el dato.
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca los que quieras",
+    // Sin `gatedBy` aunque tres opciones hablan de entrenar: la frecuencia de
+    // deporte se pregunta DESPUÉS (pantalla 3) y la condicional va por pregunta
+    // entera, no por opción. Quien no entrena, sencillamente no las marca.
+    //
+    // Las opciones son las de Kiko más "Por la tarde", que ya estaba en el guion
+    // (`Tarde`) y sin la cual quien lo toma en la oficina o con el calor del
+    // mediodía no tiene respuesta verdadera. "Durante el entreno" es la única
+    // que el guion no tenía: se añadió allí el mismo día para que los dos
+    // canales sigan escribiendo el mismo vocabulario.
+    options: [
+      o("Mañana", "In the morning", "Por la mañana"),
+      o("Pre-entreno", "Before training", "Antes de entrenar"),
+      o("Durante el entreno", "While training", "Durante el entreno"),
+      o("Post-entreno", "After training", "Después de entrenar"),
+      o("Tarde", "In the afternoon", "Por la tarde"),
+      o("Noche", "At night", "Por la noche"),
+    ],
+  },
   // ── Pantalla 2 · Tu LIT en casa ───────────────────────────────────────────
   {
     key: "sabor_favorito",
@@ -440,6 +493,7 @@ export function klaviyoProps(answers: Record<string, string>): Record<string, st
 export const ALL_KLAVIYO_PROPS = [
   "cs_situacion",
   "cs_uso",
+  "cs_momento",
   "cs_sabor_pref",
   "cs_caja_dura",
   "cs_stock_nivel",
