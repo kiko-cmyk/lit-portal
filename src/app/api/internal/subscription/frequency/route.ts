@@ -5,6 +5,7 @@ import { ApiHttpError } from "@/lib/api-helpers";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { cutoffEndsAt, isWithinCutoff } from "@/lib/cutoff";
 import {
+  assertGains,
   assertLonger,
   changeFrequencyOnly,
   isFrequency,
@@ -64,6 +65,7 @@ const PATH = "/api/internal/subscription/frequency";
 const BY_DESIGN_FAILURES = new Set([
   "cutoff_passed",
   "not_longer",
+  "no_gain",
   "invalid_frequency",
   "subscription_not_active",
   "no_pending_attempt",
@@ -205,6 +207,9 @@ async function handle(req: NextRequest, attempt: Attempt) {
     throw new ApiHttpError(409, "cutoff_passed", "Cannot change the frequency within 24h of the next ship");
   }
 
+  // LIT-464 en la puerta, también en la propuesta: el bot no le pide al cliente
+  // que confirme una fecha que después no se va a escribir.
+  assertGains(sealSub, nextShipDate, current, target);
   const proposedNextShipDate = naturalNextShipDate(sealSub, nextShipDate, current, target);
 
   // PROPUESTA
@@ -223,7 +228,13 @@ async function handle(req: NextRequest, attempt: Attempt) {
   }
 
   // ESCRITURA
-  const customerId = String(sealSub.customer_id ?? "");
+  // El cerrojo y la intención de re-anclaje cuelgan del customer_id: con una
+  // cadena vacía el drain no encontraría la intención y el cerrojo no cerraría
+  // nada. Seal lo devuelve siempre; si un día no, se para aquí y avisa.
+  if (!sealSub.customer_id) {
+    throw new ApiHttpError(409, "customer_id_missing", `Seal returned subscription ${subId} without customer_id`);
+  }
+  const customerId = String(sealSub.customer_id);
   const source = body.source?.trim() || "whatsapp";
   const reason = body.reason?.trim() || null;
 

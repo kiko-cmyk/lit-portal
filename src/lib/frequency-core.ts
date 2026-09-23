@@ -88,15 +88,80 @@ export function naturalNextShipDate(
   return addCycle(new Date(anchorIso), target).toISOString().slice(0, 10);
 }
 
+/**
+ * El ancla CONSERVADORA con la que se decide si una frecuencia gana. Igual que
+ * `naturalNextShipDate` usa el último cobro completado que Seal enseña; pero
+ * cuando no enseña ninguno (en la 14030060 no hay ni uno, ni `invoices`, solo
+ * saltos), no toma la próxima menos un ciclo, sino UN CICLO ANTES DEL PRIMER
+ * SALTO visible: los saltos prueban que el cobro real es anterior a ellos. Es
+ * una cota superior del ancla real (saltos más viejos pueden haber salido de la
+ * lista), pero siempre igual o anterior a la ingenua, así que solo puede hacer
+ * el guard más estricto. Revisión de Juan del PR #119 (2026-09-22).
+ */
+export function conservativeAnchorIso(
+  sub: SealSubscription,
+  nextAttemptDate: string | null,
+  current: Frequency,
+): string | null {
+  const completed = getLastCompletedChargeDate(sub);
+  if (completed) return completed;
+  if (!nextAttemptDate) return null;
+  const nextDay = nextAttemptDate.slice(0, 10);
+  const skipped = (sub.billing_attempts ?? [])
+    .filter((ba) => ba.skipped_on && ba.date && ba.date.slice(0, 10) < nextDay)
+    .map((ba) => ba.date)
+    .sort((a, b) => a.localeCompare(b));
+  return subCycle(new Date(skipped[0] ?? nextAttemptDate), current).toISOString();
+}
+
+/**
+ * ¿Pasar a `target` ALEJA la próxima entrega respecto a la fecha que ya tiene?
+ *
+ * Es la defensa de LIT-464 en la puerta: el drain solo empuja hacia adelante
+ * (`reanchorCadence` devuelve 0 cuando el primer pendiente ya está en o después
+ * de la fecha a preservar), así que si la fecha natural cae antes de la que el
+ * cliente tenía, la intención es un no-op y Seal le cobra ANTES justo después de
+ * pedir más tiempo. Se mide con el ancla conservadora, opción por opción.
+ */
+export function gainsFor(
+  sub: SealSubscription,
+  nextAttemptDate: string | null,
+  current: Frequency,
+  target: Frequency,
+): boolean {
+  if (!nextAttemptDate) return false;
+  const anchor = conservativeAnchorIso(sub, nextAttemptDate, current);
+  if (!anchor) return false;
+  const natural = addCycle(new Date(anchor), target).toISOString().slice(0, 10);
+  return natural > nextAttemptDate.slice(0, 10);
+}
+
+/** La puerta no puede depender de que el de fuera se porte bien: se comprueba
+ *  en la propuesta Y en la escritura, no solo en la consulta. */
+export function assertGains(
+  sub: SealSubscription,
+  nextAttemptDate: string | null,
+  current: Frequency,
+  target: Frequency,
+): void {
+  if (!gainsFor(sub, nextAttemptDate, current, target)) {
+    throw new ApiHttpError(
+      409,
+      "no_gain",
+      `Switching ${current} → ${target} would not move the next delivery past ${nextAttemptDate?.slice(0, 10) ?? "?"}: the last completed charge is too far back, Seal would regenerate earlier and the drain only moves forward`,
+    );
+  }
+}
+
 export interface LongerOption {
   frequency: Frequency;
   /** Dónde caería la próxima entrega con esa frecuencia. */
   naturalNextShipDate: string | null;
   /**
-   * Si de verdad ALEJA la entrega respecto a la fecha que ya tiene. A quien ya
-   * había saltado, el último cobro le queda lejos y la fecha regenerada puede
-   * caer antes: pedir más tiempo y cobrar antes es LIT-464. El bot no ofrece
-   * las que no ganan.
+   * Si de verdad ALEJA la entrega respecto a la fecha que ya tiene, medido con
+   * el ancla conservadora (`gainsFor`). Se lee OPCIÓN POR OPCIÓN: si 2 meses no
+   * aleja la entrega pero 4 sí, se ofrecen 4, 5 y 6; solo cuando no gana ninguna
+   * se pasa a ofrecer el salto.
    */
   gains: boolean;
 }
@@ -104,15 +169,11 @@ export interface LongerOption {
 /** Las frecuencias más largas que la actual, cada una con su fecha natural. */
 export function longerOptions(sub: SealSubscription, current: Frequency): LongerOption[] {
   const next = getNextBillingAttempt(sub)?.date ?? null;
-  const nextDay = next ? next.slice(0, 10) : null;
-  return longerFrequencies(current).map((frequency) => {
-    const natural = naturalNextShipDate(sub, next, current, frequency);
-    return {
-      frequency,
-      naturalNextShipDate: natural,
-      gains: natural !== null && nextDay !== null && natural > nextDay,
-    };
-  });
+  return longerFrequencies(current).map((frequency) => ({
+    frequency,
+    naturalNextShipDate: naturalNextShipDate(sub, next, current, frequency),
+    gains: gainsFor(sub, next, current, frequency),
+  }));
 }
 
 /**
@@ -277,6 +338,9 @@ export async function changeFrequencyOnly(
       reanchor: "none",
     };
   }
+
+  // LIT-464 en la puerta: nada se escribe si la opción no aleja la entrega.
+  if (reanchorMode === "natural") assertGains(sealSub, nextIso, current, target);
 
   const expectedInterval = SEAL_INTERVAL_BY_FREQUENCY[target];
   const preserve =

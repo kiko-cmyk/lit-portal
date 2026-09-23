@@ -21,9 +21,11 @@
  */
 
 import {
+  assertGains,
   assertLonger,
   changeFrequencyOnly,
   type FrequencyChangeDeps,
+  gainsFor,
   isFrequency,
   longerOptions,
   naturalNextShipDate,
@@ -163,6 +165,65 @@ const run = async () => {
     opts464.length === 6 && opts464.every((o) => !o.gains),
     opts464.map((o) => `${o.frequency}:${o.naturalNextShipDate}`).join(" "),
   );
+
+  // La forma REAL de la 14030060 el 2026-09-22: mensual, sin cobro completado a la
+  // vista, saltados de julio a diciembre, pendientes desde el 1-ene. La ingenua
+  // anclaría en diciembre; los saltos prueban que el cobro real es de junio.
+  const real14030060 = sub({
+    delivery_interval: "1 month",
+    billing_attempts: [
+      ...[7, 8, 9, 10, 11, 12].map((m, i) => attempt(i + 1, `2026-${String(m).padStart(2, "0")}-01`, { skipped: true })),
+      attempt(7, "2027-01-01"),
+      attempt(8, "2027-02-01"),
+    ],
+  });
+  const opts14030060 = longerOptions(real14030060, "1mo");
+  check(
+    "la 14030060 real: ninguna opción gana (ancla en junio, no en diciembre)",
+    opts14030060.length === 6 && opts14030060.every((o) => !o.gains),
+    opts14030060.map((o) => `${o.frequency}:${o.gains}`).join(" "),
+  );
+  check(
+    "pero la fecha natural (la que se preservaría) sigue siendo la ingenua, la que ve el cliente en pantalla",
+    opts14030060[0].naturalNextShipDate === "2027-01-15",
+  );
+  try {
+    assertGains(real14030060, "2027-01-01T10:00:00+00:00", "1mo", "2mo");
+    failures++;
+    console.error("✗ assertGains no lanzó en la 14030060");
+  } catch (err) {
+    check("assertGains sobre la 14030060 es no_gain", (err as { code?: string }).code === "no_gain");
+  }
+  {
+    const { deps, calls } = fakeDeps();
+    await rejects(
+      "changeFrequencyOnly sobre la 14030060 es no_gain ANTES de tocar Seal",
+      changeFrequencyOnly(
+        { sealSub: real14030060, target: "2mo", customerId: "27453541548381", source: "whatsapp", reanchorMode: "natural" },
+        deps,
+      ),
+      "no_gain",
+    );
+    check("y no hay edit ni auditoría", calls.edits.length === 0 && calls.audits.length === 0);
+  }
+  // Saltos solo desde octubre: el ancla retrocede a septiembre, y gana a partir de 5 meses.
+  const saltosOct = sub({
+    delivery_interval: "1 month",
+    billing_attempts: [
+      attempt(1, "2026-10-01", { skipped: true }),
+      attempt(2, "2026-11-01", { skipped: true }),
+      attempt(3, "2026-12-01", { skipped: true }),
+      attempt(4, "2027-01-01"),
+    ],
+  });
+  const optsOct = longerOptions(saltosOct, "1mo");
+  check(
+    "gains se lee opción por opción: con saltos desde octubre ganan 5 y 6 meses, no las de antes",
+    optsOct.map((o) => `${o.frequency}:${o.gains}`).join(" ") === "45d:false 2mo:false 3mo:false 4mo:false 5mo:true 6mo:true",
+    optsOct.map((o) => `${o.frequency}:${o.gains}`).join(" "),
+  );
+  check("gainsFor con el pantallazo, todo gana", gainsFor(sub(), "2026-10-24T10:00:00+00:00", "45d", "2mo"));
+  check("sin próxima fecha no se puede ganar", !gainsFor(sub({ billing_attempts: [] }), null, "45d", "2mo"));
 
   check("SEAL_INTERVAL_BY_FREQUENCY va en singular, como acepta Seal", SEAL_INTERVAL_BY_FREQUENCY["45d"] === "45 day" && SEAL_INTERVAL_BY_FREQUENCY["2mo"] === "2 month");
   check("isFrequency acepta la escalera y nada más", isFrequency("2mo") && !isFrequency("7mo") && !isFrequency(2));
