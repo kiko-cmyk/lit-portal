@@ -200,9 +200,16 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   //     cliente en bucle repitiendo nueve preguntas, no.
   const { data: priorRow } = await sb
     .from("profile_survey_answers")
-    .select("discount_code, discount_issued_at, discount_expires_at")
+    .select(
+      "discount_code, discount_issued_at, discount_expires_at, was_subscriber_at_answer",
+    )
     .eq("customer_id", ctx.customerId)
     .maybeSingle();
+
+  // Si YA tenía cupón de una respuesta anterior. Se guarda aparte porque
+  // `discount` se reasigna al emitir uno nuevo, y entonces deja de poder
+  // distinguir "venía de antes" de "acabo de emitirlo".
+  const hadPriorDiscount = Boolean(priorRow?.discount_code);
 
   let discount: IssuedDiscount | null = priorRow?.discount_code
     ? {
@@ -332,6 +339,33 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
       discount_code: discount?.code ?? null,
       discount_issued_at: discount?.issuedAt ?? null,
       discount_expires_at: discount?.expiresAt ?? null,
+      // CONGELADO en el instante de contestar, y por eso se guarda aquí en vez
+      // de leerlo después del tag de Shopify. El tag dice lo que el cliente es
+      // HOY: el 23-sep, tres personas contestaron siendo one-shot y se
+      // suscribieron ese mismo día usando el cupón, así que la foto de hoy las
+      // muestra como suscriptoras y borra justo el dato que importa (a quién le
+      // tocaba cupón, y quién se convirtió DESPUÉS de contestar).
+      //
+      // Hasta hoy este valor solo viajaba a Klaviyo como
+      // `has_active_subscription` y no se guardaba en ningún sitio nuestro.
+      //
+      // NO se pisa el valor de una respuesta anterior. Quien ya tenía cupón no
+      // vuelve a pasar por la comprobación de Seal (el `if (!discount)` de
+      // arriba), así que `hadLiveSubscription` sigue en su `false` inicial sin
+      // haberse calculado: escribirlo tal cual convertiría a un suscriptor en
+      // "no era suscriptor" la primera vez que corrigiese una respuesta. Se
+      // conserva lo que ya hubiera, que es la medición buena.
+      // Y si la fila vieja lo tiene a NULL (respuestas anteriores al 23-sep) se
+      // deja en NULL en vez de caer a `hadLiveSubscription`: para quien ya
+      // tenía cupón ese valor no se ha medido, y NULL significa exactamente eso
+      // ("no registrado"). Escribir `false` convertiría un dato ausente en uno
+      // incorrecto, que es peor porque no se distingue del medido de verdad.
+      // La regla, en una línea: se escribe SOLO la primera vez. Si la fila ya
+      // trae un valor medido (true o false), gana ese. `?? ` y no `||`, porque
+      // `false` es una medición legítima y con `||` se perdería.
+      was_subscriber_at_answer:
+        priorRow?.was_subscriber_at_answer ??
+        (hadPriorDiscount ? null : hadLiveSubscription),
       updated_at: new Date().toISOString(),
     },
     { onConflict: "customer_id" },
