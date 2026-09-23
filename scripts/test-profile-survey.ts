@@ -47,6 +47,7 @@ import {
 import { formatShipDateEs } from "@/lib/ship-date-label";
 import { DISCOUNT_VALUE_EUR } from "@/lib/survey-discount";
 import type { Frequency } from "@/lib/types";
+import { readFileSync } from "node:fs";
 
 let failures = 0;
 
@@ -70,6 +71,10 @@ const CS_PERFILADO: Record<string, string[]> = {
   deporte_tipo: [
     "Running", "Gym / fuerza", "Ciclismo", "Pádel / tenis", "Crossfit", "Natación", "Otro",
   ],
+  // Esta NO sale de _PERFILADO sino de SCRIPTS["fidelizacion"] del mismo fichero.
+  // Existía allí desde el 2026-06-30 y ya escribía `cs_momento`: por eso el
+  // portal la hereda en vez de inventarse códigos (ver la pregunta en el banco).
+  momento: ["Mañana", "Pre-entreno", "Durante el entreno", "Post-entreno", "Tarde", "Noche"],
 };
 
 console.log("\n── vocabulario heredado ──");
@@ -118,7 +123,52 @@ check(
 
 console.log("\n── estructura ──");
 
-check("hay 9 preguntas", PROFILE_QUESTIONS.length === 9, `${PROFILE_QUESTIONS.length}`);
+check("hay 10 preguntas", PROFILE_QUESTIONS.length === 10, `${PROFILE_QUESTIONS.length}`);
+
+// ── La décima (Kiko, 2026-09-23): ¿en qué momento del día lo tomas? ──────────
+{
+  const m = QUESTIONS_BY_KEY["momento"];
+  check("momento: existe, pantalla 1, multi, HEREDADA", !!m && m.screen === 1 && m.multi === true && m.inherited);
+  check("momento: escribe cs_momento, la del guion", m?.klaviyoProp === "cs_momento");
+  const idx = PROFILE_QUESTIONS.findIndex((q) => q.key === "momento");
+  check("momento: va justo después de uso", idx > 0 && PROFILE_QUESTIONS[idx - 1].key === "uso");
+  check(
+    "momento: el vocabulario ES el del guion, en su orden",
+    JSON.stringify(m?.options.map((o) => o.value)) === JSON.stringify(CS_PERFILADO.momento),
+  );
+  check("momento: cs_momento está en la lista de VACIADO", (ALL_KLAVIYO_PROPS as readonly string[]).includes("cs_momento"));
+  const v = validateAnswers({ momento: "Post-entreno;Mañana" });
+  check("momento: acepta varias y las ordena como el banco", v.ok && v.clean.momento === "Mañana;Post-entreno", JSON.stringify(v.clean));
+  check("momento: rechaza una parte inventada", !validateAnswers({ momento: "Mañana;Siesta" }).ok);
+  check("momento: llega a Klaviyo con la cadena del guion", klaviyoProps({ momento: "Noche" }).cs_momento === "Noche");
+}
+
+// Qué preguntas son multi, fijado EXACTO. El dashboard no puede saberlo (los
+// repos no se importan) y una multi necesita "(varias)" en su etiqueta de allí,
+// o su tarjeta en la hoja de Clientes suma más de 100% sin avisar. Si cambias
+// esta lista, cambia la etiqueta en `_PORTAL` de lit-dashboard y luego aquí.
+check(
+  "las multi son exactamente estas (y el dashboard las lleva marcadas)",
+  JSON.stringify(PROFILE_QUESTIONS.filter((q) => q.multi).map((q) => q.key)) ===
+    JSON.stringify(["uso", "momento", "sabor_favorito", "deporte_tipo"]),
+  "si añades una: '(varias)' en _PORTAL de lit-dashboard/backend/app/services/crm_scripts.py",
+);
+
+// El banner dice CUÁNTAS son con letra. Si se añade una pregunta y nadie toca
+// el texto, el banner miente sin que falle nada: pasó al añadir la décima.
+{
+  const WORDS: Record<number, [string, string]> = {
+    9: ["Nueve", "Nine"], 10: ["Diez", "Ten"], 11: ["Once", "Eleven"], 12: ["Doce", "Twelve"],
+  };
+  const n = PROFILE_QUESTIONS.length;
+  const banner = readFileSync(`${process.cwd()}/src/components/ProfileSurveyBanner.tsx`, "utf8");
+  const w = WORDS[n];
+  check(
+    `el banner dice las preguntas que hay (${n})`,
+    !!w && banner.includes(`${w[0]} preguntas`) && banner.includes(`${w[1]} questions`),
+    w ? `${w[0]} / ${w[1]}` : `añade ${n} a WORDS y cambia el banner`,
+  );
+}
 
 const dupes = PROFILE_QUESTIONS.map((q) => q.key).filter((k, i, a) => a.indexOf(k) !== i);
 check("no hay claves repetidas", dupes.length === 0, dupes.join(","));
@@ -175,8 +225,8 @@ check(
   isAsked(QUESTIONS_BY_KEY["deporte_tipo"], { deporte_frecuencia: "3-4/sem" }),
 );
 check(
-  "quien no entrena ve 8 preguntas, no 9",
-  visibleQuestions({ deporte_frecuencia: "No entreno" }).length === 8,
+  "quien no entrena ve 9 preguntas, no 10",
+  visibleQuestions({ deporte_frecuencia: "No entreno" }).length === 9,
 );
 
 // ── 4. Validación ────────────────────────────────────────────────────────────
