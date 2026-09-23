@@ -8,7 +8,7 @@ import { SURVEY_CONSENT } from "@/lib/survey-consent-copy";
 import { validateAnswers } from "@/lib/profile-questions";
 import { langFromRequest } from "@/lib/request-lang";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { mapToSubscription } from "@/lib/seal";
+import { mapToSubscription, seal } from "@/lib/seal";
 import { klaviyo } from "@/lib/klaviyo";
 import { formatShipDateEs } from "@/lib/ship-date-label";
 import { DISCOUNT_VALUE_EUR, issueSurveyDiscount, type IssuedDiscount } from "@/lib/survey-discount";
@@ -227,12 +227,43 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
     // `paused` y `reactivating` CUENTAN como viva: una suscripción pausada
     // sigue siendo cliente de suscripción y no le toca el cupón de
     // recuperación. Mismos tres estados que trata la página de Cuenta.
+    //
+    // ── Por qué se pregunta a Seal por EMAIL y no por la caché (2026-09-23) ──
+    //
+    // Aquí vivía `resolveActiveSubFast`, y regaló 3 cupones de 5 € a
+    // suscriptores activos el día del lanzamiento. Esa función es un ATAJO que
+    // mira solo la caché de Supabase y devuelve `null` en cuanto no encuentra
+    // la fila; su propio docstring dice que es seguro "porque el llamante cae
+    // al escaneo por email". El portal hace ese fallback. ESTA RUTA NO LO
+    // HACÍA, así que un cache miss se leía como "no tiene suscripción".
+    //
+    // Maria Nicolau lo demostró: sub ACTIVE en Seal desde julio, CERO filas en
+    // la caché porque nunca entró al portal. Cupón emitido.
+    //
+    // Y lo que es peor: `resolveActiveSubFast` termina en `catch { return null }`,
+    // así que un fallo de Seal o de Supabase llegaba aquí disfrazado de "no
+    // tiene suscripción" en vez de como excepción. El `catch` de abajo, que
+    // existe justamente para NO emitir cupón cuando Seal no contesta, era
+    // inalcanzable: la protección estaba escrita y no se ejecutaba nunca.
+    //
+    // `getSubscriptionsByEmail` es la fuente de verdad (Seal lo es, la tabla
+    // `subscriptions` es solo una caché parcial poblada por webhooks) y además
+    // PROPAGA los fallos en vez de tragárselos, que es lo que devuelve el
+    // sentido al `catch`. Cuesta una llamada extra en una ruta que se ejecuta
+    // una vez por cliente y no está en ningún camino crítico: el atajo no
+    // compraba nada aquí y costaba 5 € por error.
     try {
       const email = customerEmail;
-      const live = email ? await resolveActiveSubFast(ctx.customerId, email, null) : null;
-      const status = live ? mapToSubscription(live, ctx.customerId).status : null;
-      hadLiveSubscription =
-        status === "active" || status === "paused" || status === "reactivating";
+      if (!email) {
+        // Sin email no se puede preguntar a Seal. Misma dirección segura que el
+        // catch: no emitir antes que emitir a ciegas.
+        throw new Error("sin email de cliente para resolver la suscripción");
+      }
+      const subs = await seal.getSubscriptionsByEmail(email);
+      hadLiveSubscription = subs.some((s) => {
+        const status = mapToSubscription(s, ctx.customerId).status;
+        return status === "active" || status === "paused" || status === "reactivating";
+      });
     } catch (err) {
       // Si Seal no contesta NO se emite cupón. Es la dirección segura: como
       // mucho un one-shot se queda sin él y lo reclama por soporte. Al revés
