@@ -5,8 +5,8 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
 /**
  * GET /apps/portal/api/cron/survey-discount-cleanup
  *
- * Diario: borra de Shopify los cupones del formulario de perfilado que ya han
- * caducado Y no ha usado nadie.
+ * Diario: borra de Shopify los cupones de campaña (perfilado y Discovery Set)
+ * que ya han caducado Y no ha usado nadie.
  *
  * ── Por qué existe ──
  *
@@ -18,11 +18,16 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
  *
  * ── Las tres guardas, y ninguna sobra ──
  *
- * 1. SOLO LOS SUYOS. Filtra por `title:Perfilado*`, el prefijo que les pone
- *    `issueSurveyDiscount`. Un cron que borra descuentos y se equivoca de
- *    filtro se lleva por delante los de una campaña de marketing, y eso no se
- *    deshace: hay que recrearlos a mano y los que estaban en emails ya
- *    enviados quedan muertos.
+ * 1. SOLO LOS SUYOS. Filtra por los prefijos que ponen `issueSurveyDiscount`
+ *    ("Perfilado ") e `issueDiscoveryDiscount` ("Discovery "). Un cron que
+ *    borra descuentos y se equivoca de filtro se lleva por delante los de una
+ *    campaña de marketing, y eso no se deshace: hay que recrearlos a mano y los
+ *    que estaban en emails ya enviados quedan muertos.
+ *
+ *    Por eso, además del `query:` que manda Shopify, el título se REVERIFICA
+ *    aquí contra esos dos prefijos antes de borrar nada: un `query` de Shopify
+ *    que ensanche (o un prefijo nuevo que alguien añada sin mirar) no puede
+ *    convertirse en un borrado de cupones ajenos.
  *
  * 2. SOLO LOS EXPIRED, según el `status` que devuelve Shopify. Nunca por una
  *    fecha calculada aquí: una diferencia de zona horaria borraría cupones
@@ -41,6 +46,10 @@ export const maxDuration = 60;
 /** Tope por tirada. Con ~800 cupones a 30 días vista, el goteo diario es de
  *  decenas: 200 sobra y evita que una acumulación inesperada agote la función. */
 const MAX_DELETES = 200;
+
+/** Los prefijos de título de NUESTROS cupones de campaña. Cualquier descuento
+ *  cuyo título no empiece por uno de estos no lo toca este cron. */
+const CAMPAIGN_PREFIXES = ["Perfilado ", "Discovery "];
 
 interface DiscountNode {
   id: string;
@@ -75,7 +84,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       };
     } = await shopifyAdmin.graphql(
       `query expiredSurveyDiscounts($cursor: String) {
-        codeDiscountNodes(first: 50, after: $cursor, query: "title:Perfilado*") {
+        codeDiscountNodes(first: 50, after: $cursor, query: "title:Perfilado* OR title:Discovery*") {
           pageInfo { hasNextPage endCursor }
           nodes {
             id
@@ -93,6 +102,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     for (const n of nodes) {
       const d = n.codeDiscount ?? {};
+      // Guarda 1, revalidada en casa: solo títulos que empiezan por uno de
+      // NUESTROS prefijos. El `query:` de Shopify ya filtra, pero es una
+      // sintaxis laxa (y este repo ya se ha encontrado con filtros de Shopify
+      // que se ignoran en silencio y devuelven TODO). Si alguna vez devolviera
+      // de más, aquí se para antes del delete.
+      if (!CAMPAIGN_PREFIXES.some((pre) => d.title?.startsWith(pre))) continue;
       if (d.status !== "EXPIRED") continue;
       if ((d.asyncUsageCount ?? 0) > 0) {
         keptInUse++;
