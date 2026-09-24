@@ -68,7 +68,7 @@ export interface IssuedDiscount {
  * 32^8 combinaciones: la colisión es despreciable, y aun así Shopify rechaza un
  * código repetido con un userError, que se trata como fallo de emisión.
  */
-function generateCode(): string {
+export function generateCode(): string {
   const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   let out = "";
   const bytes = crypto.getRandomValues(new Uint8Array(8));
@@ -84,8 +84,19 @@ function generateCode(): string {
  * cupón (recuperable a mano) antes que perder el perfilado o dejar al cliente
  * repitiendo la encuesta.
  */
-export async function issueSurveyDiscount(customerId: string): Promise<IssuedDiscount> {
-  const code = generateCode();
+export async function issueSurveyDiscount(
+  customerId: string,
+  /**
+   * El código YA reservado en Postgres. La ruta lo reserva antes de llamar aquí
+   * (UPDATE ... WHERE discount_code IS NULL), de modo que dos peticiones
+   * simultáneas solo dejan crear el descuento a la que gana la reserva. Sin
+   * esto, dos envíos a la vez creaban DOS descuentos en Shopify: el índice
+   * único es sobre `discount_code`, y dos códigos aleatorios distintos no
+   * chocan entre sí. (Kiko, 2026-09-24.)
+   */
+  reservedCode?: string,
+): Promise<IssuedDiscount> {
+  const code = reservedCode ?? generateCode();
   const now = new Date();
   const endsAt = new Date(now.getTime() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000);
 

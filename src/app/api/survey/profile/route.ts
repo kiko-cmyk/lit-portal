@@ -1,3 +1,5 @@
+import { after } from "next/server";
+
 import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { suggestLongerCadence } from "@/lib/cadence-fit";
@@ -10,8 +12,14 @@ import { langFromRequest } from "@/lib/request-lang";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { klaviyo } from "@/lib/klaviyo";
+import { runWithoutRequestDeadline } from "@/lib/http-timeout";
 import { formatShipDateEs } from "@/lib/ship-date-label";
-import { DISCOUNT_VALUE_EUR, issueSurveyDiscount, type IssuedDiscount } from "@/lib/survey-discount";
+import {
+  DISCOUNT_VALUE_EUR,
+  generateCode,
+  issueSurveyDiscount,
+  type IssuedDiscount,
+} from "@/lib/survey-discount";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -123,7 +131,10 @@ export const GET = withCustomer<SurveyState>(async (_req, ctx) => {
 // ── POST: guardar ────────────────────────────────────────────────────────────
 
 export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
-  await enforceRateLimit(ctx.customerId, "survey-profile", { limit: 10, windowMs: 60_000 });
+  await enforceRateLimit(ctx.customerId, "survey-profile", {
+    limit: 10,
+    windowMs: 60_000,
+  });
 
   // El flag tiene que cerrar la ESCRITURA, no solo esconder la tarjeta.
   //
@@ -138,12 +149,20 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // es un favor que se pueda retirar) y el borrado TAMBIÉN, siempre: una
   // petición de supresión no puede depender de una variable de entorno.
   if (!profileSurveyEnabledFor(ctx.customerId)) {
-    throw new ApiHttpError(403, "survey_closed", "profile survey is not open for this customer");
+    throw new ApiHttpError(
+      403,
+      "survey_closed",
+      "profile survey is not open for this customer",
+    );
   }
 
   const body = (await req.json().catch(() => ({}))) as SurveyBody;
   if (typeof body.consent !== "boolean") {
-    throw new ApiHttpError(400, "missing_consent", "consent (boolean) required");
+    throw new ApiHttpError(
+      400,
+      "missing_consent",
+      "consent (boolean) required",
+    );
   }
   // La casilla es OBLIGATORIA para enviar (Juan 2026-09-22). Antes se aceptaba
   // `false` y la respuesta se guardaba para el agregado sin escribir en
@@ -173,8 +192,26 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   if (!v.ok) {
     throw new ApiHttpError(
       400,
-      v.unknown.length ? "unknown_question" : v.invalid.length ? "invalid_option" : "not_asked",
+      v.unknown.length
+        ? "unknown_question"
+        : v.invalid.length
+          ? "invalid_option"
+          : "not_asked",
       `unknown=${v.unknown.join(",")} invalid=${v.invalid.join(",")} notAsked=${v.notAsked.join(",")}`,
+    );
+  }
+
+  // Al menos UNA respuesta. Enviar el formulario en blanco cobraba los 50 drops
+  // y, a un no suscriptor, el cupón de 5 €, a cambio de cero información. Y
+  // encima el banner le seguía saliendo, porque con `answers` vacío la tarjeta
+  // lo cuenta como no contestado: el cliente veía que "no le había servido" y
+  // podía repetirlo. Se comprueba en servidor y no solo deshabilitando el botón,
+  // porque esta ruta la alcanza cualquiera con sesión. (Kiko, 2026-09-24.)
+  if (Object.keys(v.clean).length === 0) {
+    throw new ApiHttpError(
+      400,
+      "no_answers",
+      "at least one answer is required to submit the survey",
     );
   }
 
@@ -224,11 +261,19 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // false: se lo llevó en su día, luego no era suscriptor.
   let hadLiveSubscription = false;
 
+  // Distingue "he medido y NO tenía suscripción" de "no pude medir". Sin esta
+  // bandera las dos cosas valen `false` en la variable de arriba y acaban
+  // guardadas igual, que es como un fallo de Seal se convierte en un dato de
+  // negocio falso.
+  let subscriptionCheckFailed = false;
+
   // El email se resuelve UNA vez y fuera del `if`: lo necesitan el cupón (para
   // preguntar a Seal) y el evento de Klaviyo (para identificar el perfil), y
   // pedirlo dos veces a Shopify sería una llamada de más en una ruta que ya
   // habla con Seal, Supabase y Shopify.
-  const customerEmail = await shopifyAdmin.getCustomerEmail(ctx.customerId).catch(() => null);
+  const customerEmail = await shopifyAdmin
+    .getCustomerEmail(ctx.customerId)
+    .catch(() => null);
 
   if (!discount) {
     // `paused` y `reactivating` CUENTAN como viva: una suscripción pausada
@@ -269,7 +314,11 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
       const subs = await seal.getSubscriptionsByEmail(email);
       hadLiveSubscription = subs.some((s) => {
         const status = mapToSubscription(s, ctx.customerId).status;
-        return status === "active" || status === "paused" || status === "reactivating";
+        return (
+          status === "active" ||
+          status === "paused" ||
+          status === "reactivating"
+        );
       });
     } catch (err) {
       // Si Seal no contesta NO se emite cupón. Es la dirección segura: como
@@ -277,29 +326,139 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
       // (asumir que no tiene suscripción) le daríamos un cupón de recuperación
       // a un suscriptor activo, que es dinero regalado y un agravio para el
       // resto.
-      console.warn("[survey/profile] no se pudo resolver la suscripción, sin cupón:", err);
+      console.warn(
+        "[survey/profile] no se pudo resolver la suscripción, sin cupón:",
+        err,
+      );
       hadLiveSubscription = true;
+      // Marca el camino de fallo para NO grabar `was_subscriber_at_answer`.
+      // `hadLiveSubscription = true` es una decisión operativa ("ante la duda,
+      // no emitas"), no una medición: guardarla dejaría a un one-shot anotado
+      // como suscriptor PARA SIEMPRE, sin cupón, sin poder reintentarlo y
+      // ensuciando la conversión. NULL es lo honesto: no se midió. (Kiko,
+      // 2026-09-24.)
+      subscriptionCheckFailed = true;
+      // Y avisa, porque si no esto es invisible: el cliente ve su pantalla de
+      // gracias tan normal y nadie se entera de que Seal no contestó.
+      alertSlackError({
+        path: "/api/survey/profile",
+        code: "survey_subscription_check_failed",
+        msg: `No se pudo comprobar la suscripción, cupón NO emitido: ${err instanceof Error ? err.message : String(err)}`,
+        customerId: ctx.customerId,
+      });
     }
 
     if (!hadLiveSubscription) {
-      try {
-        discount = await issueSurveyDiscount(ctx.customerId);
-      } catch (err) {
-        // El cliente verá "te lo mandamos por correo en unos minutos" en vez de
-        // un error en crudo, pero alguien tiene que emitírselo a mano: por eso
-        // esto AVISA, no solo loguea.
-        //
-        // El fallo más probable el día del despliegue es que la app del portal
-        // no tenga el scope `write_discounts`, y ese se manifestaría en TODOS
-        // los clientes a la vez y en silencio. Con la alerta se ve en el
-        // primero; sin ella, se descubriría por reclamaciones.
-        console.error("[survey/profile] EMISIÓN DE CUPÓN FALLIDA:", ctx.customerId, err);
+      // ── La reserva, ANTES de tocar Shopify ──────────────────────────────
+      //
+      // Un UPDATE condicional sobre la fila: solo escribe si `discount_code`
+      // sigue a NULL. Postgres serializa los UPDATE de una misma fila, así que
+      // de dos peticiones simultáneas exactamente UNA recibe fila de vuelta; la
+      // otra recibe cero y no crea nada.
+      //
+      // El índice único NO cubría esto, aunque el comentario de la migración
+      // del 22-sep dijera lo contrario: es un índice sobre `discount_code`, o
+      // sea que impide repartir el MISMO código dos veces, pero dos códigos
+      // aleatorios distintos para el mismo cliente entran sin chocar. El caso
+      // real no es el doble clic (ya lo tapa `busy` en el front) sino el
+      // timeout de ~10 s del App Proxy contra el `maxDuration` de 20: el
+      // cliente ve el error y reenvía mientras el servidor sigue trabajando.
+      // (Kiko, 2026-09-24.)
+      //
+      // Si la reserva falla, se sigue SIN cupón en vez de emitir a ciegas:
+      // duplicar un descuento cuesta dinero, quedarse sin él se arregla a mano.
+      const reservedCode = generateCode();
+      const { data: reserved, error: reserveErr } = await sb
+        .from("profile_survey_answers")
+        .update({ discount_code: reservedCode })
+        .eq("customer_id", ctx.customerId)
+        .is("discount_code", null)
+        .select("discount_code")
+        .maybeSingle();
+
+      if (reserveErr) {
+        console.error(
+          "[survey/profile] reserva de cupón fallida:",
+          ctx.customerId,
+          reserveErr,
+        );
         alertSlackError({
           path: "/api/survey/profile",
-          code: "survey_discount_failed",
-          msg: `No se pudo emitir el cupón de perfilado: ${err instanceof Error ? err.message : String(err)}`,
+          code: "survey_discount_reserve_failed",
+          msg: `No se pudo reservar el código del cupón: ${reserveErr.message}`,
           customerId: ctx.customerId,
         });
+      }
+
+      // Sin fila de vuelta: o la ganó otra petición en paralelo, o el cliente
+      // aún no tiene fila (primera respuesta). Se distinguen releyendo: si ya
+      // hay código es que ganó la otra y se le devuelve EL SUYO, que es la misma
+      // idempotencia de siempre.
+      let codeToIssue: string | null = reserved?.discount_code ?? null;
+      if (!codeToIssue && !reserveErr) {
+        const { data: raced } = await sb
+          .from("profile_survey_answers")
+          .select("discount_code, discount_issued_at, discount_expires_at")
+          .eq("customer_id", ctx.customerId)
+          .maybeSingle();
+        if (raced?.discount_code) {
+          // Otra petición ya lo emitió mientras tanto.
+          discount = {
+            code: raced.discount_code as string,
+            issuedAt: raced.discount_issued_at as string,
+            expiresAt: raced.discount_expires_at as string,
+          };
+        } else {
+          // No hay fila todavía: el upsert de más abajo la crea con el código,
+          // y es esa escritura la que queda protegida por la PK de customer_id.
+          codeToIssue = reservedCode;
+        }
+      }
+
+      if (codeToIssue) {
+        try {
+          discount = await issueSurveyDiscount(ctx.customerId, codeToIssue);
+        } catch (err) {
+          // El cliente verá "te lo mandamos por correo en unos minutos" en vez de
+          // un error en crudo, pero alguien tiene que emitírselo a mano: por eso
+          // esto AVISA, no solo loguea.
+          //
+          // El fallo más probable el día del despliegue es que la app del portal
+          // no tenga el scope `write_discounts`, y ese se manifestaría en TODOS
+          // los clientes a la vez y en silencio. Con la alerta se ve en el
+          // primero; sin ella, se descubriría por reclamaciones.
+          console.error(
+            "[survey/profile] EMISIÓN DE CUPÓN FALLIDA:",
+            ctx.customerId,
+            err,
+          );
+          alertSlackError({
+            path: "/api/survey/profile",
+            code: "survey_discount_failed",
+            msg: `No se pudo emitir el cupón de perfilado: ${err instanceof Error ? err.message : String(err)}`,
+            customerId: ctx.customerId,
+          });
+
+          // LIBERAR LA RESERVA. Shopify no llegó a crear el descuento, así que
+          // ese código no existe en ninguna parte: dejarlo puesto condenaría al
+          // cliente a no recibir cupón NUNCA (la reserva ya no está a NULL y
+          // ningún reintento la ganaría), con un código muerto en la fila. Se
+          // devuelve a NULL solo si sigue siendo EL NUESTRO, para no pisar el de
+          // una petición paralela que sí lo consiguió.
+          await sb
+            .from("profile_survey_answers")
+            .update({ discount_code: null })
+            .eq("customer_id", ctx.customerId)
+            .eq("discount_code", codeToIssue)
+            .then(
+              () => undefined,
+              (e: unknown) =>
+                console.error(
+                  "[survey/profile] no se pudo liberar la reserva:",
+                  e,
+                ),
+            );
+        }
       }
     }
   }
@@ -365,7 +524,9 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
       // `false` es una medición legítima y con `||` se perdería.
       was_subscriber_at_answer:
         priorRow?.was_subscriber_at_answer ??
-        (hadPriorDiscount ? null : hadLiveSubscription),
+        (hadPriorDiscount || subscriptionCheckFailed
+          ? null
+          : hadLiveSubscription),
       updated_at: new Date().toISOString(),
     },
     { onConflict: "customer_id" },
@@ -376,7 +537,11 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
     // con ese nombre en vez de un 500 genérico, porque es el fallo que más
     // probablemente veremos el día del despliegue y hay que reconocerlo rápido.
     if ((saveErr as { code?: string }).code === "42P01") {
-      throw new ApiHttpError(503, "survey_storage_unavailable", "profile_survey_answers missing");
+      throw new ApiHttpError(
+        503,
+        "survey_storage_unavailable",
+        "profile_survey_answers missing",
+      );
     }
     throw new Error(`profile_survey_answers upsert: ${saveErr.message}`);
   }
@@ -410,7 +575,9 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // también tiene esa fecha puesta, y decirle "acabas de entrar" a alguien que
   // lleva dentro tres meses es peor que no decirle nada.
   const tierCrossed =
-    dropsAwarded > 0 && balance >= TIER_THRESHOLD && balance - dropsAwarded < TIER_THRESHOLD;
+    dropsAwarded > 0 &&
+    balance >= TIER_THRESHOLD &&
+    balance - dropsAwarded < TIER_THRESHOLD;
 
   // ── 2.5. El evento de Klaviyo, que dispara el flow de los dos emails ───────
   //
@@ -425,41 +592,56 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
   // Slack para emitirlo a mano.
   const emisionFallida = !discount && !hadLiveSubscription;
   if (customerEmail && !emisionFallida) {
-    // Fire-and-forget con el error tragado: el cliente ya ha contestado y tiene
-    // su código en pantalla. Un corte con Klaviyo no puede tumbar la respuesta
-    // después de haber guardado, que es el patrón del resto de la ruta.
-    void klaviyo
-      .trackEvent(
-        "Profile Survey Completed",
-        customerEmail,
-        {
-          discount_code: discount?.code ?? null,
-          discount_expires_at: discount?.expiresAt ?? null,
-          // La fecha YA formateada ("22 de octubre"). El filtro |date de Django
-          // devuelve '' en silencio sobre un string, que es como el recordatorio
-          // de 7d salió con la fecha en blanco a 524 personas en julio. Se
-          // reutiliza `formatShipDateEs`, que nació de aquel mismo bug.
-          discount_expires_label: formatShipDateEs(discount?.expiresAt),
-          discount_value: DISCOUNT_VALUE_EUR,
-          has_active_subscription: hadLiveSubscription,
-          survey_completed_at: new Date().toISOString(),
-        },
-        {
-          // Klaviyo deduplica por aquí: un reintento del submit no dispara el
-          // flow dos veces ni manda un segundo email con el código.
-          uniqueId: `survey-${ctx.customerId}`,
-          externalId: ctx.customerId,
-        },
-      )
-      .catch((err) => {
-        console.error("[survey/profile] evento Klaviyo fallido:", ctx.customerId, err);
-        alertSlackError({
-          path: "/api/survey/profile",
-          code: "survey_event_failed",
-          msg: `El evento Profile Survey Completed no salió: ${err instanceof Error ? err.message : String(err)}`,
-          customerId: ctx.customerId,
-        });
-      });
+    // En `after()`, NO fire-and-forget con `void`.
+    //
+    // El cliente ya ha contestado y tiene su código en pantalla, así que esto no
+    // puede sumarle latencia ni tumbarle la respuesta. Pero con `void` la
+    // promesa quedaba huérfana: si la función se congela al responder, Vercel
+    // corta la invocación y el evento se pierde, y con él el correo que lleva el
+    // cupón. Sin un error en ningún lado. `after()` mantiene viva la invocación
+    // hasta que termina, y `runWithoutRequestDeadline` porque a estas alturas el
+    // presupuesto de la petición está gastado por definición (mismo patrón que
+    // `subscription/address`). (Kiko, 2026-09-24.)
+    after(() =>
+      runWithoutRequestDeadline(() =>
+        klaviyo
+          .trackEvent(
+            "Profile Survey Completed",
+            customerEmail,
+            {
+              discount_code: discount?.code ?? null,
+              discount_expires_at: discount?.expiresAt ?? null,
+              // La fecha YA formateada ("22 de octubre"). El filtro |date de Django
+              // devuelve '' en silencio sobre un string, que es como el recordatorio
+              // de 7d salió con la fecha en blanco a 524 personas en julio. Se
+              // reutiliza `formatShipDateEs`, que nació de aquel mismo bug.
+              discount_expires_label: formatShipDateEs(discount?.expiresAt),
+              discount_value: DISCOUNT_VALUE_EUR,
+              has_active_subscription: hadLiveSubscription,
+              survey_completed_at: new Date().toISOString(),
+            },
+            {
+              // Klaviyo deduplica por aquí: un reintento del submit no dispara el
+              // flow dos veces ni manda un segundo email con el código.
+              uniqueId: `survey-${ctx.customerId}`,
+              externalId: ctx.customerId,
+            },
+          )
+          .catch((err) => {
+            console.error(
+              "[survey/profile] evento Klaviyo fallido:",
+              ctx.customerId,
+              err,
+            );
+            alertSlackError({
+              path: "/api/survey/profile",
+              code: "survey_event_failed",
+              msg: `El evento Profile Survey Completed no salió: ${err instanceof Error ? err.message : String(err)}`,
+              customerId: ctx.customerId,
+            });
+          }),
+      ),
+    );
   }
 
   // ── 3. La propuesta de cadencia ────────────────────────────────────────────
@@ -470,7 +652,9 @@ export const POST = withCustomer<SurveySubmitResult>(async (req, ctx) => {
     balance,
     tierCrossed,
     cadenceOffer,
-    discount: discount ? { code: discount.code, expiresAt: discount.expiresAt } : null,
+    discount: discount
+      ? { code: discount.code, expiresAt: discount.expiresAt }
+      : null,
     hadLiveSubscription,
   };
 });
@@ -536,7 +720,11 @@ async function buildCadenceOffer(
     });
     if (!fit.target) return null;
 
-    return { from: sub.frequency, to: fit.target, cappedAtSixMonths: fit.cappedAtSixMonths };
+    return {
+      from: sub.frequency,
+      to: fit.target,
+      cappedAtSixMonths: fit.cappedAtSixMonths,
+    };
   } catch (err) {
     console.warn("[survey/profile] cadence offer skipped:", err);
     return null;

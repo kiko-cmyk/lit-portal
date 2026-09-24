@@ -12,11 +12,25 @@
 --
 -- ══ La columna que hace el trabajo de verdad ══
 --
--- `discount_code` es UNIQUE. Esa restricción es la red de seguridad contra el
--- doble submit y las dos pestañas: si dos peticiones simultáneas intentan
--- guardar dos códigos para el mismo cliente, la segunda choca contra el índice
--- y no llega a duplicar. La lógica de "ya tiene código, devuélvele el suyo"
--- vive en la ruta, pero esto es lo que la hace cierta bajo concurrencia.
+-- `discount_code` es UNIQUE, y eso impide que el MISMO código se reparta a dos
+-- clientes distintos. Nada más.
+--
+-- CORRECCIÓN 2026-09-24 (Kiko): este comentario decía que el índice protegía del
+-- doble submit, y era FALSO. Los códigos se generan aleatorios, así que dos
+-- peticiones simultáneas del mismo cliente producen dos códigos DISTINTOS que no
+-- chocan entre sí: el índice los deja pasar y se crean dos descuentos en
+-- Shopify. El caso real no es el doble clic (lo tapa `busy` en el front) sino el
+-- timeout de ~10 s del App Proxy contra el `maxDuration` de 20, cuando el
+-- cliente ve error y reenvía mientras el servidor sigue trabajando.
+--
+-- Quien protege de verdad es la RESERVA de la ruta: un
+-- `update ... where discount_code is null` que Postgres serializa por fila, así
+-- que de dos peticiones a la vez solo una recibe fila y solo esa crea el
+-- descuento. Ver `src/app/api/survey/profile/route.ts`.
+--
+-- Se deja escrito porque un comentario que promete una garantía inexistente es
+-- peor que no tener comentario: el siguiente que lo lea dará el caso por
+-- cubierto y no mirará.
 --
 -- Verificación obligatoria contra PRODUCCIÓN:
 --   select column_name, is_nullable from information_schema.columns

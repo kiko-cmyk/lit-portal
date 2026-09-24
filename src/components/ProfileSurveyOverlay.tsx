@@ -680,11 +680,18 @@ function DoneStep({
               posa un lacre sobre un sobre, no como un icono centrado dentro de
               una caja. Absoluto y centrado, encima de la banda. */}
           <div className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2">
+            {/* El texto del sello pasa por t(): estaba fijo en castellano y a un
+                cliente en inglés le salía "CUPÓN DESCUENTO · PARA TI" dentro de
+                una pantalla por lo demás traducida. El "5€" no se traduce, que
+                es la cifra. (Kiko, 2026-09-24.) */}
             <WaxSeal
               size={96}
-              rim="CUPÓN DESCUENTO · CUPÓN DESCUENTO · CUPÓN DESCUENTO · "
+              rim={t({
+                en: "DISCOUNT COUPON · DISCOUNT COUPON · DISCOUNT COUPON · ",
+                es: "CUPÓN DESCUENTO · CUPÓN DESCUENTO · CUPÓN DESCUENTO · ",
+              })}
               centerTop="5€"
-              centerBottom="PARA TI"
+              centerBottom={t({ en: "FOR YOU", es: "PARA TI" })}
             />
           </div>
 
