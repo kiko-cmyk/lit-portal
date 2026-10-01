@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { alertSlackNoticeAwaited } from "@/lib/alert";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
@@ -18,8 +19,11 @@ import { supabaseAdmin } from "@/lib/supabase";
  * For each pending intent:
  *   - Re-read live Seal state (regeneration is done by the time we run).
  *   - If the next charge is already on/after preserve_date → done.
- *   - Else skip every pending attempt before preserve_date
- *     (seal.skipIntermediateAttempts — idempotent, so retrying is safe).
+ *   - Else shift the WHOLE regenerated schedule forward by a uniform offset so
+ *     the first charge lands on preserve_date (seal.reanchorCadence — idempotent,
+ *     so retrying is safe). It RESCHEDULES the pending attempts; it does not skip
+ *     them. (The first design did skip them, via skipIntermediateAttempts, and
+ *     this line outlived it — corrected 2026-10-01 after it misled a reader.)
  *   - On Seal error → bump attempts, leave pending; after MAX_ATTEMPTS → failed.
  *
  * Cadence: every 5 min via external cron on n8n.drinklit.com (curl with
@@ -50,6 +54,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (error) throw new Error(`reanchor-drain: ${error.message}`);
 
   let done = 0;
+  // Intents we gave up on because the preserved date is already inside the cutoff.
+  // Counted apart from `done`: nothing converged, a human may have to reschedule.
+  let droppedInCutoff = 0;
   let skippedTotal = 0;
   let deferred = 0;
   let failed = 0;
@@ -82,14 +89,37 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
-    // Never re-anchor onto a date already inside the 24h cutoff.
+    // Never re-anchor onto a date already inside the 24h cutoff: that shipment is
+    // already being picked. Harmless for a normal plan change (the preserved date is
+    // the one the customer already had), NOT harmless for a `fromNext` change from
+    // the WhatsApp bot, where this intent is the only thing holding the schedule to
+    // the date the bot promised. Same reasoning as the webhook's guard; see
+    // applyReanchorIfPending in api/webhooks/seal.
     if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
       await sb
         .from("subscription_reanchor_intents")
         .delete()
         .eq("customer_id", intent.customer_id)
         .eq("seal_subscription_id", intent.seal_subscription_id);
-      done++;
+      console.warn("[reanchor-drain] intent dropped inside the 24h cutoff", {
+        customerId: intent.customer_id,
+        subId,
+        preserve,
+      });
+      await alertSlackNoticeAwaited({
+        title: "Re-anclaje descartado por el corte de 24h",
+        icon: ":warning:",
+        channel: "incidents",
+        fields: {
+          suscripcion: String(subId),
+          cliente: intent.customer_id,
+          "fecha prometida": preserve,
+          origen: "cron reanchor-drain",
+          "que revisar":
+            "Seal puede cobrar antes de esa fecha. Comprobar el proximo cobro y reprogramarlo a mano si hace falta.",
+        },
+      });
+      droppedInCutoff++;
       continue;
     }
 
@@ -168,7 +198,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  return NextResponse.json({ ok: true, done, skippedTotal, deferred, failed, expired });
+  return NextResponse.json({ ok: true, done, droppedInCutoff, skippedTotal, deferred, failed, expired });
 }
 
 async function bumpAttempt(
