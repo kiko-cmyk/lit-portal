@@ -17,7 +17,10 @@
  *     una que no se pudo releer es `frequency_unverified`: en la entrada del bot
  *     no hay «hecho» sin relectura, al revés que en la ruta del cliente;
  *   - la intención de re-anclaje se escribe con la fecha natural y NO dentro del
- *     corte de 24 h; y si falla, el cambio ya hecho no se deshace ni se esconde.
+ *     corte de 24 h; y si falla, el cambio ya hecho no se deshace ni se esconde;
+ *   - en modo `fromNext` (el del bot desde el 2026-10-01) la fecha se cuenta desde
+ *     la próxima entrega, a quien ya saltó no se le niega el cambio, y sin
+ *     intención de re-anclaje escrita no hay «hecho» (`reanchor_intent_failed`).
  */
 
 import {
@@ -28,8 +31,10 @@ import {
   gainsFor,
   isFrequency,
   longerOptions,
+  longerOptionsFromNext,
   naturalNextShipDate,
   SEAL_INTERVAL_BY_FREQUENCY,
+  shiftedNextShipDate,
 } from "@/lib/frequency-core";
 import type { SealSubscription } from "@/lib/seal";
 
@@ -319,6 +324,61 @@ const run = async () => {
     const { deps } = fakeDeps({ intentFails: true });
     const r = await changeFrequencyOnly(base, deps);
     check("si la intención no se puede escribir, el cambio hecho no se esconde", r.changed && r.reanchor === "intent_failed" && r.nextShipDate !== null);
+  }
+
+  // ── fromNext: la fecha que promete el bot desde el 2026-10-01 ─────────────
+  check(
+    "fromNext: la 12320700 de la prueba con Michel, de 2 a 3 meses con la próxima el 4-oct, es el 4-nov",
+    shiftedNextShipDate("2026-10-04T10:00:00+00:00", "2mo", "3mo") === "2026-11-04",
+  );
+  check(
+    "fromNext: el pantallazo da lo mismo que la natural, 9-nov",
+    shiftedNextShipDate("2026-10-24T10:00:00+00:00", "45d", "2mo") === "2026-11-09",
+  );
+  check("fromNext: sin próxima, null", shiftedNextShipDate(null, "45d", "2mo") === null);
+  const desdeLaProxima = longerOptionsFromNext(saltos, "1mo");
+  check(
+    "fromNext: a quien ya saltó (último cobro en marzo) todas las opciones le alejan la entrega",
+    desdeLaProxima.length === 6 && desdeLaProxima.every((o) => o.gains) && desdeLaProxima[0].nextShipDate === "2026-11-08",
+    desdeLaProxima.map((o) => `${o.frequency}:${o.nextShipDate}`).join(" "),
+  );
+
+  // Cada 2 meses, cobró hace 120 días y saltó hace 60: la natural de 3 meses cae
+  // en el pasado (no_gain); contada desde la próxima, no.
+  const saltadoVivo = sub({
+    delivery_interval: "2 months",
+    billing_attempts: [
+      attempt(1, day(-120), { completed: true }),
+      attempt(2, day(-60), { skipped: true }),
+      attempt(3, nextDay),
+    ],
+  });
+  const tresMeses = async () => sub({ delivery_interval: "3 months", billing_attempts: [attempt(9, day(1))] });
+  const baseFromNext = { ...base, sealSub: saltadoVivo, target: "3mo" as const, reanchorMode: "fromNext" as const };
+  {
+    const { deps } = fakeDeps();
+    await rejects(
+      "contraste: en modo natural ese mismo cambio es no_gain",
+      changeFrequencyOnly({ ...baseFromNext, reanchorMode: "natural" }, deps),
+      "no_gain",
+    );
+  }
+  {
+    const { deps, calls } = fakeDeps({ readBack: tresMeses });
+    const r = await changeFrequencyOnly(baseFromNext, deps);
+    const esperado = shiftedNextShipDate(`${nextDay}T10:00:00+00:00`, "2mo", "3mo");
+    check("fromNext: a quien ya saltó no se le niega el cambio", r.changed && r.frequency === "3mo");
+    check("fromNext: la intención lleva la fecha contada desde la próxima", calls.intents.length === 1 && calls.intents[0] === esperado, `${calls.intents[0]} vs ${esperado}`);
+    check("fromNext: y se promete esa", r.nextShipDate === `${esperado}T13:00:00Z` && r.reanchor === "intent_written");
+  }
+  {
+    const { deps, calls } = fakeDeps({ readBack: tresMeses, intentFails: true });
+    await rejects(
+      "fromNext: sin intención de re-anclaje no hay «hecho» (Seal cobraría antes)",
+      changeFrequencyOnly(baseFromNext, deps),
+      "reanchor_intent_failed",
+    );
+    check("y la auditoría lo apunta", calls.audits.at(-1) === "reanchor_intent_failed", calls.audits.join(","));
   }
 
   if (failures) {

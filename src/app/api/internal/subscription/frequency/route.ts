@@ -5,12 +5,12 @@ import { ApiHttpError } from "@/lib/api-helpers";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { cutoffEndsAt, isWithinCutoff } from "@/lib/cutoff";
 import {
-  assertGains,
   assertLonger,
+  assertMovesLater,
   changeFrequencyOnly,
   isFrequency,
-  longerOptions,
-  naturalNextShipDate,
+  longerOptionsFromNext,
+  shiftedNextShipDate,
 } from "@/lib/frequency-core";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { klaviyo } from "@/lib/klaviyo";
@@ -36,11 +36,18 @@ import { getComposition, getNextBillingAttempt, normalizeFrequency, seal } from 
  * Tres modos, elegidos por el cuerpo:
  *
  *   - Sin `frequency` → CONSULTA. Ritmo actual, próxima fecha, corte, y las
- *     frecuencias más largas con la fecha natural de cada una.
+ *     frecuencias más largas con la fecha nueva de cada una.
  *   - `frequency` + `dryRun: true` → PROPUESTA. Valida y devuelve dónde caería la
  *     próxima entrega, sin escribir. Es lo que el bot le lee al cliente.
  *   - `frequency` + `dryRun: false` → ESCRITURA. Verificando releyendo; sin
  *     relectura no hay «hecho».
+ *
+ * La fecha nueva se cuenta DESDE LA PRÓXIMA ENTREGA (`shiftedNextShipDate`, modo
+ * `fromNext`; decisión de Kiko del 2026-10-01): la próxima menos un ciclo actual
+ * más uno nuevo. Contada desde el último cobro (la natural, la del SkipOverlay), a
+ * quien ya había saltado no le alejaba la entrega ningún escalón cercano y el bot
+ * acababa proponiendo 5 meses a quien estaba en 2. Que Seal, que regenera desde el
+ * último cobro, no cobre antes lo asegura el re-anclaje, y sin él no hay «hecho».
  *
  * Solo ALARGA: una frecuencia igual o más corta sale como `not_longer`. Acortar
  * tiene su sitio en el área personal. Y solo frecuencia: las líneas y su precio no
@@ -192,7 +199,7 @@ async function handle(req: NextRequest, attempt: Attempt) {
       nextShipDate,
       withinCutoff,
       changeableUntil: nextShipDate ? cutoffEndsAt(nextShipDate).toISOString() : null,
-      longerFrequencies: longerOptions(sealSub, current),
+      longerFrequencies: longerOptionsFromNext(sealSub, current),
     };
   }
 
@@ -207,10 +214,10 @@ async function handle(req: NextRequest, attempt: Attempt) {
     throw new ApiHttpError(409, "cutoff_passed", "Cannot change the frequency within 24h of the next ship");
   }
 
-  // LIT-464 en la puerta, también en la propuesta: el bot no le pide al cliente
-  // que confirme una fecha que después no se va a escribir.
-  assertGains(sealSub, nextShipDate, current, target);
-  const proposedNextShipDate = naturalNextShipDate(sealSub, nextShipDate, current, target);
+  // La misma fecha que preservará la escritura (`fromNext`), comprobada también en
+  // la propuesta: el bot no le pide al cliente que confirme algo que no se va a escribir.
+  const proposedNextShipDate = shiftedNextShipDate(nextShipDate, current, target);
+  assertMovesLater(nextShipDate, proposedNextShipDate);
 
   // PROPUESTA
   if (body.dryRun) {
@@ -249,7 +256,7 @@ async function handle(req: NextRequest, attempt: Attempt) {
       customerId,
       source,
       reason,
-      reanchorMode: "natural",
+      reanchorMode: "fromNext",
       log,
     });
   } finally {

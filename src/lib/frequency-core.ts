@@ -89,6 +89,44 @@ export function naturalNextShipDate(
 }
 
 /**
+ * Fecha (YYYY-MM-DD) de la próxima entrega si la frecuencia pasa a `target`,
+ * contada DESDE LA QUE YA TIENE: un ciclo actual hacia atrás y uno nuevo hacia
+ * delante. De cada 2 a cada 3 meses con la próxima el 4-oct: el 4-nov.
+ *
+ * Es la que promete el bot de WhatsApp desde el 2026-10-01 (modo `fromNext`,
+ * decisión de Kiko). La natural, contada desde el último cobro, dejaba a quien ya
+ * había saltado sin escalones cercanos: en la 12320700 (cada 2 meses, último
+ * cobro 27-may, próxima 4-oct) 3 y 4 meses caían en agosto y septiembre, y el
+ * primero que alejaba la entrega era 5. Contada desde la próxima, un ritmo más
+ * largo siempre la aleja. Seal sigue regenerando en «último cobro + intervalo»;
+ * el re-anclaje (`seal.reanchorCadence`, que REPROGRAMA todos los pendientes) la
+ * lleva hasta aquí. Espejo: `next_date_from_next` de lit-agentic-workflows.
+ */
+export function shiftedNextShipDate(
+  nextAttemptDate: string | null,
+  current: Frequency,
+  target: Frequency,
+): string | null {
+  if (!nextAttemptDate) return null;
+  return addCycle(subCycle(new Date(nextAttemptDate), current), target).toISOString().slice(0, 10);
+}
+
+/**
+ * En modo `fromNext` la fecha nueva tiene que quedar DESPUÉS de la próxima que ya
+ * tiene. Contada desde la próxima, un ritmo más largo siempre lo cumple; se
+ * comprueba igual porque es la fecha que se le promete al cliente.
+ */
+export function assertMovesLater(nextAttemptDate: string | null, newYYYYMMDD: string | null): void {
+  if (!nextAttemptDate || !newYYYYMMDD || newYYYYMMDD <= nextAttemptDate.slice(0, 10)) {
+    throw new ApiHttpError(
+      409,
+      "no_gain",
+      `The new date ${newYYYYMMDD ?? "?"} would not move the next delivery past ${nextAttemptDate?.slice(0, 10) ?? "?"}`,
+    );
+  }
+}
+
+/**
  * El ancla CONSERVADORA con la que se decide si una frecuencia gana. Igual que
  * `naturalNextShipDate` usa el último cobro completado que Seal enseña; pero
  * cuando no enseña ninguno (en la 14030060 no hay ni uno, ni `invoices`, solo
@@ -174,6 +212,27 @@ export function longerOptions(sub: SealSubscription, current: Frequency): Longer
     naturalNextShipDate: naturalNextShipDate(sub, next, current, frequency),
     gains: gainsFor(sub, next, current, frequency),
   }));
+}
+
+export interface LongerOptionFromNext {
+  frequency: Frequency;
+  /** Dónde caería la próxima entrega con esa frecuencia, contada desde la próxima. */
+  nextShipDate: string | null;
+  /** Si la aleja. Contada desde la próxima, siempre que haya próxima. */
+  gains: boolean;
+}
+
+/** Las frecuencias más largas con la fecha que promete el bot (`fromNext`). */
+export function longerOptionsFromNext(sub: SealSubscription, current: Frequency): LongerOptionFromNext[] {
+  const next = getNextBillingAttempt(sub)?.date ?? null;
+  return longerFrequencies(current).map((frequency) => {
+    const nextShipDate = shiftedNextShipDate(next, current, frequency);
+    return {
+      frequency,
+      nextShipDate,
+      gains: !!next && !!nextShipDate && nextShipDate > next.slice(0, 10),
+    };
+  });
 }
 
 /**
@@ -275,9 +334,12 @@ export interface FrequencyChangeArgs {
   /**
    * `natural`: la próxima entrega cae en último cobro + intervalo nuevo (lo que
    * hace el SkipOverlay al «Ajustar mi plan»). `preserve`: se queda en la fecha
-   * que ya tenía (cambio de plan normal).
+   * que ya tenía (cambio de plan normal). `fromNext`: la próxima menos un ciclo
+   * actual más uno nuevo (`shiftedNextShipDate`), la que promete el bot desde el
+   * 2026-10-01; aquí el re-anclaje es lo único que impide que Seal cobre antes,
+   * así que sin intención escrita no hay «hecho».
    */
-  reanchorMode: "natural" | "preserve";
+  reanchorMode: "natural" | "preserve" | "fromNext";
   log?: (step: string, extra?: Record<string, unknown>) => void;
 }
 
@@ -346,7 +408,19 @@ export async function changeFrequencyOnly(
   const preserve =
     reanchorMode === "natural"
       ? naturalNextShipDate(sealSub, nextIso, current, target)
-      : (nextIso?.slice(0, 10) ?? null);
+      : reanchorMode === "fromNext"
+        ? shiftedNextShipDate(nextIso, current, target)
+        : (nextIso?.slice(0, 10) ?? null);
+
+  // En `fromNext` lo que Seal regenere puede caer ANTES de la fecha que tenía el
+  // cliente (LIT-464) y solo el re-anclaje lo arregla. Si la fecha no aleja la
+  // entrega o ya no se puede re-anclar (corte de 24 h), no se toca Seal.
+  if (reanchorMode === "fromNext") {
+    assertMovesLater(nextIso, preserve);
+    if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
+      throw new ApiHttpError(409, "cutoff_passed", `Cannot reanchor onto ${preserve}: within the 24h cutoff`);
+    }
+  }
 
   const audit = (outcome: string) =>
     deps.writeAudit({
@@ -454,8 +528,20 @@ export async function changeFrequencyOnly(
       } catch (e) {
         // El cambio ya está hecho y verificado; sin intención, la fecha será la que
         // Seal regenere (en modo natural es la misma salvo saltos previos). Se dice.
-        log("reanchor-intent-write-failed", { msg: e instanceof Error ? e.message : String(e) });
+        const msg = e instanceof Error ? e.message : String(e);
+        log("reanchor-intent-write-failed", { msg });
         reanchor = "intent_failed";
+        // En `fromNext` lo regenerado puede caer ANTES de la fecha que tenía: sin
+        // intención nadie lo mueve y Seal cobraría antes de lo prometido. No hay
+        // «hecho»; el 502 avisa a Slack y hay que re-anclar a mano.
+        if (reanchorMode === "fromNext") {
+          await audit("reanchor_intent_failed");
+          throw new ApiHttpError(
+            502,
+            "reanchor_intent_failed",
+            `Frequency changed to ${target} but the reanchor intent to ${preserve} could not be written (${msg}); Seal may charge before it`,
+          );
+        }
       }
     }
   }
