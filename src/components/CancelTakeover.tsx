@@ -884,7 +884,7 @@ function Solucion({
         <button
           type="button"
           disabled={busy || longer.length === 0}
-          onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "natural" })}
+          onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "fromNext" })}
           className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
         >
           {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Space out my deliveries" es="Espaciar mis entregas" />}

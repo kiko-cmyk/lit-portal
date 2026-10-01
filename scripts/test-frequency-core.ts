@@ -20,7 +20,10 @@
  *     corte de 24 h; y si falla, el cambio ya hecho no se deshace ni se esconde;
  *   - en modo `fromNext` (el del bot desde el 2026-10-01) la fecha se cuenta desde
  *     la próxima entrega, a quien ya saltó no se le niega el cambio, y sin
- *     intención de re-anclaje escrita no hay «hecho» (`reanchor_intent_failed`).
+ *     intención de re-anclaje escrita no hay «hecho» (`reanchor_intent_failed`);
+ *   - `spacedNextShipDate` (el área personal desde el 2026-10-02) da EXACTAMENTE la
+ *     fecha que enseñan SkipOverlay, CancelTakeover y la encuesta, también a quien
+ *     ya saltó, y nunca una que no aleje la entrega.
  */
 
 import {
@@ -35,8 +38,12 @@ import {
   naturalNextShipDate,
   SEAL_INTERVAL_BY_FREQUENCY,
   shiftedNextShipDate,
+  spacedNextShipDate,
 } from "@/lib/frequency-core";
+import { addCycle, subCycle } from "@/lib/cadence";
+import { longerFrequencies } from "@/lib/plan-options";
 import type { SealSubscription } from "@/lib/seal";
+import type { Frequency } from "@/lib/types";
 
 let failures = 0;
 
@@ -380,6 +387,79 @@ const run = async () => {
     );
     check("y la auditoría lo apunta", calls.audits.at(-1) === "reanchor_intent_failed", calls.audits.join(","));
   }
+
+  // ── área personal: la fecha que se escribe es la que se enseña (2026-10-02) ─
+  //
+  // La pantalla del SkipOverlay (y la de CancelTakeover) calcula su vista previa
+  // así, en el navegador. Si el backend escribe otra, al cliente se le promete una
+  // fecha y se guarda otra: es lo que pasaba con la natural a quien había saltado.
+  const pantalla = (nextIso: string, cur: Frequency, tgt: Frequency) =>
+    addCycle(subCycle(new Date(nextIso), cur), tgt).toISOString().slice(0, 10);
+
+  check(
+    "área personal: la 12320700 (2 → 3 meses, próxima 4-oct) se escribe en 4-nov, lo que dice la pantalla",
+    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "3mo") === "2026-11-04",
+  );
+  check(
+    "área personal: y de 2 a 6 meses, el 4-feb",
+    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "6mo") === "2027-02-04",
+  );
+
+  // La regresión de fondo: con su historial real (último cobro 27-may, tres
+  // saltados) la natural caía en el PASADO y el guard del corte mataba la intención.
+  const kiko = sub({
+    delivery_interval: "2 month",
+    billing_attempts: [
+      attempt(1, "2026-05-20", { skipped: true }),
+      attempt(2, "2026-05-27", { completed: true }),
+      attempt(3, "2026-06-20", { skipped: true }),
+      attempt(4, "2026-08-04", { skipped: true }),
+      attempt(5, "2026-10-04"),
+    ],
+  });
+  const natural464 = naturalNextShipDate(kiko, "2026-10-04T11:00:00+00:00", "2mo", "3mo");
+  check(
+    "área personal: con ese historial la natural de antes caía en el pasado (27-ago), la causa del fallo",
+    natural464 === "2026-08-27",
+    String(natural464),
+  );
+  check(
+    "área personal: la nueva no depende del historial, solo de la próxima",
+    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "3mo") === "2026-11-04",
+  );
+
+  // Pantalla = backend para TODA la escalera, con fechas incómodas (fin de mes,
+  // febrero, cambio de año).
+  let iguales = 0;
+  let casos = 0;
+  const desiguales: string[] = [];
+  for (const next of ["2026-10-04", "2026-10-31", "2026-01-31", "2026-12-15", "2027-02-28", "2026-08-30"]) {
+    const nextIso = `${next}T10:00:00+00:00`;
+    for (const cur of ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo"] as Frequency[]) {
+      for (const tgt of longerFrequencies(cur)) {
+        casos++;
+        const back = spacedNextShipDate(nextIso, cur, tgt);
+        const front = pantalla(nextIso, cur, tgt);
+        if (back === front && back > next) iguales++;
+        else desiguales.push(`${next} ${cur}→${tgt}: pantalla ${front}, backend ${back}`);
+      }
+    }
+  }
+  check(
+    `área personal: pantalla y backend dan la misma fecha, y posterior a la próxima, en los ${casos} casos`,
+    iguales === casos,
+    desiguales.slice(0, 3).join(" | "),
+  );
+
+  check(
+    "área personal: una frecuencia más corta no da fecha (se queda la que tiene, nunca hacia atrás)",
+    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "1mo") === null,
+  );
+  check(
+    "área personal: la misma frecuencia tampoco",
+    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "2mo") === null,
+  );
+  check("área personal: sin próxima, null", spacedNextShipDate(null, "2mo", "3mo") === null);
 
   if (failures) {
     console.error(`\n${failures} aserciones fallidas`);
