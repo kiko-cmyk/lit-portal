@@ -435,13 +435,37 @@ async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): P
   const preserve = String(intent.preserve_date).slice(0, 10);
 
   // Cutoff guard — never re-anchor onto a date already inside 24h.
+  //
+  // Dropping the intent is right for a normal plan change: the preserved date is
+  // the one the customer already had, so letting it stand changes nothing. It is
+  // NOT harmless for a `fromNext` change from the WhatsApp bot, where the intent is
+  // the ONLY thing holding the schedule to the date the bot promised — Seal
+  // regenerates on "last completed charge + interval" and can land EARLIER. Clearing
+  // it there means the customer is charged before the date they agreed to, and the
+  // only reason we used to find out was the customer telling us.
+  //
+  // We still clear it (re-anchoring into the cutoff would move a shipment already
+  // being picked), but we say so out loud so support can reschedule by hand the same
+  // day. `incidents`, not the 5xx firehose: this needs a human, not a graph.
   if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
     await sb
       .from("subscription_reanchor_intents")
       .delete()
       .eq("customer_id", intent.customer_id)
       .eq("seal_subscription_id", String(sealSubId));
-    console.log("[seal-webhook] reanchor cleared (within cutoff)", { sealSubId, preserve });
+    console.warn("[seal-webhook] reanchor cleared (within cutoff)", { sealSubId, preserve });
+    alertSlackNotice({
+      title: "Re-anclaje descartado por el corte de 24h",
+      icon: ":warning:",
+      channel: "incidents",
+      fields: {
+        suscripcion: String(sealSubId),
+        cliente: intent.customer_id,
+        "fecha prometida": preserve,
+        "que revisar":
+          "Seal puede cobrar antes de esa fecha. Comprobar el proximo cobro y reprogramarlo a mano si hace falta.",
+      },
+    });
     return;
   }
 

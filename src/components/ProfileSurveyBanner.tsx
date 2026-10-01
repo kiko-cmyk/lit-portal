@@ -118,8 +118,8 @@ export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
               que nadie las conteste. */}
           <p className="mt-2.5 max-w-md text-[13px] leading-[1.5] text-[#b3ab98]">
             <T
-              en="Nine questions, one minute. We use them to fit your subscription to what you actually drink, so no more boxes piling up."
-              es="Nueve preguntas, un minuto. Nos sirven para ajustar tu suscripción a lo que de verdad consumes, y que no se te acumulen las cajas."
+              en="Ten questions, one minute. We use them to fit your subscription to what you actually drink, so no more boxes piling up."
+              es="Diez preguntas, un minuto. Nos sirven para ajustar tu suscripción a lo que de verdad consumes, y que no se te acumulen las cajas."
             />
           </p>
         </div>

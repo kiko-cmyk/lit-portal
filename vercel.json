@@ -44,6 +44,10 @@
     {
       "path": "/api/cron/profile-survey-sync",
       "schedule": "45 6 * * *"
+    },
+    {
+      "path": "/api/cron/survey-discount-cleanup",
+      "schedule": "0 4 * * *"
     }
   ]
 }

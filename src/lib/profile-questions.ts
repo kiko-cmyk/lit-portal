@@ -54,8 +54,39 @@ export interface ProfileQuestion {
   screen: 1 | 2 | 3;
   /** Solo se pregunta si la respuesta de `key` NO está en `unless`. */
   gatedBy?: { key: string; unless: string[] };
+  /**
+   * Admite varias respuestas (Juan 2026-09-22). Se guardan en UNA cadena
+   * separada por `MULTI_SEP`, no como array, y el motivo no es pereza:
+   * `answers` es `Record<string, string>` de punta a punta (Postgres jsonb, la
+   * validación, `klaviyoProps`, el cron de sync y las propiedades `cs_*` de
+   * Klaviyo, que son texto). Meter un array obligaría a tocar esas seis capas
+   * y a migrar lo ya guardado.
+   *
+   * Con `;` Klaviyo además sigue pudiendo segmentar por "contiene X", que es
+   * como se consulta una multi-respuesta allí. Y TIENE que hacerse así: un
+   * segmento con "igual a" pierde a todo el que marca más de una opción, sin
+   * error. Les pasó a "perfil · uso ocasional para resaca" (cs_uso) y
+   * "perfil · padel o tenis" (cs_deporte), creados con "igual a" antes de que
+   * esas preguntas fueran multi: pasaron de 1 y 0 perfiles a 3 y 3 al cambiarlos
+   * a "contiene" el 2026-09-23. Vale para cs_uso, cs_momento, cs_sabor_pref y
+   * cs_deporte.
+   *
+   * Al marcar una pregunta como multi, añade "(varias)" a su etiqueta en
+   * `_PORTAL` de lit-dashboard/backend/app/services/crm_scripts.py: el dashboard
+   * no puede saber cuáles lo son, y sin ese aviso su tarjeta en la hoja de
+   * Clientes suma más de 100% sin explicarlo (le pasó a `deporte_tipo`).
+   */
+  multi?: boolean;
   options: ProfileOption[];
 }
+
+/**
+ * Separador de las respuestas múltiples. Punto y coma y no coma: "Trabajo /
+ * foco" y "Calor / verano" ya llevan barra, y una coma aparecería dentro de
+ * valores futuros con más facilidad. Ningún valor canónico del CS lo contiene
+ * (comprobado sobre el banco entero, y hay un test que lo ancla).
+ */
+export const MULTI_SEP = ";";
 
 const o = (value: string, en: string, es: string): ProfileOption => ({ value, en, es });
 
@@ -88,6 +119,11 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     screen: 1,
     en: "What do you drink it for?",
     es: "¿Para qué lo tomas?",
+    // Varias respuestas: casi nadie lo toma para UNA sola cosa, y forzar a
+    // elegir convertía el dato en una media verdad.
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca las que quieras",
     options: [
       o("Deporte", "Sport", "Deporte"),
       o("Trabajo / foco", "Work or focus", "Trabajo o foco"),
@@ -97,7 +133,49 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
       o("Otro", "Something else", "Otro"),
     ],
   },
-
+  {
+    // Kiko, 2026-09-23. Va justo después de `uso` porque son la pareja natural:
+    // para qué y cuándo. Llegó con el formulario ya en campaña, así que quien
+    // contestó antes de esta fecha NO la tiene, y su banner ya no sale: las
+    // respuestas de esta pregunta solo crecen con gente nueva.
+    key: "momento",
+    klaviyoProp: "cs_momento",
+    // HEREDADA, aunque llegara la última. El CS Platform ya la pregunta desde el
+    // 2026-06-30 en la cola de fidelización ("¿Cuándo lo toma?", SCRIPTS
+    // ["fidelizacion"] en lit-dashboard/backend/app/services/crm_scripts.py) y
+    // su sync ya escribe `cs_momento`. Si el portal guardara códigos propios
+    // (`manana`, `despues_entreno`), la MISMA propiedad de Klaviyo tendría dos
+    // vocabularios: "contiene Post-entreno" perdería a toda la gente del portal
+    // y "contiene despues_entreno" a la del teléfono, sin error. Lo cazó una
+    // revisión antes de desplegar. Así que se guarda la cadena del CS byte a
+    // byte, como `uso` o `edad`, y lo que cambia es solo la ETIQUETA.
+    inherited: true,
+    screen: 1,
+    en: "When do you drink it?",
+    es: "¿En qué momento del día lo tomas?",
+    // Varias, por lo mismo que `uso`: quien lo toma por la mañana y después de
+    // entrenar no tiene un único momento, y forzarle a uno inventa el dato.
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca los que quieras",
+    // Sin `gatedBy` aunque tres opciones hablan de entrenar: la frecuencia de
+    // deporte se pregunta DESPUÉS (pantalla 3) y la condicional va por pregunta
+    // entera, no por opción. Quien no entrena, sencillamente no las marca.
+    //
+    // Las opciones son las de Kiko más "Por la tarde", que ya estaba en el guion
+    // (`Tarde`) y sin la cual quien lo toma en la oficina o con el calor del
+    // mediodía no tiene respuesta verdadera. "Durante el entreno" es la única
+    // que el guion no tenía: se añadió allí el mismo día para que los dos
+    // canales sigan escribiendo el mismo vocabulario.
+    options: [
+      o("Mañana", "In the morning", "Por la mañana"),
+      o("Pre-entreno", "Before training", "Antes de entrenar"),
+      o("Durante el entreno", "While training", "Durante el entreno"),
+      o("Post-entreno", "After training", "Después de entrenar"),
+      o("Tarde", "In the afternoon", "Por la tarde"),
+      o("Noche", "At night", "Por la noche"),
+    ],
+  },
   // ── Pantalla 2 · Tu LIT en casa ───────────────────────────────────────────
   {
     key: "sabor_favorito",
@@ -106,6 +184,9 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     screen: 2,
     en: "Which flavour is yours?",
     es: "¿Cuál es tu sabor?",
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca los que quieras",
     options: [
       // Nombres de marca: NO se traducen (misma decisión que `FLAVORS` en
       // seal-plans.ts, Juan 2026-07-11). Salty Peach existe desde el 2026-09-02.
@@ -208,6 +289,11 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     screen: 3,
     en: "Which one?",
     es: "¿Cuál?",
+    // Varias: casi nadie hace un solo deporte, y forzar a elegir uno perdía
+    // justo la mezcla que explica cuánto suda esa persona.
+    multi: true,
+    helpEn: "Pick as many as you like",
+    helpEs: "Marca los que quieras",
     gatedBy: { key: "deporte_frecuencia", unless: ["No entreno"] },
     options: [
       o("Running", "Running", "Running"),
@@ -258,7 +344,15 @@ export const QUESTIONS_BY_KEY: Record<string, ProfileQuestion> = Object.fromEntr
 export const SITUACION_CON_PROBLEMA = "Tiene un problema";
 export const HELP_URL = "https://litsalt.com/pages/ayuda";
 
-/** ¿Se le pregunta esto, dadas las respuestas que ya ha dado? */
+/**
+ * ¿Se le pregunta esto, dadas las respuestas que ya ha dado?
+ *
+ * Compara el valor COMPLETO, sin partir por `MULTI_SEP`, y hoy es correcto
+ * porque la única condicional del banco cuelga de `deporte_frecuencia`, que no
+ * es multi. Si algún día se gatea una pregunta por una multi-respuesta, esto
+ * hay que cambiarlo: "Deporte;Resaca" no es igual a "Deporte" y la puerta se
+ * quedaría cerrada en silencio.
+ */
 export function isAsked(q: ProfileQuestion, answers: Record<string, string>): boolean {
   if (!q.gatedBy) return true;
   const gate = answers[q.gatedBy.key];
@@ -306,7 +400,30 @@ export function validateAnswers(raw: unknown): ValidationResult {
       out.unknown.push(k);
       continue;
     }
-    if (typeof v !== "string" || !q.options.some((opt) => opt.value === v)) {
+    if (typeof v !== "string") {
+      out.invalid.push(k);
+      continue;
+    }
+    if (q.multi) {
+      // Multi-respuesta: se valida CADA parte contra el banco y se vuelve a
+      // unir en el ORDEN DEL BANCO, no en el que llegó. Así dos clientes que
+      // marcaron lo mismo producen la misma cadena y los segmentos de Klaviyo
+      // por igualdad no se parten en variantes.
+      const parts = v
+        .split(MULTI_SEP)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const valid = q.options.filter((opt) => parts.includes(opt.value)).map((opt) => opt.value);
+      // Vacío = ninguna parte era válida (o llegó una cadena vacía). Se rechaza
+      // igual que un valor inventado; saltarse la pregunta es NO mandar la clave.
+      if (valid.length === 0 || valid.length !== parts.length) {
+        out.invalid.push(k);
+        continue;
+      }
+      asStrings[k] = valid.join(MULTI_SEP);
+      continue;
+    }
+    if (!q.options.some((opt) => opt.value === v)) {
       out.invalid.push(k);
       continue;
     }
@@ -376,6 +493,7 @@ export function klaviyoProps(answers: Record<string, string>): Record<string, st
 export const ALL_KLAVIYO_PROPS = [
   "cs_situacion",
   "cs_uso",
+  "cs_momento",
   "cs_sabor_pref",
   "cs_caja_dura",
   "cs_stock_nivel",

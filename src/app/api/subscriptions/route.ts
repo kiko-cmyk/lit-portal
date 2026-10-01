@@ -4,6 +4,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { supabaseAdmin } from "@/lib/supabase";
 import type { Subscription } from "@/lib/types";
 
 // GET /apps/portal/api/subscriptions  (PLURAL)
@@ -16,7 +17,11 @@ import type { Subscription } from "@/lib/types";
 // (SubscriptionGate, mounted in the locale layout), so the wholesale flag reaches
 // every surface without adding a round trip — the email lookup it already does
 // just returns the customer's tags too.
-export const GET = withCustomer<{ subscriptions: Subscription[]; isB2B: boolean }>(async (req, ctx) => {
+export const GET = withCustomer<{
+  subscriptions: Subscription[];
+  isB2B: boolean;
+  canReactivate: boolean;
+}>(async (req, ctx) => {
   // Only authed route without a rate limit until the audit (2026-07-06): every
   // hit costs a Shopify Admin + a Seal call. Generous cap — the gate calls it
   // once per entry and the chooser once per switch; only a hammering loop
@@ -62,8 +67,49 @@ export const GET = withCustomer<{ subscriptions: Subscription[]; isB2B: boolean 
     return an.localeCompare(bn);
   });
 
+  // ¿Le queda algo que hacer en Suscripción aunque `manageable` venga vacío?
+  //
+  // Un cancelado desde el portal NO aparece arriba: en Seal el cancel del
+  // portal es inmediato, así que no queda ni ACTIVE ni PAUSED ni
+  // `cancellation_scheduled_for`. Pero el Hub SÍ le sigue enseñando la tarjeta
+  // de reactivar durante 90 días, que es justo lo que evita que se compre una
+  // segunda suscripción en vez de recuperar la suya (el patrón "sub orfana
+  // 13635794").
+  //
+  // Sin esto, la pestaña que se apaga con `manageable.length === 0` le cerraría
+  // la puerta a la única pantalla donde puede volver. Misma condición que
+  // /api/subscription/reactivate y que el dashboard del Hub, para que las tres
+  // respondan lo mismo; si divergen, la pestaña miente.
+  //
+  // Solo se pregunta cuando hace falta (no hay nada gestionable), así que al
+  // 99% de los clientes no les cuesta ni una lectura.
+  let canReactivate = false;
+  if (manageable.length === 0) {
+    try {
+      const { data: prefs } = await supabaseAdmin()
+        .from("customer_preferences")
+        .select("cancel_count, last_cancelled_at")
+        .eq("customer_id", ctx.customerId)
+        .maybeSingle();
+      const HOLD_DAYS = 90;
+      canReactivate =
+        (prefs?.cancel_count ?? 0) === 1 &&
+        !!prefs?.last_cancelled_at &&
+        Date.now() - new Date(prefs.last_cancelled_at as string).getTime() <=
+          HOLD_DAYS * 24 * 60 * 60 * 1000;
+    } catch (e) {
+      // Supabase caído o lento no puede apagar una pestaña: se asume que SÍ
+      // puede reactivar y la pestaña se queda viva. El peor caso es un viaje
+      // de más al Hub, que ya sabe rebotar a Cuenta; el caso contrario sería
+      // dejar sin salida a quien quiere volver.
+      console.error("[subscriptions] reactivable check failed", e);
+      canReactivate = true;
+    }
+  }
+
   return {
     subscriptions: manageable.map((s) => mapToSubscription(s, ctx.customerId)),
     isB2B: isB2BCustomer(identity.tags),
+    canReactivate,
   };
 });

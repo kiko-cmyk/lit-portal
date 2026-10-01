@@ -34,6 +34,7 @@ import {
 import { FREQUENCIES, FREQUENCY_DAYS, longestFrequencyWithin } from "@/lib/plan-options";
 import {
   ALL_KLAVIYO_PROPS,
+  MULTI_SEP,
   DERIVED_KLAVIYO_PROPS,
   PROFILE_QUESTIONS,
   QUESTIONS_BY_KEY,
@@ -43,7 +44,10 @@ import {
   validateAnswers,
   visibleQuestions,
 } from "@/lib/profile-questions";
+import { formatShipDateEs } from "@/lib/ship-date-label";
+import { DISCOUNT_VALUE_EUR } from "@/lib/survey-discount";
 import type { Frequency } from "@/lib/types";
+import { readFileSync } from "node:fs";
 
 let failures = 0;
 
@@ -67,6 +71,10 @@ const CS_PERFILADO: Record<string, string[]> = {
   deporte_tipo: [
     "Running", "Gym / fuerza", "Ciclismo", "Pádel / tenis", "Crossfit", "Natación", "Otro",
   ],
+  // Esta NO sale de _PERFILADO sino de SCRIPTS["fidelizacion"] del mismo fichero.
+  // Existía allí desde el 2026-06-30 y ya escribía `cs_momento`: por eso el
+  // portal la hereda en vez de inventarse códigos (ver la pregunta en el banco).
+  momento: ["Mañana", "Pre-entreno", "Durante el entreno", "Post-entreno", "Tarde", "Noche"],
 };
 
 console.log("\n── vocabulario heredado ──");
@@ -115,7 +123,52 @@ check(
 
 console.log("\n── estructura ──");
 
-check("hay 9 preguntas", PROFILE_QUESTIONS.length === 9, `${PROFILE_QUESTIONS.length}`);
+check("hay 10 preguntas", PROFILE_QUESTIONS.length === 10, `${PROFILE_QUESTIONS.length}`);
+
+// ── La décima (Kiko, 2026-09-23): ¿en qué momento del día lo tomas? ──────────
+{
+  const m = QUESTIONS_BY_KEY["momento"];
+  check("momento: existe, pantalla 1, multi, HEREDADA", !!m && m.screen === 1 && m.multi === true && m.inherited);
+  check("momento: escribe cs_momento, la del guion", m?.klaviyoProp === "cs_momento");
+  const idx = PROFILE_QUESTIONS.findIndex((q) => q.key === "momento");
+  check("momento: va justo después de uso", idx > 0 && PROFILE_QUESTIONS[idx - 1].key === "uso");
+  check(
+    "momento: el vocabulario ES el del guion, en su orden",
+    JSON.stringify(m?.options.map((o) => o.value)) === JSON.stringify(CS_PERFILADO.momento),
+  );
+  check("momento: cs_momento está en la lista de VACIADO", (ALL_KLAVIYO_PROPS as readonly string[]).includes("cs_momento"));
+  const v = validateAnswers({ momento: "Post-entreno;Mañana" });
+  check("momento: acepta varias y las ordena como el banco", v.ok && v.clean.momento === "Mañana;Post-entreno", JSON.stringify(v.clean));
+  check("momento: rechaza una parte inventada", !validateAnswers({ momento: "Mañana;Siesta" }).ok);
+  check("momento: llega a Klaviyo con la cadena del guion", klaviyoProps({ momento: "Noche" }).cs_momento === "Noche");
+}
+
+// Qué preguntas son multi, fijado EXACTO. El dashboard no puede saberlo (los
+// repos no se importan) y una multi necesita "(varias)" en su etiqueta de allí,
+// o su tarjeta en la hoja de Clientes suma más de 100% sin avisar. Si cambias
+// esta lista, cambia la etiqueta en `_PORTAL` de lit-dashboard y luego aquí.
+check(
+  "las multi son exactamente estas (y el dashboard las lleva marcadas)",
+  JSON.stringify(PROFILE_QUESTIONS.filter((q) => q.multi).map((q) => q.key)) ===
+    JSON.stringify(["uso", "momento", "sabor_favorito", "deporte_tipo"]),
+  "si añades una: '(varias)' en _PORTAL de lit-dashboard/backend/app/services/crm_scripts.py",
+);
+
+// El banner dice CUÁNTAS son con letra. Si se añade una pregunta y nadie toca
+// el texto, el banner miente sin que falle nada: pasó al añadir la décima.
+{
+  const WORDS: Record<number, [string, string]> = {
+    9: ["Nueve", "Nine"], 10: ["Diez", "Ten"], 11: ["Once", "Eleven"], 12: ["Doce", "Twelve"],
+  };
+  const n = PROFILE_QUESTIONS.length;
+  const banner = readFileSync(`${process.cwd()}/src/components/ProfileSurveyBanner.tsx`, "utf8");
+  const w = WORDS[n];
+  check(
+    `el banner dice las preguntas que hay (${n})`,
+    !!w && banner.includes(`${w[0]} preguntas`) && banner.includes(`${w[1]} questions`),
+    w ? `${w[0]} / ${w[1]}` : `añade ${n} a WORDS y cambia el banner`,
+  );
+}
 
 const dupes = PROFILE_QUESTIONS.map((q) => q.key).filter((k, i, a) => a.indexOf(k) !== i);
 check("no hay claves repetidas", dupes.length === 0, dupes.join(","));
@@ -172,8 +225,8 @@ check(
   isAsked(QUESTIONS_BY_KEY["deporte_tipo"], { deporte_frecuencia: "3-4/sem" }),
 );
 check(
-  "quien no entrena ve 8 preguntas, no 9",
-  visibleQuestions({ deporte_frecuencia: "No entreno" }).length === 8,
+  "quien no entrena ve 9 preguntas, no 10",
+  visibleQuestions({ deporte_frecuencia: "No entreno" }).length === 9,
 );
 
 // ── 4. Validación ────────────────────────────────────────────────────────────
@@ -204,6 +257,98 @@ check(
   !vGate.ok && vGate.notAsked.includes("deporte_tipo"),
 );
 check("y no la deja en clean", vGate.clean["deporte_tipo"] === undefined);
+
+// ── El contrato con Klaviyo (2026-09-22) ─────────────────────────────────────
+//
+// Los dos emails del flow (Vc3fhp y W7j57C) leen `event.discount_code` y
+// `event.discount_expires_label` LITERALMENTE. Si el portal renombra una
+// propiedad, el email sale con el hueco vacío y sin error en ningún log: es
+// exactamente cómo el recordatorio de 7d se envió con la fecha en blanco a 524
+// personas. Este bloque es la única defensa que existe contra eso.
+console.log("\n── contrato del evento de Klaviyo ──");
+
+check(
+  "la fecha se formatea en español, sin año y con el mes en minúscula",
+  formatShipDateEs("2026-10-22T09:17:29Z") === "22 de octubre",
+  formatShipDateEs("2026-10-22T09:17:29Z"),
+);
+check(
+  "sin caducidad devuelve cadena vacía, no 'Invalid Date'",
+  formatShipDateEs(null) === "" && formatShipDateEs(undefined) === "",
+);
+// El label se construye del ISO CRUDO, no de un Date: `new Date(iso)` se
+// renderiza en la zona del runtime y en Vercel eso puede imprimir el día
+// anterior. Un cupón que dice caducar un día antes es una reclamación.
+check(
+  "el día sale del ISO y no de la zona horaria del servidor",
+  formatShipDateEs("2026-10-01T00:30:00Z") === "1 de octubre",
+  formatShipDateEs("2026-10-01T00:30:00Z"),
+);
+check("el importe del evento es 5", DISCOUNT_VALUE_EUR === 5, String(DISCOUNT_VALUE_EUR));
+
+// ── Multi-respuesta (Juan 2026-09-22) ────────────────────────────────────────
+console.log("\n── multi-respuesta ──");
+
+// EL ANCLA MÁS IMPORTANTE: si un valor canónico llevara el separador dentro, al
+// guardar "A;B" y volver a partir saldrían trozos que no son opciones, y la
+// respuesta se rechazaría o se guardaría a medias. Silencioso en los dos casos.
+const conSeparador = PROFILE_QUESTIONS.flatMap((q) =>
+  q.options.filter((o) => o.value.includes(MULTI_SEP)).map((o) => `${q.key}:${o.value}`),
+);
+check(
+  `ningún valor canónico contiene el separador "${MULTI_SEP}"`,
+  conSeparador.length === 0,
+  conSeparador.join(","),
+);
+
+check(
+  "las tres preguntas pedidas son multi",
+  QUESTIONS_BY_KEY["uso"]?.multi === true &&
+    QUESTIONS_BY_KEY["sabor_favorito"]?.multi === true &&
+    QUESTIONS_BY_KEY["deporte_tipo"]?.multi === true,
+);
+
+// `deporte_tipo` es la única multi que además está GATEADA. La puerta cuelga de
+// `deporte_frecuencia`, que NO es multi, así que `isAsked` sigue comparando
+// valores completos y funciona. Si algún día se gatea por una multi, este test
+// es el que se caerá primero.
+check(
+  "la puerta de deporte_tipo cuelga de una pregunta que no es multi",
+  QUESTIONS_BY_KEY[QUESTIONS_BY_KEY["deporte_tipo"]!.gatedBy!.key]?.multi !== true,
+);
+check(
+  "deporte_tipo multi se valida bien cuando la puerta está abierta",
+  validateAnswers({ deporte_frecuencia: "3-4/sem", deporte_tipo: "Running;Ciclismo" }).ok,
+);
+
+const vMulti = validateAnswers({ uso: "Deporte;Resaca" });
+check("acepta dos valores válidos", vMulti.ok && vMulti.clean["uso"] === "Deporte;Resaca");
+
+// El orden se NORMALIZA al del banco: si dependiera del orden de los toques,
+// dos clientes que marcaron lo mismo generarían cadenas distintas y los
+// segmentos de Klaviyo por igualdad se partirían en variantes.
+const vOrden = validateAnswers({ uso: "Resaca;Deporte" });
+check(
+  "normaliza al orden del banco",
+  vOrden.ok && vOrden.clean["uso"] === "Deporte;Resaca",
+  vOrden.clean["uso"],
+);
+
+check("una sola opción sigue valiendo", validateAnswers({ uso: "Deporte" }).ok);
+check(
+  "si UNA parte es inválida se rechaza entera",
+  !validateAnswers({ uso: "Deporte;Astronauta" }).ok,
+);
+check("la cadena vacía se rechaza", !validateAnswers({ uso: "" }).ok);
+check(
+  "una pregunta NO multi sigue rechazando el multi",
+  !validateAnswers({ edad: "25-34;35-44" }).ok,
+);
+
+// La multi viaja a Klaviyo como la cadena entera: la propiedad `cs_*` es texto
+// y allí se segmenta con "contiene".
+const propsMulti = klaviyoProps({ uso: "Deporte;Resaca" });
+check("cs_uso lleva la cadena completa", propsMulti["cs_uso"] === "Deporte;Resaca");
 
 check("un tipo que no es objeto se rechaza entero", !validateAnswers("nope").ok);
 check("un array se rechaza entero", !validateAnswers(["uso"]).ok);

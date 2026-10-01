@@ -15,6 +15,13 @@
  * 2026-09-10): el mismo hueco que SectionDivider y ProfileSurveyBanner. Antes
  * era `my-12` fijo, que en desktop ya coincidía pero en móvil dejaba 48px
  * donde todo lo demás deja 40.
+ *
+ * `compact` recorta ese hueco a la mitad (Juan 2026-09-22). Lo usa el cierre de
+ * CUENTA para quien no tiene suscripción, donde el marquee queda emparedado
+ * entre "Mis pedidos" y el banner de AHORRA: ahí los 40/48px por arriba Y por
+ * abajo dejaban la página con dos agujeros seguidos y el remate descolgado del
+ * resto. En el Hub el marquee separa bloques de verdad, así que allí sigue con
+ * el ritmo largo y este prop no se pasa.
  */
 const CLAIMS = ["LIT", "PERFORM", "REPEAT"] as const;
 
@@ -25,7 +32,7 @@ const CLAIMS = ["LIT", "PERFORM", "REPEAT"] as const;
 const SEQUENCE = CLAIMS;
 const COPIES = 4;
 
-export function Marquee() {
+export function Marquee({ compact = false }: { compact?: boolean } = {}) {
   // Each "atom" is a word OR a dot — keeps the gap uniform end-to-end.
   const items: { kind: "word" | "dot"; value: string }[] = [];
   for (let copy = 0; copy < COPIES; copy++) {
@@ -36,7 +43,11 @@ export function Marquee() {
   }
 
   return (
-    <div className="relative my-10 overflow-hidden border-y border-[color:var(--color-lit-grey)]/12 py-5 md:my-12">
+    <div
+      className={`relative overflow-hidden border-y border-[color:var(--color-lit-grey)]/12 py-5 ${
+        compact ? "my-5 md:my-6" : "my-10 md:my-12"
+      }`}
+    >
       <div
         className="flex w-max shrink-0 items-center whitespace-nowrap"
         style={{

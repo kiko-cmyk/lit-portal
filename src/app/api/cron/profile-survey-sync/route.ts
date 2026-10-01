@@ -4,6 +4,7 @@ import { klaviyo } from "@/lib/klaviyo";
 import { ALL_KLAVIYO_PROPS, klaviyoProps } from "@/lib/profile-questions";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { supabaseAdmin } from "@/lib/supabase";
+import { markSyncedIfUnchanged } from "@/lib/survey-sync";
 
 /**
  * GET /apps/portal/api/cron/profile-survey-sync
@@ -50,7 +51,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sb = supabaseAdmin();
   const { data: rows, error } = await sb
     .from("profile_survey_answers")
-    .select("customer_id, answers, consent, deleted_at")
+    // `updated_at` para la marca condicional: ver markSyncedIfUnchanged.
+    .select("customer_id, answers, consent, deleted_at, updated_at")
     .is("klaviyo_synced_at", null)
     .limit(BATCH);
   if (error) throw new Error(`profile-survey-sync: ${error.message}`);
@@ -59,11 +61,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let cleared = 0;
   let skippedNoConsent = 0;
   let failed = 0;
+  // Filas que cambiaron entre la lectura y la marca: se quedan en la cola.
+  let raced = 0;
 
   for (const row of rows ?? []) {
     const customerId = row.customer_id as string;
     const deleted = !!row.deleted_at;
     const consent = row.consent === true;
+    const readUpdatedAt = (row.updated_at as string | null) ?? null;
+    const mark = async (id: string) => {
+      if (!(await markSyncedIfUnchanged(sb, id, readUpdatedAt))) raced++;
+    };
 
     // Sin consentimiento y sin borrado no hay nada que hacer en Klaviyo, pero SÍ
     // hay que marcar la fila: si no, se relee eternamente y el índice parcial de
@@ -120,12 +128,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     cleared,
     skippedNoConsent,
     failed,
+    raced,
   });
-}
-
-async function mark(customerId: string): Promise<void> {
-  await supabaseAdmin()
-    .from("profile_survey_answers")
-    .update({ klaviyo_synced_at: new Date().toISOString() })
-    .eq("customer_id", customerId);
 }

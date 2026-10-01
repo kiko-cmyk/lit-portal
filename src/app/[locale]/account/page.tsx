@@ -10,6 +10,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
+import { SubscribeBanner } from "@/components/SubscribeBanner";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SignOutPill, SwitchAccountRow } from "@/components/SwitchAccount";
@@ -62,6 +63,7 @@ export default function AccountPage() {
   const [flavorOpen, setFlavorOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
   const [surveyOpen, setSurveyOpen] = useState(false);
+  const [pendingSurvey, setPendingSurvey] = useState(false);
   const [chargeNowOpen, setChargeNowOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -136,8 +138,43 @@ export default function AccountPage() {
           window.location.pathname + (next ? `?${next}` : ""),
         );
       }
+
+      // Deep-link de las campañas de perfilado (?action=survey). Hasta hoy solo
+      // lo leía el Hub, así que quien llegaba desde el email aterrizaba aquí y
+      // tenía que buscar la tarjeta a mano.
+      //
+      // NO se abre aquí, se deja PENDIENTE: este efecto corre al montar, cuando
+      // `customer` todavía no ha llegado, así que aún no se sabe si ya contestó.
+      // Abrirlo ya y comprobarlo después le enseñaría el formulario a quien lo
+      // rellenó la semana pasada. El efecto de abajo lo resuelve con el dato.
+      //
+      // El parámetro se limpia en el mismo gesto (patrón de `email_changed`):
+      // si se queda, recargar o volver atrás reabre el formulario una y otra
+      // vez, y ese enlace vive en el historial de todo el que lo pulse.
+      if (params.get("action") === "survey") {
+        setPendingSurvey(true);
+        params.delete("action");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
+        );
+      }
     }
   }, []);
+
+  // El overlay del deep-link se DERIVA, no se abre desde un efecto: mientras el
+  // parámetro esté pendiente y el servidor diga que está abierto y sin
+  // contestar, se muestra. Así no hace falta un setState dentro de un efecto
+  // (la regla `react-hooks/set-state-in-effect`, que además provoca un render
+  // en cascada) y el caso "ya contestó" se resuelve solo.
+  //
+  // `pendingSurvey` se apaga al cerrar, igual que `surveyOpen`.
+  const showSurveyFromLink =
+    pendingSurvey &&
+    customer?.profileSurvey?.enabled === true &&
+    customer.profileSurvey.answered === false;
 
   // Re-pull the subscription on demand. Used when the Cancel takeover closes:
   // the takeover can be dismissed with its × right after a successful cancel
@@ -457,6 +494,7 @@ export default function AccountPage() {
         {customer?.profileSurvey?.enabled && !customer.profileSurvey.answered && (
           <ProfileSurveyBanner onStart={() => setSurveyOpen(true)} />
         )}
+
 
         {justSkipped && subscription?.nextShipDate && (
           <div className="mx-6 mb-3 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
@@ -827,7 +865,31 @@ export default function AccountPage() {
             grande que los demás. */}
         <OrdersSection orders={orders} />
 
-        <Marquee />
+        {/* `compact` sólo cuando debajo viene el banner de AHORRA (Juan
+            2026-09-22): con la banda oscura detrás, el marquee dejaba de ser el
+            final de la página y pasaba a ser un separador más, y los 40/48px
+            por arriba y por abajo abrían dos agujeros seguidos entre "Mis
+            pedidos" y la oferta. Cuando el banner no sale, el marquee vuelve a
+            cerrar la pantalla y conserva el hueco largo del resto del portal. */}
+        <Marquee compact={!accountOnly && subscription == null} />
+
+        {/* La invitación a suscribirse, para quien no tiene NINGUNA suscripción
+            (Juan 2026-09-22).
+
+            DESPUÉS del marquee LIT · PERFORM · REPEAT y no antes (Juan): así el
+            cierre de marca sigue cerrando la página y la oferta queda como
+            remate, no interrumpiendo el ritmo de la pantalla. Quien entra viene
+            a ver lo suyo, sus datos y sus pedidos, y la oferta se lee al final.
+
+            `subscription == null` es la condición exacta: /api/subscription
+            devuelve la más reciente aunque esté cancelada, así que sólo es null
+            cuando de verdad no hay nada. Por eso NO se usa `!subActive`, que
+            también es cierto para un cancelado y le pondría un anuncio encima
+            del aviso de su propia cancelación.
+
+            Fuera para el mayorista: el partner B2B compra por pedido, no por
+            plan, y ya tuvo su propio lío con el enlace equivocado de retail. */}
+        {!accountOnly && subscription == null && <SubscribeBanner />}
 
         {/* Cancel is hidden while paused: the wizard's confirm step reasons about
             the next billing attempt, which a paused sub doesn't have, so the
@@ -889,11 +951,12 @@ export default function AccountPage() {
           }}
         />
       )}
-      {surveyOpen && (
+      {(surveyOpen || showSurveyFromLink) && (
         <ProfileSurveyOverlay
           subscription={subscription}
           onClose={() => {
             setSurveyOpen(false);
+            setPendingSurvey(false);
             // Relee el perfil para que el banner desaparezca en cuanto ha
             // contestado, sin recargar. `answered` lo resuelve el servidor, así
             // que no se adivina aquí.

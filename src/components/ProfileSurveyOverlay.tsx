@@ -2,8 +2,13 @@
 
 /**
  * Formulario de perfilado ("Conoce a tus clientes"). Tres pantallas, un toque
- * por opción, cero teclado. Paga 50 drops al enviar y, si procede, propone
- * espaciar la cadencia.
+ * por opción, cero teclado. Al enviar entrega un descuento de 5 € a quien no
+ * tiene suscripción viva y, si procede, propone espaciar la cadencia.
+ *
+ * Los drops se siguen pagando por detrás, pero NO se mencionan en pantalla
+ * (Juan 2026-09-22): ni los drops ni la Colección están visibles todavía para
+ * el cliente, así que anunciar un saldo que no puede ver ni gastar prometía
+ * algo que no existe.
  *
  * Carcasa: el bottom-sheet crema de SkipOverlay, que es la convención del área
  * personal. Arquitectura de pasos: la de CancelTakeover, con el estado de las
@@ -23,9 +28,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { WaxSeal } from "@/components/WaxSeal";
 import { frequencyLabel } from "@/lib/frequency-label";
 import {
   HELP_URL,
+  MULTI_SEP,
   PROFILE_QUESTIONS,
   SITUACION_CON_PROBLEMA,
   isAsked,
@@ -47,9 +54,11 @@ interface SubmitResult {
   balance: number;
   tierCrossed: boolean;
   cadenceOffer: CadenceOffer | null;
+  /** El cupón de 5 €, o null. Ver `hadLiveSubscription` para qué significa null. */
+  discount: { code: string; expiresAt: string } | null;
+  /** true = es suscriptor y no le tocaba cupón. false + discount null = falló la emisión. */
+  hadLiveSubscription: boolean;
 }
-
-const TIER_THRESHOLD = 300;
 
 export function ProfileSurveyOverlay({
   subscription,
@@ -106,6 +115,13 @@ export function ProfileSurveyOverlay({
   const pick = (key: string, value: string) =>
     setAnswers((prev) => {
       const next = { ...prev, [key]: value };
+      // Cadena vacía = en una multi se desmarcó la última opción. Se BORRA la
+      // clave en vez de mandar "": el servidor valida contra el banco y ""
+      // no es ninguna opción, así que un envío con la clave vacía se rechazaría
+      // entero con `invalid_option` y el cliente perdería las nueve respuestas
+      // por haber cambiado de idea en una. Sin clave = sin contestar, que es
+      // legítimo porque todas son opcionales.
+      if (value === "") delete next[key];
       // Si una respuesta cierra la puerta de una condicional, su respuesta vieja
       // se va con ella. Sin esto, quien contesta "Crossfit" y luego cambia a "no
       // entreno" dejaría un deporte colgando que el servidor rechazaría con
@@ -179,22 +195,40 @@ export function ProfileSurveyOverlay({
             de competir con la invitación. */}
         {step === "intro" && (
           <>
-            <h1 className="font-display text-4xl font-black uppercase leading-[1.05] tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
-              <T en="Tell us how you drink LIT" es="Cuéntanos cómo tomas LIT" />
+            {/* `tracking-0` y `leading-[1.12]`, no el `-0.01em`/`1.05` de antes
+                (Juan 2026-09-22). Clash Display en negra ya viene apretada de
+                fábrica: restarle tracking a 36px pega las letras entre sí, y en
+                un titular de dos líneas el interlineado corto remata el bloque.
+                El texto es lo primero que se lee del formulario y estaba siendo
+                lo peor maquetado. */}
+            {/* "Cuéntanos sobre ti", igual que el banner que trae hasta aquí
+                (Juan 2026-09-22): tres palabras caben en una línea y el titular
+                deja de partirse. `word-spacing` positivo porque Clash Display
+                en negra junta mucho las palabras y en mayúsculas se leen como
+                un bloque; el aire va ENTRE palabras, no entre letras, que es lo
+                que pedía Juan. */}
+            <h1
+              className="font-display text-[34px] font-black uppercase leading-[1.12] tracking-normal text-[color:var(--color-lit-grey)] sm:text-[40px]"
+              style={{ wordSpacing: "0.12em" }}
+            >
+              <T en="Tell us about you" es="Cuéntanos sobre ti" />
             </h1>
 
             {/* La frase de entrada, al tamaño del cuerpo del portal y en el
                 gris oscuro: es el motivo para contestar, no una nota al pie. */}
-            <p className="mt-4 text-[15px] leading-[1.55] text-[color:var(--color-lit-grey)]/85">
+            <p className="mt-5 max-w-[34rem] text-[16px] leading-[1.6] text-[color:var(--color-lit-grey)]/80">
               {notice.intro}
             </p>
 
             {/* Tres datos rápidos, en horizontal: lo que de verdad decide si
                 alguien empieza. Se sacan de las viñetas para que no queden
                 enterrados entre la letra legal. */}
-            <div className="mt-6 flex flex-wrap gap-x-7 gap-y-3">
+            <div className="mt-8 flex flex-wrap items-stretch gap-x-6 gap-y-4 sm:gap-x-8">
               {[
-                { k: "9", l: t({ en: "questions", es: "preguntas" }) },
+                // Contado desde el banco y no tecleado: con "9" a mano, la
+                // pregunta décima (2026-09-23) habría dejado esta cifra mintiendo
+                // sin que nada fallara. Es el MÁXIMO: quien no entrena ve una menos.
+                { k: String(PROFILE_QUESTIONS.length), l: t({ en: "questions", es: "preguntas" }) },
                 { k: "1 min", l: t({ en: "of your time", es: "de tu tiempo" }) },
                 {
                   k: t({ en: "Optional", es: "Opcionales" }),
@@ -202,12 +236,17 @@ export function ProfileSurveyOverlay({
                 },
               ].map((it) => (
                 <div key={it.k}>
-                  <div className="font-display text-xl font-bold uppercase leading-none tracking-[-0.01em] text-[color:var(--color-lit-grey)]">
+                  {/* `font-semibold` y no `font-bold`: en Clash Display a 22px
+                      en mayúsculas, la negrita competía con el titular y estos
+                      tres datos son apoyo, no titulares. */}
+                  <div className="font-display text-[21px] font-semibold uppercase leading-none tracking-normal text-[color:var(--color-lit-grey)]">
                     {it.k}
                   </div>
+                  {/* 11px y no 10: la condensada a 10px con tracking .22em se
+                      convierte en un rayado gris que nadie lee. */}
                   <div
-                    className="mt-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-                    style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                    className="mt-1.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+                    style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
                   >
                     {it.l}
                   </div>
@@ -227,14 +266,19 @@ export function ProfileSurveyOverlay({
                 Cada punto en su propia caja sobre `brisky-cream`, en rejilla de
                 dos columnas en pantalla ancha. Deja de parecer una condición de
                 contrato y se lee como lo que es: información. */}
-            <div className="mt-7 border-t border-[color:var(--color-lit-grey)]/10 pt-5">
+            <div className="mt-9 border-t border-[color:var(--color-lit-grey)]/12 pt-6">
               <div
-                className="mb-3 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-                style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+                className="mb-4 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+                style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
               >
                 <T en="Your answers" es="Tus respuestas" />
               </div>
-              <dl className="grid gap-2 sm:grid-cols-2">
+              {/* Una columna: todas al MISMO ancho (Juan 2026-09-22). En dos
+                  columnas, la caja larga ocupaba la fila entera y las cortas
+                  media, así que la rejilla se veía descuadrada. Con tres
+                  viñetas, apilarlas cuesta menos alto de lo que parece y la
+                  lectura es de arriba abajo, que es como se lee un aviso. */}
+              <dl className="grid gap-2">
                 {notice.bullets.map((b) => (
                   <div
                     key={b.k}
@@ -242,17 +286,22 @@ export function ProfileSurveyOverlay({
                     // transferencia) ocupa la fila entera: partido en media
                     // columna quedaba en cinco renglones y descuadraba la
                     // rejilla, dejando además a la última caja suelta.
-                    className={`rounded-[14px] bg-[color:var(--color-brisky-cream)]/45 px-3.5 py-3 ${
-                      b.v.length > 90 ? "sm:col-span-2" : ""
-                    }`}
+                    // Sobre `sharp-white`, no sobre `brisky-cream/45`. Ese
+                    // crema al 45% era CASI EL MISMO tono que el panel, así que
+                    // las cajas no se distinguían del fondo y el texto quedaba
+                    // en 3,5:1 de contraste, por debajo del 4,5:1 que exige
+                    // WCAG AA para cuerpo pequeño. Medido, no estimado.
+                    className="rounded-[16px] border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-sharp-white)] px-4 py-3.5"
                   >
+                    {/* 11px y color pleno: a 9,5px y al 70% la etiqueta era un
+                        rayado, no una palabra. */}
                     <dt
-                      className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)]/70"
-                      style={{ fontFamily: "var(--font-cond)", fontSize: 9.5 }}
+                      className="font-semibold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)]"
+                      style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
                     >
                       {b.k}
                     </dt>
-                    <dd className="mt-1 text-[12px] leading-[1.45] text-[color:var(--color-warm-gray)]">
+                    <dd className="mt-1.5 text-[13px] leading-[1.5] text-[color:var(--color-lit-grey)]/75">
                       {b.v}
                     </dd>
                   </div>
@@ -307,6 +356,19 @@ export function ProfileSurveyOverlay({
               </label>
             )}
 
+            {/* Por qué el botón está apagado. Sin esta línea, quien no marca la
+                casilla ve un "Enviar" muerto y no tiene forma de saber que la
+                culpa es de la casilla que tiene justo encima. Solo aparece
+                cuando hace falta: si ya está marcada, no hay nada que explicar. */}
+            {step === 3 && !consent && (
+              <p className="mt-3 text-[12px] leading-[1.5] text-[color:var(--color-warm-gray)]">
+                <T
+                  en="Tick the box above to send your answers."
+                  es="Marca la casilla de arriba para poder enviar tus respuestas."
+                />
+              </p>
+            )}
+
             {error && <p className="mt-4 text-sm text-[color:var(--color-lit-grey)]">{error}</p>}
 
             <div className="mt-8 flex items-center justify-between">
@@ -323,7 +385,12 @@ export function ProfileSurveyOverlay({
                   <T en="Continue" es="Continuar" />
                 </PrimaryButton>
               ) : (
-                <PrimaryButton onClick={submit} disabled={busy}>
+                // Sin la casilla no se puede enviar (Juan 2026-09-22). El
+                // botón se deshabilita en vez de dejar enviar y fallar: el
+                // error llegaría después de nueve preguntas y sin decir por qué.
+                // La ruta lo rechaza igual, porque un `disabled` del navegador
+                // no es una validación.
+                <PrimaryButton onClick={submit} disabled={busy || !consent}>
                   {busy ? (
                     <T en="Saving…" es="Guardando…" />
                   ) : (
@@ -368,6 +435,31 @@ function QuestionBlock({
 }) {
   const t = useLang();
   const help = t({ en: q.helpEn ?? "", es: q.helpEs ?? "" });
+
+  const selectedSet = new Set(
+    q.multi && value ? value.split(MULTI_SEP).filter(Boolean) : [],
+  );
+
+  /**
+   * Añade o quita una opción y devuelve la cadena nueva.
+   *
+   * Se reconstruye recorriendo `q.options`, así que el orden es SIEMPRE el del
+   * banco y no el de los toques: dos clientes que marcan lo mismo guardan la
+   * misma cadena, que es lo que hace comparables los segmentos de Klaviyo.
+   *
+   * Quitar la última deja "" — el padre lo trata como "sin contestar" y no
+   * manda la clave, porque todas las preguntas son opcionales.
+   */
+  const toggle = (v: string): string => {
+    const next = new Set(selectedSet);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    return q.options
+      .filter((opt) => next.has(opt.value))
+      .map((opt) => opt.value)
+      .join(MULTI_SEP);
+  };
+
   return (
     <div className="mt-7">
       <p className="text-sm font-semibold text-[color:var(--color-lit-grey)]">
@@ -375,27 +467,39 @@ function QuestionBlock({
       </p>
       {help && <p className="mt-1 text-[12px] text-[color:var(--color-warm-gray)]">{help}</p>}
       <ul className="mt-3 space-y-2">
-        {q.options.map((o) => (
-          <li key={o.value}>
-            <button
-              type="button"
-              onClick={() => onPick(o.value)}
-              aria-pressed={value === o.value}
-              className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm ${
-                value === o.value
-                  ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15"
-                  : "border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
-              }`}
-            >
-              <span>{t({ en: o.en, es: o.es })}</span>
-              {value === o.value && (
-                <span aria-hidden className="text-[color:var(--color-bold-yellow)]">
-                  ●
-                </span>
-              )}
-            </button>
-          </li>
-        ))}
+        {q.options.map((o) => {
+          // En una multi el valor guardado es "A;B", así que "seleccionada" es
+          // pertenencia al conjunto, no igualdad con la cadena entera.
+          const selected = q.multi ? selectedSet.has(o.value) : value === o.value;
+          return (
+            <li key={o.value}>
+              <button
+                type="button"
+                onClick={() => onPick(q.multi ? toggle(o.value) : o.value)}
+                // `aria-pressed` en las dos: el botón se comporta como un
+                // interruptor en ambos casos, y en la multi además se puede
+                // apagar volviéndolo a tocar.
+                aria-pressed={selected}
+                className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm ${
+                  selected
+                    ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15"
+                    : "border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
+                }`}
+              >
+                <span>{t({ en: o.en, es: o.es })}</span>
+                {/* Marca distinta a propósito: el punto dice "esta es LA
+                    elegida" y el check dice "esta también". Con el mismo
+                    símbolo, una lista de cinco opciones donde caben varias se
+                    lee como si solo una pudiera estar activa. */}
+                {selected && (
+                  <span aria-hidden className="text-[color:var(--color-bold-yellow)]">
+                    {q.multi ? "✓" : "●"}
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       {/* "Tengo un problema" no abre más preguntas: deriva al formulario de
@@ -419,7 +523,31 @@ function QuestionBlock({
   );
 }
 
-// ── pantalla final: drops, tier y la propuesta de cadencia ───────────────────
+/**
+ * "22 de octubre" / "22 October". Del ISO CRUDO y no de un `Date`, por lo mismo
+ * que `formatShipDateEs`: `new Date(iso).toLocaleDateString()` se renderiza en
+ * la zona del navegador, así que a alguien al oeste de UTC le imprimiría el día
+ * anterior. Un cupón que parece caducar antes de tiempo es una reclamación.
+ */
+function formatExpiry(iso: string, lang: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return "";
+  const day = Number(m[3]);
+  const monthIdx = Number(m[2]) - 1;
+  const MESES_ES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+  ];
+  const MONTHS_EN = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  return lang === "es"
+    ? `${day} de ${MESES_ES[monthIdx]}`
+    : `${MONTHS_EN[monthIdx]} ${day}`;
+}
+
+// ── pantalla final: el cupón y la propuesta de cadencia ──────────────────────
 
 function DoneStep({
   result,
@@ -433,13 +561,32 @@ function DoneStep({
   onClose: () => void;
 }) {
   const lang = useLangValue();
+  const t = useLang();
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [applied, setApplied] = useState<Subscription | null>(null);
   const [failed, setFailed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
   const offer = result.cadenceOffer;
-  const toGo = Math.max(0, TIER_THRESHOLD - result.balance);
+
+  /**
+   * Copia el código al portapapeles. Con la misma red que `LoginScreen`: la
+   * Clipboard API está bloqueada en algunos webviews de apps, y ahí un
+   * `prompt` deja al cliente seleccionarlo a mano en vez de dejarle tocando un
+   * texto que no hace nada.
+   */
+  const copyCode = async () => {
+    const code = result.discount?.code;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      window.prompt(t({ en: "Copy your code:", es: "Copia tu código:" }), code);
+    }
+  };
 
   const accept = async () => {
     if (!offer || !subscription) return;
@@ -477,44 +624,139 @@ function DoneStep({
 
   return (
     <>
-      <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
-        {result.dropsAwarded > 0 ? `+${result.dropsAwarded} drops` : <T en="Saved" es="Guardado" />}
-      </div>
-      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
-        {result.tierCrossed ? (
-          <T en="Welcome to the inner circle" es="Bienvenido al inner circle" />
-        ) : (
-          <T en="Thank you" es="Gracias" />
-        )}
+      {/* Cabecera SIN drops (Juan 2026-09-22): los drops y la Colección no están
+          visibles para el cliente, así que anunciar un saldo y un "inner circle"
+          que no puede ver ni gastar era prometer algo que no existe todavía. El
+          formulario los SIGUE pagando; simplemente no se cuentan aquí.
+
+          Lo que manda ahora es el descuento, que es lo que el email promete y
+          lo único de esta pantalla que el cliente puede usar hoy. */}
+      {/* Cabecera. Sin eyebrow "GUARDADO": era una etiqueta de estado de
+          sistema encima de un "Gracias", o sea dos formas de decir lo mismo y
+          ninguna dirigida al cliente. El titular basta.
+
+          Y el párrafo YA NO anuncia el descuento ("y aquí tienes tu
+          descuento:"), porque la tarjeta de abajo se anuncia sola: el sello es
+          lo primero que se ve. Presentarlo dos veces restaba fuerza a las dos.
+          Dice lo que hacemos con las respuestas, que es lo único que el
+          titular no cuenta. */}
+      <h1 className="font-display text-4xl font-black uppercase leading-[1.05] tracking-[-0.015em] text-[color:var(--color-lit-grey)]">
+        <T en="Thank you" es="Muchas gracias" />
       </h1>
 
-      <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
-        {result.tierCrossed ? (
-          <T
-            en={`These 50 put you at ${result.balance}. You've just crossed 300.`}
-            es={`Estos 50 te han puesto en ${result.balance}. Acabas de cruzar los 300.`}
-          />
-        ) : toGo > 0 ? (
-          <T
-            en={`You've got ${result.balance} drops. ${toGo} to go for the inner circle.`}
-            es={`Ya tienes ${result.balance} drops. Te faltan ${toGo} para el inner circle.`}
-          />
-        ) : (
-          <T
-            en={`You've got ${result.balance} drops.`}
-            es={`Ya tienes ${result.balance} drops.`}
-          />
-        )}
+      <p className="mt-3 max-w-sm text-[15px] leading-[1.55] text-[color:var(--color-lit-grey)]/80">
+        <T
+          en="We'll use what you told us to improve and fit what we send you to what you actually need."
+          es="Usaremos lo que nos has contado para mejorar y poder ajustarnos al máximo a tus necesidades."
+        />
       </p>
-      {/* Un reenvío no vuelve a pagar: el importe se mide, no se asume, así que
-          aquí dirá 0 y el texto tiene que ser coherente con eso. */}
-      {result.dropsAwarded === 0 && (
-        <p className="mt-2 text-[12px] text-[color:var(--color-warm-gray)] opacity-70">
+
+      {/* ── EL CUPÓN, COMO ALGO SELLADO ──
+          El email promete "tu código listo para usar", así que este bloque es
+          el que cumple la frase y manda en la pantalla.
+
+          Rediseñado el 2026-09-22. El anterior era una tarjeta oscura con el
+          código dentro de un recuadro de borde DISCONTINUO, y ese borde
+          significa exactamente una cosa en el mundo de los cupones: "recorte
+          por aquí". Leía como un vale de supermercado, no como algo de LIT.
+
+          La idea de ahora: no es un ticket que se recorta, es algo SELLADO y
+          entregado a esta persona. Por eso el WaxSeal de la marca, el mismo de
+          la hero del Hub, preside la tarjeta con su texto girando en el borde,
+          y el código va debajo sobre una línea limpia. Sin cajas dentro de
+          cajas: una sola superficie, un solo gesto.
+
+          Tres estados, distintos a propósito:
+            1. hay código        → la tarjeta sellada.
+            2. no le tocaba      → nada. Un suscriptor no tiene por qué saber
+                                   que existe un cupón que no va a recibir.
+            3. le tocaba y falló → "te lo mandamos por correo", nunca un error. */}
+      {result.discount && (
+        // SIN `overflow-hidden`: el sello sobresale por arriba a propósito y
+        // recortarlo lo dejaba partido por la mitad. El contenedor exterior
+        // aporta el margen para que el disco tenga sitio donde asomar.
+        <div className="relative mt-14">
+          {/* El sello, montado a caballo del borde: entra en la tarjeta como se
+              posa un lacre sobre un sobre, no como un icono centrado dentro de
+              una caja. Absoluto y centrado, encima de la banda. */}
+          <div className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2">
+            {/* El texto del sello pasa por t(): estaba fijo en castellano y a un
+                cliente en inglés le salía "CUPÓN DESCUENTO · PARA TI" dentro de
+                una pantalla por lo demás traducida. El "5€" no se traduce, que
+                es la cifra. (Kiko, 2026-09-24.) */}
+            <WaxSeal
+              size={96}
+              rim={t({
+                en: "DISCOUNT COUPON · DISCOUNT COUPON · DISCOUNT COUPON · ",
+                es: "CUPÓN DESCUENTO · CUPÓN DESCUENTO · CUPÓN DESCUENTO · ",
+              })}
+              centerTop="5€"
+              centerBottom={t({ en: "FOR YOU", es: "PARA TI" })}
+            />
+          </div>
+
+          <div
+            className="rounded-[24px] px-6 pb-7 pt-14 text-center text-[#F2EEE1]"
+            style={{
+              background:
+                "linear-gradient(150deg, var(--color-lit-grey) 10%, var(--color-dark-indigo))",
+              boxShadow: "0 24px 50px -22px rgba(30,24,12,0.55)",
+            }}
+          >
+
+          {/* El código ES el protagonista: sin recuadro, sobre la banda, con el
+              tracking abierto para que se lea carácter a carácter al teclearlo
+              en el checkout. `select-all` lo selecciona entero de un toque. */}
+            {/* El código ES el botón de copiar (Juan 2026-09-22). Un botón
+                aparte al lado obligaría a elegir entre dos cosas que hacen lo
+                mismo; así el gesto obvio, tocar el código, es el que funciona.
+                `select-all` se queda como red: si el portapapeles está
+                bloqueado (pasa en webviews de apps), un toque largo lo
+                selecciona entero igual.
+
+                La pista va DEBAJO y en pequeño, que es lo "sutil" que pedía
+                Juan: el código sigue mandando y la instrucción no compite. */}
+            <button
+              type="button"
+              onClick={copyCode}
+              aria-label={t({ en: "Copy discount code", es: "Copiar código de descuento" })}
+              className="block w-full select-all font-display text-[30px] font-black uppercase leading-none tracking-[0.14em] transition-opacity hover:opacity-80 sm:text-[34px]"
+            >
+              {result.discount.code}
+            </button>
+
+            {/* Un solo hueco para los dos estados: sin esto, al cambiar "Copiar
+                cupón" por "Copiado" el bloque saltaba unos píxeles. */}
+            <div className="mt-2.5 h-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
+              {copied ? (
+                <T en="Copied" es="Copiado" />
+              ) : (
+                <span className="text-[#b3ab98]">
+                  <T en="Tap to copy" es="Toca para copiar el cupón" />
+                </span>
+              )}
+            </div>
+
+          {/* Una sola línea de apoyo, con la regla y la caducidad juntas. Antes
+              eran tres renglones separados (importe, "en tu próximo pedido",
+              caducidad) y competían entre ellos. */}
+            <div className="mx-auto mt-4 max-w-[19rem] border-t border-[#F2EEE1]/15 pt-4 text-[12px] leading-[1.6] text-[#b3ab98]">
+              <T
+                en={`Discount voucher for your next order · valid until ${formatExpiry(result.discount.expiresAt, lang)}.`}
+                es={`Cupón de descuento para tu próximo pedido · válido hasta el ${formatExpiry(result.discount.expiresAt, lang)}.`}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!result.discount && !result.hadLiveSubscription && (
+        <div className="mt-6 rounded-[18px] border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-sharp-white)] px-5 py-4 text-[13px] leading-[1.5] text-[color:var(--color-warm-gray)]">
           <T
-            en="We'd already added them the first time you answered."
-            es="Ya te los habíamos dado la primera vez que contestaste."
+            en="Your 5 € discount is on its way: we'll email it to you in a few minutes."
+            es="Tu descuento de 5 € está en camino: te lo mandamos por correo en unos minutos."
           />
-        </p>
+        </div>
       )}
 
       {offer && !dismissed && !applied && (
