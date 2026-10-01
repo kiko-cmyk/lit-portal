@@ -1,7 +1,8 @@
 /**
- * Cupón de 5,95 € que se entrega al comprar el LIT Discovery Set.
+ * Cupón de 4,99 € que se entrega al comprar el LIT Discovery Set (4,99 € desde
+ * el 2026-10-01; hasta entonces el Set y el cupón eran de 5,95 €).
  *
- * La promesa del email es literal: "te devolvemos los 5,95 € del Discovery Set
+ * La promesa del email es literal: "te devolvemos los 4,99 € del Discovery Set
  * cuando pidas tu caja con envíos programados". Este módulo es lo que la
  * cumple. Se emite desde el webhook `orders/paid` (ver el webhook de Shopify),
  * no desde una sesión de cliente.
@@ -9,7 +10,7 @@
  * Es el gemelo de `survey-discount.ts` y comparte con él la colección, el
  * formato de código y casi toda la configuración. Lo que cambia, y por qué:
  *
- *   - 5,95 € en vez de 5,00 €: es el precio exacto del Discovery Set, porque
+ *   - 4,99 € en vez de 5,00 €: es el precio exacto del Discovery Set, porque
  *     esto es una devolución, no un descuento redondo.
  *   - `appliesOnOneTimePurchase: FALSE`. Ver abajo, es la diferencia que
  *     sostiene la campaña entera.
@@ -47,7 +48,7 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
  * viaja al email como propiedad del evento (`discount_value`), así que no hay
  * que tocar las cinco plantillas de Klaviyo.
  */
-const DISCOUNT_AMOUNT_EUR = "5.95";
+const DISCOUNT_AMOUNT_EUR = "4.99";
 
 /** El mismo importe como número, para el evento de Klaviyo. Se deriva del de
  *  arriba para que no puedan divergir. */
@@ -142,11 +143,11 @@ export async function issueDiscoveryDiscount(customerId: string): Promise<Issued
           items: { collections: { add: [COUPON_COLLECTION_GID] } },
           // ── La diferencia con el cupón del perfilado, y es deliberada ──
           //
-          // SOLO suscripción. El email promete devolver los 5,95 € "cuando
+          // SOLO suscripción. El email promete devolver los 4,99 € "cuando
           // pidas tu caja con envíos programados", y la campaña existe para
           // convertir a quien probó el Set en suscriptor. Si el cupón valiera
           // en compra única, el cliente se lo gastaría en un one-shot y la
-          // campaña no convertiría a nadie: habríamos regalado 5,95 € por una
+          // campaña no convertiría a nadie: habríamos regalado 4,99 € por una
           // venta que ya iba a ocurrir.
           appliesOnOneTimePurchase: false,
           // FALSE por defecto en Shopify, así que va explícito. Omitirlo es lo
@@ -156,7 +157,7 @@ export async function issueDiscoveryDiscount(customerId: string): Promise<Issued
           // un cupón que no sirve para NADA, en ningún carrito.
           appliesOnSubscription: true,
         },
-        // Solo el PRIMER cobro de la suscripción. Sin esto, 5,95 € menos en
+        // Solo el PRIMER cobro de la suscripción. Sin esto, 4,99 € menos en
         // cada entrega para siempre, que convierte un cupón de captación en un
         // descuento permanente sobre el ticket.
         recurringCycleLimit: 1,

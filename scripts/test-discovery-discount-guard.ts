@@ -1,5 +1,5 @@
 /**
- * Protege la guarda del cupón de 5,95 € del LIT Discovery Set, que es lo que
+ * Protege la guarda del cupón de 4,99 € del LIT Discovery Set, que es lo que
  * decide a quién se le emite.
  *
  *   npx tsx scripts/test-discovery-discount-guard.ts
@@ -52,7 +52,7 @@ const fnCode = fn
   .filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"))
   .join("\n");
 
-console.log("\n── la guarda del cupón de 5,95 € (Discovery Set) ──\n");
+console.log("\n── la guarda del cupón de 4,99 € (Discovery Set) ──\n");
 
 check(
   "la función de emisión existe",
@@ -69,7 +69,7 @@ check(
 check(
   "NO usa el atajo de caché resolveActiveSubFast",
   !/resolveActiveSubFast/.test(fnCode),
-  "resolveActiveSubFast mira solo la caché de Supabase y devuelve null en un cache miss, que aquí se leería como 'no tiene suscripción' y regala 5,95 €.",
+  "resolveActiveSubFast mira solo la caché de Supabase y devuelve null en un cache miss, que aquí se leería como 'no tiene suscripción' y regala 4,99 €.",
 );
 
 check(
@@ -111,7 +111,7 @@ console.log("\n── la configuración del descuento ──\n");
 check(
   "NO aplica en compra única",
   /appliesOnOneTimePurchase: false/.test(mod),
-  "La promesa es devolver los 5,95 € al pedir una caja CON envíos programados. Si valiera en one-shot, el cliente lo gasta ahí y la campaña no convierte a nadie.",
+  "La promesa es devolver los 4,99 € al pedir una caja CON envíos programados. Si valiera en one-shot, el cliente lo gasta ahí y la campaña no convierte a nadie.",
 );
 
 check(
@@ -123,7 +123,7 @@ check(
 check(
   "solo el primer cobro",
   /recurringCycleLimit: 1/.test(mod),
-  "Sin esto son 5,95 € menos en cada entrega para siempre: un cupón de captación convertido en descuento permanente.",
+  "Sin esto son 4,99 € menos en cada entrega para siempre: un cupón de captación convertido en descuento permanente.",
 );
 
 check(
@@ -134,8 +134,8 @@ check(
 
 check(
   "el importe es el precio del Set",
-  /const DISCOUNT_AMOUNT_EUR = "5\.95"/.test(mod),
-  "Es una devolución del precio del Discovery Set (5,95 €), no un descuento redondo.",
+  /const DISCOUNT_AMOUNT_EUR = "4\.99"/.test(mod),
+  "Es una devolución del precio del Discovery Set (4,99 €), no un descuento redondo.",
 );
 
 check(

@@ -298,15 +298,15 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   }
 }
 
-/** SKU y variante del LIT Discovery Set (5,95 €). Producto de una sola
+/** SKU y variante del LIT Discovery Set (4,99 € desde el 2026-10-01). Producto de una sola
  *  variante, verificado contra Shopify el 2026-09-24. */
 const DISCOVERY_SKU = "LITDS";
 const DISCOVERY_VARIANT_ID = "65812401652061";
 
 /**
- * Emite el cupón de 5,95 € a quien acaba de comprar el LIT Discovery Set.
+ * Emite el cupón de 4,99 € a quien acaba de comprar el LIT Discovery Set.
  *
- * La promesa del email es "te devolvemos los 5,95 € cuando pidas tu caja con
+ * La promesa del email es "te devolvemos los 4,99 € cuando pidas tu caja con
  * envíos programados", así que el cupón SOLO vale en suscripción (eso vive en
  * `discovery-discount.ts`) y solo lo recibe quien todavía no es suscriptor.
  *

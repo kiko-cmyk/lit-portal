@@ -28,7 +28,7 @@ export type KlaviyoEvent =
   // `event.discount_expires_label` literalmente.
   | "Profile Survey Completed"
   // Compra del LIT Discovery Set (2026-09-24). Dispara el flow de cinco emails
-  // con el cupón de 5,95 €. Mayúsculas y espacios como el de arriba y por lo
+  // con el cupón de 4,99 €. Mayúsculas y espacios como el de arriba y por lo
   // mismo: es el nombre EXACTO de la métrica cableada en Klaviyo, y las
   // plantillas leen `event.discount_code` y `event.discount_expires_label`
   // literalmente. Cambiarlo aquí obliga a editar los cinco emails.
