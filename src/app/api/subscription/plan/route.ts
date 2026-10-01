@@ -1,12 +1,12 @@
 import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
-import { addCycle, subCycle } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { acquirePlanLock } from "@/lib/plan-lock";
 import { alertSlackError } from "@/lib/alert";
-import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLastCompletedChargeDate, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { naturalNextShipDate, SEAL_INTERVAL_BY_FREQUENCY, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
+import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
   centsToPrice,
   chargeTotalCents,
@@ -46,39 +46,8 @@ import { requestedSubIdFrom } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { Frequency, Subscription } from "@/lib/types";
 
-/**
- * Persist (or refresh) the "preserve this next-ship date" intent so the
- * cron drain (/api/cron/reanchor-drain) can finish the job if the in-request
- * skip didn't complete (rare: Seal still regenerating after our poll budget).
- * One live intent per customer; a later plan change overwrites it.
- */
-async function writeReanchorIntent(
-  customerId: string,
-  sealSubscriptionId: number,
-  preserveYYYYMMDD: string,
-): Promise<void> {
-  const nowIso = new Date().toISOString();
-  await supabaseAdmin()
-    .from("subscription_reanchor_intents")
-    .upsert(
-      {
-        customer_id: customerId,
-        seal_subscription_id: String(sealSubscriptionId),
-        preserve_date: preserveYYYYMMDD,
-        status: "pending",
-        attempts: 0,
-        created_at: nowIso,
-        updated_at: nowIso,
-      },
-      // Multi-sub: one intent per (customer, sub) — composite matches the
-      // reanchor_intents PK after the flip, so a plan change on one sub can't
-      // clobber a sibling sub's pending intent.
-      { onConflict: "customer_id,seal_subscription_id" },
-    );
-}
-
-
-const VALID_FREQUENCIES: Frequency[] = ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo", "6mo"];
+// `writeReanchorIntent` y `VALID_FREQUENCIES` viven en `@/lib/frequency-core` desde el
+// 2026-09-21, compartidos con la entrada máquina a máquina de frecuencia.
 
 /**
  * PATCH /apps/portal/api/subscription/plan
@@ -869,16 +838,10 @@ const patchPlan = async (
   // ever shifts FORWARD by a uniform offset, so even if our calendar math is a
   // day off Seal's, the result is bounded to that small delta — never a full
   // extra cycle. (2026-06-19)
-  function computeNaturalYYYYMMDD(): string | null {
-    let anchorIso = preMutationSub ? getLastCompletedChargeDate(preMutationSub) : null;
-    if (!anchorIso && nextAttemptDate) {
-      anchorIso = subCycle(new Date(nextAttemptDate), currentFrequency).toISOString();
-    }
-    if (!anchorIso) return null;
-    return addCycle(new Date(anchorIso), targetFrequency).toISOString().slice(0, 10);
-  }
   const naturalYYYYMMDD =
-    reanchorMode === "natural" && planChanged ? computeNaturalYYYYMMDD() : null;
+    reanchorMode === "natural" && planChanged
+      ? naturalNextShipDate(preMutationSub, nextAttemptDate, currentFrequency, targetFrequency)
+      : null;
   // Target the optimistic date + re-anchor intent at: natural date (skip
   // retention) when available, else the preserved current date (normal change).
   const effectivePreserveYYYYMMDD = naturalYYYYMMDD ?? preserveYYYYMMDD;
@@ -906,17 +869,7 @@ const patchPlan = async (
     return synthesizeNoOpSub(sealSubscriptionId, targetPlan, currentLines, currentFrequency, ctx.customerId);
   }
 
-  const intervalLabelByFrequency: Record<Frequency, string> = {
-    "15d": "15 day",
-    "1mo": "1 month",
-    "45d": "45 day",
-    "2mo": "2 month",
-    "3mo": "3 month",
-    "4mo": "4 month",
-    "5mo": "5 month",
-    "6mo": "6 month",
-  };
-  const expectedInterval = intervalLabelByFrequency[targetFrequency];
+  const expectedInterval = SEAL_INTERVAL_BY_FREQUENCY[targetFrequency];
 
   // Dry-run ("simulación"): short-circuit BEFORE any Seal OR Shopify call
   // (including the Shopify Admin variant lookup below) so local testing never
