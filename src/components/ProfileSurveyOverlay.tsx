@@ -606,10 +606,11 @@ function DoneStep({
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
           expectedLineIds: subscription.lines?.map((l) => l.itemId),
-          // "natural": la próxima entrega se recoloca ya. Con "preserve" el
+          // "fromNext": la próxima entrega se recoloca ya, contada desde la que
+          // tiene (próxima − ciclo actual + ciclo nuevo). Con "preserve" el
           // cliente que nos acaba de decir que le sobra recibiría una caja más
           // antes de notar nada, y concluiría que no ha servido.
-          reanchorMode: "natural",
+          reanchorMode: "fromNext",
           source: "profile_survey",
         }),
       });

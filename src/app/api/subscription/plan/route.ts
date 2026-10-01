@@ -5,7 +5,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { acquirePlanLock } from "@/lib/plan-lock";
 import { alertSlackError } from "@/lib/alert";
-import { naturalNextShipDate, SEAL_INTERVAL_BY_FREQUENCY, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
+import { SEAL_INTERVAL_BY_FREQUENCY, spacedNextShipDate, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
   centsToPrice,
@@ -186,21 +186,30 @@ const patchPlan = async (
      *   - "preserve" (default): keep the current next-ship date (don't move the
      *     imminent order or undo a prior skip). This is the normal plan-change
      *     behaviour for the Change Plan overlay.
-     *   - "natural": let the next order land on Seal's natural regenerated date
-     *     (last completed charge + new interval). Used by the skip retention
-     *     flow when a customer chooses to space out their cadence instead of
-     *     skipping — the imminent order moves later as the customer expects.
+     *   - "fromNext": the customer is SPACING their cadence instead of skipping
+     *     (SkipOverlay «Ajustar mi plan», CancelTakeover, profile-survey offer).
+     *     The next order moves to current next − one current cycle + one new
+     *     cycle (`spacedNextShipDate`), which is exactly the date those screens
+     *     show. Never earlier than the date the customer already has.
+     *   - "natural": LEGACY alias of "fromNext", kept for JS bundles cached
+     *     before 2026-10-02. It used to mean "last completed charge + new
+     *     interval", which for anyone who had skipped landed in the past and
+     *     didn't match the screen. See `spacedNextShipDate`.
      */
-    reanchorMode?: "preserve" | "natural";
+    reanchorMode?: "preserve" | "fromNext" | "natural";
     /** Simulación: compute + return the projected result without mutating Seal. */
     dryRun?: boolean;
   };
   log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
 
   const dryRun = isDryRunRequest(req, body, ctx.customerId);
-  const reanchorMode: "preserve" | "natural" = body.reanchorMode === "natural" ? "natural" : "preserve";
-  // Pre-mutation subscription, captured during resolution below. Needed to read
-  // the last completed charge date when computing the natural re-anchor target.
+  // "natural" is the pre-2026-10-02 name for the same intent (space instead of
+  // skip); a bundle cached in a customer's browser can still send it, and it must
+  // get the date its own screen showed, which was always the fromNext one.
+  const reanchorMode: "preserve" | "fromNext" =
+    body.reanchorMode === "fromNext" || body.reanchorMode === "natural" ? "fromNext" : "preserve";
+  // Pre-mutation subscription, captured during resolution below. Needed for the
+  // paused guard, the stale-screen check and the current line-set.
   let preMutationSub: SealSubscription | null = null;
 
   if (
@@ -829,22 +838,30 @@ const patchPlan = async (
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
   const itemsChanged = !diff.noop;
 
-  // Skip retention "espaciar": with reanchorMode="natural" the next order should
-  // land on Seal's natural regenerated date (last completed charge + new
-  // interval) instead of being pinned to the current next-ship date. We compute
-  // that date and feed it as the preserve target, so the SAME re-anchor
-  // machinery (intent → dashboard drain → reanchorCadence) drives the schedule
-  // onto it and the Hub's silent re-poll works unchanged. reanchorCadence only
-  // ever shifts FORWARD by a uniform offset, so even if our calendar math is a
-  // day off Seal's, the result is bounded to that small delta — never a full
-  // extra cycle. (2026-06-19)
-  const naturalYYYYMMDD =
-    reanchorMode === "natural" && planChanged
-      ? naturalNextShipDate(preMutationSub, nextAttemptDate, currentFrequency, targetFrequency)
+  // Skip retention "espaciar": with reanchorMode="fromNext" the next order moves
+  // to current next − one current cycle + one new cycle, the date the screen
+  // showed. We feed it as the preserve target, so the SAME re-anchor machinery
+  // (intent → Seal webhook → reanchorCadence, with the dashboard re-poll and the
+  // cron drain as backstops) drives the schedule onto it. (2026-06-19, fromNext
+  // since 2026-10-02.)
+  //
+  // Until 2026-10-02 this was the "natural" date, counted from the last
+  // COMPLETED charge. For anyone who had skipped, that landed in the PAST: sub
+  // 12320700, 2mo → 3mo with next 4-oct, screen said 4-nov and the intent said
+  // 27-ago. A past date is always "within cutoff", so the webhook and the drain
+  // dropped the intent and the safety net did nothing. Nobody was charged early
+  // only because Seal happened to regenerate onto a sane date by itself.
+  //
+  // `spacedNextShipDate` returns null unless the date really moves the order
+  // later, so the fallback below keeps the date the customer already has: the
+  // next charge never goes backwards.
+  const spacedYYYYMMDD =
+    reanchorMode === "fromNext" && planChanged
+      ? spacedNextShipDate(nextAttemptDate, currentFrequency, targetFrequency)
       : null;
-  // Target the optimistic date + re-anchor intent at: natural date (skip
+  // Target the optimistic date + re-anchor intent at: the spaced date (skip
   // retention) when available, else the preserved current date (normal change).
-  const effectivePreserveYYYYMMDD = naturalYYYYMMDD ?? preserveYYYYMMDD;
+  const effectivePreserveYYYYMMDD = spacedYYYYMMDD ?? preserveYYYYMMDD;
 
   log("change-detected", {
     planChanged,
@@ -860,7 +877,7 @@ const patchPlan = async (
     residual: targetPlan.residualCents,
     diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
     reanchorMode,
-    naturalYYYYMMDD,
+    spacedYYYYMMDD,
   });
   if (!itemsChanged && !planChanged) {
     log("no-op");

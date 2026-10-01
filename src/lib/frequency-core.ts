@@ -112,6 +112,31 @@ export function shiftedNextShipDate(
 }
 
 /**
+ * La fecha de la próxima entrega cuando el cliente ESPACIA desde el área personal:
+ * «Ajustar mi plan» del SkipOverlay, la oferta de CancelTakeover y la de la
+ * encuesta de perfil. Es la misma cuenta que `shiftedNextShipDate`, y es la que
+ * esas tres pantallas ya ENSEÑABAN (`subCycle(próxima, actual) + nuevo`).
+ *
+ * Hasta el 2026-10-02 el plan route escribía otra: la natural, contada desde el
+ * último cobro completado. A quien había saltado le caía en el pasado (la 12320700:
+ * pantalla 4-nov, intención 27-ago), la intención moría en el guard del corte y el
+ * re-anclaje no hacía nada. Al cliente se le prometía una fecha y se guardaba otra.
+ *
+ * Solo devuelve la fecha si de verdad ALEJA la entrega. Si no (frecuencia igual o
+ * más corta, que hoy ninguna de las tres ofrece), null: quien llama se queda en la
+ * fecha que el cliente ya tiene, porque el próximo cobro nunca va hacia atrás.
+ */
+export function spacedNextShipDate(
+  nextAttemptDate: string | null,
+  current: Frequency,
+  target: Frequency,
+): string | null {
+  const shifted = shiftedNextShipDate(nextAttemptDate, current, target);
+  if (!shifted || !nextAttemptDate) return null;
+  return shifted > nextAttemptDate.slice(0, 10) ? shifted : null;
+}
+
+/**
  * En modo `fromNext` la fecha nueva tiene que quedar DESPUÉS de la próxima que ya
  * tiene. Contada desde la próxima, un ritmo más largo siempre lo cumple; se
  * comprueba igual porque es la fecha que se le promete al cliente.
