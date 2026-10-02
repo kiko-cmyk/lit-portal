@@ -173,23 +173,33 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
+    const live = getLines(sub);
+    const plan = planLineRepair(live, snapshot, desired);
+
     // Cancelled/paused: nothing will be charged, so there is nothing to repair. Close it
     // instead of retrying to the TTL and alerting about an over-charge that can't happen
     // (the same trap the re-anchor drain fell into: 8 dead intents, all cancelled subs).
+    //
+    // PERO SI SE QUEDA A MEDIAS, `failed` Y NO `done` (2-oct-2026). Una sub cancelada o
+    // pausada vuelve con sus líneas tal cual si se reactiva o se reanuda, y la guarda de la
+    // ruta del plan no mira las filas `done`: cerrada así, el siguiente cambio tarificaría
+    // sobre las cajas de más, que es la 12798642 otra vez.
     if (sub.status !== "ACTIVE") {
+      const coherent = plan.kind === "nothing_to_do";
       await closeAndRecord(
-        "done",
-        `subscription is ${sub.status}, nothing to repair`,
+        coherent ? "done" : "failed",
+        coherent
+          ? `subscription is ${sub.status}, nothing to repair`
+          : `subscription is ${sub.status} and still half-written: check it if it comes back`,
         "closed_inactive",
         sub,
-        `la sub está ${sub.status}: no se cobra, no hay nada que reparar`,
+        coherent
+          ? `la sub está ${sub.status}: no se cobra, no hay nada que reparar`
+          : `la sub está ${sub.status} y A MEDIAS: si se reactiva vuelve con las líneas de más`,
       );
       alreadyOk++;
       continue;
     }
-
-    const live = getLines(sub);
-    const plan = planLineRepair(live, snapshot, desired);
 
     // LO AJENO NO SE PISA (4-sep-2026, refinado el 2-oct). `desired` se congela cuando se
     // arma la intención y puede aplicarse hasta 6h más tarde. En ese hueco el cliente
