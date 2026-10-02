@@ -1,10 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
+import { classifyLineState, LINE_REPAIR_TTL_MS, sealWriteDefinitelyRejected } from "@/lib/line-repair";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
+import { requestDeadlineLeft, runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { acquirePlanLock } from "@/lib/plan-lock";
-import { alertSlackError } from "@/lib/alert";
+import { alertSlackError, alertSlackErrorAwaited } from "@/lib/alert";
 import { naturalNextShipDate, SEAL_INTERVAL_BY_FREQUENCY, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import {
@@ -15,6 +17,7 @@ import {
   diffLines,
   type FlavorComposition,
   ladderTotalCents,
+  type TargetLine,
   type LadderPrices,
   MAX_BOXES,
   type MixPlan,
@@ -412,9 +415,32 @@ const patchPlan = async (
   // las dos lo ven igual al esperado y las dos ejecutan `add_items` sobre las mismas
   // variantes. Líneas duplicadas y cliente pagando de más, con un doble clic bastando
   // para provocarlo. Se libera en el `finally` de más abajo.
+  // EL LEDGER SIEMPRE SE CIERRA (2-oct-2026). Hasta hoy solo el camino feliz escribía
+  // fila después del `intent`: cualquier 502 (add o remove fallidos, restore, red sin
+  // armar) salía con el `intent` colgando para siempre. Del 30-ago al 2-oct fueron 22
+  // de 448 cambios, y el detector de reprecios no podía distinguir "murió a medias" de
+  // "falló limpio" de "lo terminó el cron", así que los cantaba todos igual. Ahora toda
+  // salida por error posterior al `intent` deja su cierre: `pending_repair` si hay una
+  // reparación armada (la cerrará el cron con `applied` o `rolled_back`) y `failed` si
+  // Seal sigue como estaba. Solo una muerte súbita deja el `intent` sin cerrar, y eso es
+  // exactamente lo que el detector tiene que ver.
+  const ledger: RequestLedger = {
+    requestId: randomUUID(),
+    open: false,
+    repairArmed: false,
+    outcomeUnknown: false,
+    close: async () => {},
+  };
   const planLock = await acquirePlanLock(ctx.customerId, sealSubscriptionId, "plan-route");
   try {
     return await applyPlanChange();
+  } catch (e) {
+    if (ledger.open) {
+      await ledger.close(
+        ledger.repairArmed ? "pending_repair" : ledger.outcomeUnknown ? "unknown" : "failed",
+      );
+    }
+    throw e;
   } finally {
     await planLock.release();
   }
@@ -447,6 +473,30 @@ const patchPlan = async (
     ? getLines(preMutationSub)
     : [];
   const currentComposition = compositionFromLines(currentLines);
+
+  // ───── NO SE TARIFICA SOBRE UNA ESCRITURA A MEDIAS (2-oct-2026) ─────
+  //
+  // Incidente de la 12798642. A las 07:26 un cambio de sabor que conservaba sus 67,93
+  // murió entre `add_items` y `remove_items`: Seal se quedó con las tres líneas nuevas Y la
+  // vieja, 6 cajas. La clienta lo vio, pidió sus 3 cajas a las 07:27, y esta ruta tomó la
+  // foto de 6 como el contrato: de 6 a 3 es "cambiar de cantidad", así que no preservó y le
+  // escribió catálogo, 85,05 por las mismas 3 cajas. La 14514761 hizo el mismo viaje el
+  // 29-sep.
+  //
+  // `expectedLineIds` no lo frena: la pantalla se había recargado y enseñaba las 6 cajas,
+  // así que los ids cuadraban. La guarda del 17-sep tampoco: solo protege a quien ya tiene
+  // `preserved_charge_cents`, y en el PRIMER cambio de sabor de un contrato viejo esa
+  // columna todavía no existe, que es justo cuando se pierde el precio.
+  //
+  // La foto solo es sospechosa si hay una escritura nuestra sin cerrar sobre esta sub, y
+  // eso lo dice `subscription_line_repairs`:
+  //   - una intención PENDIENTE es que el cron todavía no ha decidido: no se toca nada.
+  //   - una ya cerrada (el cron no pudo, o expiró) solo bloquea si lo vivo sigue siendo esa
+  //     misma escritura a medias. Si soporte ya la dejó bien, o la cambió a otra cosa, la
+  //     foto vuelve a ser fiable.
+  // Al cliente se le dice la verdad, que su último cambio se está terminando de aplicar.
+  // Un 409 cuesta unos minutos; decidir precio sobre esa foto cuesta 17,12 € por entrega.
+  await assertNoUnfinishedLineWrite(ctx.customerId, sealSubscriptionId, currentLines, log);
 
   // ───── EL CONTRATO PRESERVADO, COMO ANCLA (2026-09-17) ─────
   //
@@ -917,13 +967,22 @@ const patchPlan = async (
    * Best effort, never fatal: an audit row must not fail a plan change.
    */
   const writeAudit = async (outcome: string) => {
+    // Cualquier fila que no sea `intent` cierra la petición (ver RequestLedger).
+    ledger.open = outcome === "intent";
     try {
-      const { error } = await supabaseAdmin().from("subscription_changes").insert({
+      // Fuera del deadline (2-oct-2026), como la intención de reparación: el cliente de
+      // Supabase pasa por `fetchDeadline`, así que con el presupuesto agotado el insert se
+      // cortaba a 0 ms. Y el presupuesto agotado es justo el caso en que más falta la fila:
+      // una petición que pierde el deadline a mitad del swap se quedaba sin su cierre.
+      const { error } = await runWithoutRequestDeadline(async () => await supabaseAdmin().from("subscription_changes").insert({
         customer_id: ctx.customerId,
         change_type: targetPlan.shape === "split" || currentShape === "split" ? "mix" : "plan",
         payload: {
           sealSubscriptionId: String(sealSubscriptionId),
           outcome,
+          // Las filas de UNA petición (intent, applied, verified, cierre por error) llevan
+          // el mismo id, para emparejarlas sin depender del orden. (2-oct-2026)
+          requestId: ledger.requestId,
           from: { composition: currentComposition, shape: currentShape, frequency: currentFrequency },
           to: { composition: targetComposition, shape: targetPlan.shape, frequency: targetFrequency },
           tierTotalCents,
@@ -940,7 +999,7 @@ const patchPlan = async (
           source: body.source ?? "portal",
         },
         applies_from: effectivePreserveYYYYMMDD,
-      });
+      }));
       if (error) log("audit-write-failed", { msg: error.message });
     } catch (e) {
       // "Best effort, never fatal" tiene que seguir siendo verdad ahora que la fila
@@ -951,6 +1010,27 @@ const patchPlan = async (
       log("audit-write-threw", { msg: e instanceof Error ? e.message : String(e) });
     }
   };
+  ledger.close = writeAudit;
+
+  /** Escribe (o limpia) el precio preservado y SUS cajas, siempre juntos. Best effort y
+   *  fuera del deadline: con el presupuesto gastado un clear que no corre deja un
+   *  contrato fantasma que luego bloquea con `contract_box_count_mismatch`. */
+  const writePreservedColumns = (values: {
+    preserved_charge_cents: number | null;
+    preserved_box_count: number | null;
+  }) =>
+    runWithoutRequestDeadline(async () => {
+      try {
+        const { error } = await supabaseAdmin()
+          .from("subscriptions")
+          .update(values)
+          .eq("customer_id", ctx.customerId)
+          .eq("seal_subscription_id", String(sealSubscriptionId));
+        if (error) log("preserved-charge-write-failed", { msg: error.message });
+      } catch (e) {
+        log("preserved-charge-write-threw", { msg: e instanceof Error ? e.message : String(e) });
+      }
+    });
 
   // Mutation order (REORDERED 2026-05-20 Juan):
   //   Before: add_items → remove_items → editSubscription
@@ -979,6 +1059,20 @@ const patchPlan = async (
   // Con la fila de intención, cualquier auditoría futura ve el hueco: intent sin
   // applied = petición que se murió a medias.
   await writeAudit("intent");
+
+  // EL PRECIO PRESERVADO SE APUNTA ANTES DE TOCAR SEAL (2-oct-2026). Hasta hoy solo se
+  // escribía tras verificar, así que una petición que muriera a medias dejaba el contrato
+  // viejo SIN ancla: la 12798642 no tenía `preserved_*` cuando la petición de las 07:27 leyó
+  // sus 6 cajas, y la guarda del 17-sep, que la habría parado, no tenía con qué comparar.
+  // Adelantarlo es seguro por la asimetría de siempre: importe y cajas son los del contrato
+  // VIVO (mismas cajas, su mismo importe), así que valen igual si el cambio no llega a
+  // entrar. Lo peligroso es BORRARLO, y eso sigue pasando solo después de verificar.
+  if (pricePreservedFromCents !== null) {
+    await writePreservedColumns({
+      preserved_charge_cents: targetPlan.totalCents,
+      preserved_box_count: targetBoxCount,
+    });
+  }
 
   // ───── Step 1: change delivery_interval FIRST (if needed) ─────
   //
@@ -1085,7 +1179,7 @@ const patchPlan = async (
   // Re-attach after the swap — and after a FAILED swap too (every throw path
   // below calls this first), so the customer never silently loses their 15%.
   // Never applies unless the detach succeeded (see gotcha above).
-  const reattachRetentionDiscount = async () => {
+  const reattachRetentionDiscountNow = async () => {
     if (!retentionCarry) return;
     if (!retentionCarry.detached) {
       // Detach failed or the UUID was unknown: scan fresh state once — if the
@@ -1163,6 +1257,13 @@ const patchPlan = async (
     }
   };
 
+  // Con el presupuesto ya gastado, el 15% se repone FUERA del deadline (2-oct-2026). Es el
+  // caso típico de los caminos de error (se perdió el deadline a mitad del swap) y el del
+  // remove que "falló" pero entró: dentro del deadline cada llamada se cortaba a 0 ms y el
+  // cliente se quedaba sin su descuento. Con presupuesto de sobra se sigue corriendo
+  // dentro, para no alargar una respuesta que el cliente sí está esperando.
+  const reattachRetentionDiscount = () => afterBudget(reattachRetentionDiscountNow);
+
   // ───── Step 2: converge the lines on the target (edits → adds → removes) ─────
   //
   // Runs AFTER the interval edit so every line Seal creates or realigns is already on
@@ -1186,13 +1287,27 @@ const patchPlan = async (
    *  rolling back is that the budget ran out, and with an exhausted deadline
    *  `fetchDeadline` clamps every call to 0ms and aborts it instantly — the undo
    *  would be dead on arrival exactly when it matters most. The customer is not
-   *  waiting on this anyway: the response is already lost to the App Proxy. */
+   *  waiting on this anyway: the response is already lost to the App Proxy.
+   *
+   *  SOLO tras un rechazo SEGURO de Seal (2-oct-2026). Esta función decide qué deshacer
+   *  con UNA lectura, y tras un timeout esa lectura puede ir por detrás de Seal: la
+   *  14345379 y la 13109864 leyeron "no hay nada que deshacer", la ruta desarmó la red,
+   *  y segundos después Seal enseñó el add. Con resultado desconocido no se deshace nada
+   *  aquí; se deja la red armada y el cron decide con una lectura asentada. */
   const restoreSnapshot = (): Promise<"restored" | "inconsistent"> =>
     runWithoutRequestDeadline(async () => {
     try {
       const live = await seal.getSubscriptionById(sealSubscriptionId);
       if (!live) return "inconsistent";
       const liveLines = getLines(live);
+      // Si falta una línea de la foto, deshacer no es posible desde aquí (no se puede
+      // volver a añadir) y quitar las nuevas dejaría a la sub sin lo que paga. Que lo vea
+      // el cron, que distingue lo nuestro de lo ajeno.
+      const missing = currentLines.filter((s) => !liveLines.some((l) => l.itemId === s.itemId));
+      if (missing.length) {
+        log("snapshot-restore-refused-missing-lines", { missing: missing.map((l) => l.itemId) });
+        return "inconsistent";
+      }
       const snapIds = new Set(currentLines.map((l) => l.itemId));
       const strays = liveLines.filter((l) => !snapIds.has(l.itemId)).map((l) => l.itemId);
       if (strays.length) await seal.removeItems(sealSubscriptionId, strays);
@@ -1219,27 +1334,35 @@ const patchPlan = async (
     // budget is spent is the failure it exists to prevent (supabase-js asks for
     // a flat 5s, which `fetchDeadline` clamps to 0 once the budget is gone).
     runWithoutRequestDeadline(async () => {
-    const nowIso = new Date().toISOString();
-    const { error } = await supabaseAdmin()
-      .from("subscription_line_repairs")
-      .upsert(
-        {
-          customer_id: ctx.customerId,
-          seal_subscription_id: String(sealSubscriptionId),
-          desired: targetPlan.lines,
-          snapshot: currentLines,
-          status: "pending",
-          attempts: 0,
-          last_error: reason,
-          created_at: nowIso,
-          updated_at: nowIso,
-        },
-        { onConflict: "customer_id,seal_subscription_id" },
-      );
-    if (error) {
-      log("repair-intent-write-failed", { msg: error.message });
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabaseAdmin()
+        .from("subscription_line_repairs")
+        .upsert(
+          {
+            customer_id: ctx.customerId,
+            seal_subscription_id: String(sealSubscriptionId),
+            desired: targetPlan.lines,
+            snapshot: currentLines,
+            status: "pending",
+            attempts: 0,
+            last_error: reason,
+            created_at: nowIso,
+            updated_at: nowIso,
+          },
+          { onConflict: "customer_id,seal_subscription_id" },
+        );
+      if (error) {
+        log("repair-intent-write-failed", { msg: error.message });
+        return false;
+      }
+    } catch (e) {
+      // Un fallo de transporte LANZA en vez de devolver `error`. Sin este catch el
+      // pre-armado reventaba la ruta con el descuento de retención ya despegado.
+      log("repair-intent-write-threw", { msg: e instanceof Error ? e.message : String(e) });
       return false;
     }
+    ledger.repairArmed = true;
     log("repair-intent-written");
     return true;
     });
@@ -1259,6 +1382,7 @@ const patchPlan = async (
         log("repair-intent-disarm-failed", { msg: error.message });
         return;
       }
+      ledger.repairArmed = false;
       log("repair-intent-disarmed");
     } catch (e) {
       log("repair-intent-disarm-failed", { msg: e instanceof Error ? e.message : String(e) });
@@ -1285,9 +1409,58 @@ const patchPlan = async (
   // the row survives and the repair cron converges the subscription. The cron is
   // idempotent by construction (it diffs live Seal state against `desired`), so
   // a row that outlives a successful change is a harmless no-op.
+  //
+  // SIN RED NO HAY SALTO (2-oct-2026). Hasta hoy, si este upsert fallaba, la ruta lo
+  // apuntaba en el log y seguía con el add+remove igual: justo el swap que la red existe
+  // para proteger, hecho sin ella. Ahora se para aquí, antes de tocar las líneas. Si el
+  // intervalo ya cambió, el reintento del cliente lo verá hecho y solo hará las líneas.
   if (diff.adds.length || diff.removes.length) {
-    await scheduleRepair("pre-armed before line mutation");
+    const armed = await scheduleRepair("pre-armed before line mutation");
+    if (!armed) {
+      await reattachRetentionDiscount();
+      throw new ApiHttpError(
+        503,
+        "repair_net_unavailable",
+        "Could not record the repair intent; the lines were not touched. Try again in a moment.",
+      );
+    }
   }
+
+  /** La escritura falló SIN que Seal la rechazara: puede haber entrado (2-oct-2026).
+   *
+   *  No se deshace nada sobre una lectura que puede ir por detrás de Seal (ver
+   *  restoreSnapshot). Se deja la red armada con el objetivo y el cron decide dentro de
+   *  unos minutos con una lectura asentada: completa lo que quedó a medias, o confirma
+   *  que no entró nada. Mientras tanto la guarda del principio no deja tarificar encima,
+   *  y el cliente ve que su cambio se está terminando de aplicar en vez de "inténtalo de
+   *  nuevo", que es lo que le invitaba a pedir otra vez sobre la foto rota. */
+  const handOverUnknownOutcome = async (step: string, msg: string): Promise<never> => {
+    // Refresca el motivo de la fila. Si este upsert falla pero el pre-armado entró, la red
+    // sigue puesta: lo que cuenta es `ledger.repairArmed`, no lo que devuelva este intento.
+    await scheduleRepair(`${step}: resultado desconocido (${msg})`);
+    const armed = ledger.repairArmed;
+    if (!armed) {
+      ledger.outcomeUnknown = true;
+      await alertSlackErrorAwaited({
+        path: "/api/subscription/plan",
+        code: "unknown_write_unarmed",
+        msg:
+          `sub ${sealSubscriptionId}: ${step} falló sin saber si Seal la aplicó (${msg}) y NO se pudo ` +
+          `armar la reparación. Revisar a mano. snapshot=${JSON.stringify(currentLines)} ` +
+          `desired=${JSON.stringify(targetPlan.lines)}`,
+        customerId: ctx.customerId,
+      });
+    }
+    await reattachRetentionDiscount();
+    // 409 y no 5xx: la App Proxy de Shopify sustituye CUALQUIER 5xx por el HTML de la
+    // tienda, que el front lee como `gateway_timeout` ("inténtalo de nuevo"). Un 409 sí
+    // llega, y `change_in_progress` le dice lo que de verdad pasa y le quita el botón.
+    throw new ApiHttpError(
+      409,
+      "change_in_progress",
+      `Your change is still being applied (${step}: unknown outcome, repair ${armed ? "armed" : "NOT armed"}: ${msg})`,
+    );
+  };
 
   // 2a. Edits in place — no item ids change, nothing is removed.
   if (diff.edits.length) {
@@ -1299,7 +1472,9 @@ const patchPlan = async (
       log("seal-edit-items-ok", { count: diff.edits.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log("seal-edit-items-failed", { msg });
+      const rejected = sealWriteDefinitelyRejected(e);
+      log("seal-edit-items-failed", { msg, rejected });
+      if (!rejected) return await handOverUnknownOutcome("edit_items", msg);
       // Nothing added or removed yet, so the sub is either untouched or partially
       // edited; restore and abort.
       const outcome = await restoreSnapshot();
@@ -1342,7 +1517,10 @@ const patchPlan = async (
       log("seal-add-items-ok", { count: diff.adds.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log("seal-add-items-failed", { msg });
+      const rejected = sealWriteDefinitelyRejected(e);
+      log("seal-add-items-failed", { msg, rejected });
+      // El caso del 2-oct: un add que "falla" aquí y aterriza en Seal segundos después.
+      if (!rejected) return await handOverUnknownOutcome("add_items", msg);
       const outcome = await restoreSnapshot();
       if (outcome === "restored") await disarmRepairIntent();
       await reattachRetentionDiscount();
@@ -1366,57 +1544,87 @@ const patchPlan = async (
       log("seal-remove-items-ok", { count: diff.removes.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log("seal-remove-items-failed", { msg });
-      // Worse than a failed add: the old AND new lines are both live, so the next
-      // charge would be too HIGH. Retry once, then try to restore, then hand it to
-      // the repair cron rather than leaving a silent double charge.
+      log("seal-remove-items-failed", { msg, rejected: sealWriteDefinitelyRejected(e) });
+      // Worse than a failed add: the old AND new lines may both be live, so the next
+      // charge would be too HIGH.
+      //
+      // ANTES DE REINTENTAR, MIRAR (2-oct-2026). Un remove que "falla" aquí puede haber
+      // entrado: la 13416998 (1-oct) tiene en el log de Seal la línea quitada a las
+      // 08:12:42 y esta ruta la dio por fallida, reintentó contra un item que ya no
+      // existía, y acabó con `mix_inconsistent_state` y un 502 sobre una sub que estaba
+      // exactamente como pidió la clienta. Si lo viejo ya no está, esto es un ÉXITO y
+      // sigue por el camino feliz (applied, verificación, 200).
+      //
+      // Y ya NO se deshace quitando las líneas nuevas: con una lectura que puede ir por
+      // detrás de Seal, "deshacer" puede dejar a la sub sin lo que paga. La red está
+      // armada desde antes del primer cambio y el cron sabe terminar este estado hacia el
+      // objetivo con un solo remove.
       await new Promise((r) => setTimeout(r, 800));
       let converged = false;
+      let stillPresent = diff.removes;
       try {
-        // Outside the request deadline: if we got here because the budget ran
-        // out, an in-budget retry would be aborted at 0ms and the customer would
-        // be left paying for both line sets. Getting the old lines off is worth
-        // more than returning fast on a response nobody is waiting for.
-        await runWithoutRequestDeadline(() => seal.removeItems(sealSubscriptionId, diff.removes));
-        converged = true;
-        log("seal-remove-items-ok-on-retry");
-      } catch {
-        const outcome = await restoreSnapshot();
-        if (outcome === "restored") converged = true;
+        const settled = await runWithoutRequestDeadline(() => seal.getSubscriptionById(sealSubscriptionId));
+        if (settled) {
+          const liveIds = new Set(getLines(settled).map((l) => l.itemId));
+          stillPresent = diff.removes.filter((id) => liveIds.has(id));
+          converged = stillPresent.length === 0;
+          if (converged) log("seal-remove-items-landed-anyway");
+        }
+      } catch (readErr) {
+        log("seal-remove-items-reread-failed", {
+          msg: readErr instanceof Error ? readErr.message : String(readErr),
+        });
       }
-      await reattachRetentionDiscount();
-      if (converged) {
-        // Either the retry landed (sub is on target) or the snapshot came back
-        // (sub is on its old plan). Both are consistent states nobody needs to
-        // repair, so drop the pre-armed intent.
-        await disarmRepairIntent();
-        throw new ApiHttpError(502, "seal_remove_items_failed", `${msg} (rolled back)`);
+      if (!converged) {
+        try {
+          // Outside the request deadline: if we got here because the budget ran
+          // out, an in-budget retry would be aborted at 0ms and the customer would
+          // be left paying for both line sets. Getting the old lines off is worth
+          // more than returning fast on a response nobody is waiting for.
+          await runWithoutRequestDeadline(() => seal.removeItems(sealSubscriptionId, stillPresent));
+          converged = true;
+          log("seal-remove-items-ok-on-retry", { count: stillPresent.length });
+        } catch (retryErr) {
+          log("seal-remove-items-retry-failed", {
+            msg: retryErr instanceof Error ? retryErr.message : String(retryErr),
+          });
+        }
       }
-      // Refresh the pre-armed intent with the real reason, for the operator
-      // reading `last_error` and for the alert below.
-      const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
-      alertSlackError({
-        path: "/api/subscription/plan",
-        code: "mix_inconsistent_state",
-        msg:
-          `sub ${sealSubscriptionId}: could not converge lines. desired=${JSON.stringify(targetPlan.lines)} ` +
-          `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
-          `If a charge fires before the cron converges, REFUND the duplicate line.`,
-        customerId: ctx.customerId,
-      });
-      throw new ApiHttpError(
-        502,
-        "seal_inconsistent_state",
-        `${msg} (subscription has extra lines; a repair is scheduled)`,
-      );
+      // Si convergió, no se lanza: el bloque de después desarma la red, apunta `applied`,
+      // repone el descuento y verifica, como en cualquier cambio que sale bien.
+      if (!converged) {
+        await reattachRetentionDiscount();
+        // Refresh the pre-armed intent with the real reason, for the operator
+        // reading `last_error` and for the alert below.
+        const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
+        await alertSlackErrorAwaited({
+          path: "/api/subscription/plan",
+          code: "mix_inconsistent_state",
+          msg:
+            `sub ${sealSubscriptionId}: could not converge lines. desired=${JSON.stringify(targetPlan.lines)} ` +
+            `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
+            `If a charge fires before the cron converges, REFUND the duplicate line.`,
+          customerId: ctx.customerId,
+        });
+        // 409 por lo mismo que `handOverUnknownOutcome`: un 5xx no llega al cliente.
+        throw new ApiHttpError(
+          409,
+          "change_in_progress",
+          `Your change is still being applied (${msg}; subscription has extra lines; a repair is scheduled)`,
+        );
+      }
     }
   }
 
   // Lines converged: the pre-armed intent has done its job, drop it so the cron
   // has nothing to chase.
-  if (diff.adds.length || diff.removes.length) {
-    await disarmRepairIntent();
-  }
+  //
+  // SIEMPRE, no solo tras un add/remove (2-oct-2026). Un cambio de solo edits no arma
+  // red, pero puede encontrarse una fila vieja de esta sub (cerrada por el cron); si
+  // sobreviviera, sus valores podrían "explicar" el estado nuevo y la guarda del
+  // principio leería a medias una sub que está bien. La sub acaba de converger aquí: no
+  // queda nada que esa fila pueda describir.
+  await disarmRepairIntent();
 
   // Lines converged. Record it before the verification step, so the audit trail exists
   // even if verification then times out or reports a mismatch.
@@ -1471,7 +1679,10 @@ const patchPlan = async (
     // the WHOLE store (~50 pages, Promise.all) on every plan change — firing
     // exactly while Seal regenerates attempts and the FE re-polls, i.e. the
     // remaining 429 stampede after the 2026-07-06 getSubscriptionsByEmail fix.
-    verified = await seal.getSubscriptionById(sealSubscriptionId, verifyController.signal);
+    // Con el presupuesto gastado (p.ej. tras un remove que "falló" pero entró) esta lectura
+    // nacía muerta a 0 ms y la petición acababa en `verify_error` sobre un cambio bueno.
+    // Su propio tope de 4 s sigue mandando. (2-oct-2026)
+    verified = await afterBudget(() => seal.getSubscriptionById(sealSubscriptionId, verifyController.signal));
     if (!verified) verifyOutcome = "not_found";
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") {
@@ -1535,6 +1746,16 @@ const patchPlan = async (
         actualCents,
         intervalMatches, linesMatch, moneyMatches, oneTimeLeak,
       });
+      // Cerrar el apunte con lo que de verdad pasó y, si lo que no cuadra son las LÍNEAS o
+      // el IMPORTE, volver a armar la red (2-oct-2026). Esta lectura es una sola y puede ir
+      // por detrás de Seal, igual que la del restore; si la sub quedó de verdad a medias,
+      // el "inténtalo de nuevo" del cliente partiría de esa foto rota. Con la red armada,
+      // la guarda del principio lo para y el cron decide con una lectura asentada: si ya
+      // estaba bien, cierra en la siguiente pasada sin escribir nada en Seal.
+      await writeAudit("verify_mismatch");
+      if (!linesMatch || !moneyMatches) {
+        await scheduleRepair(`verificación no cuadra (líneas ${linesMatch ? "ok" : "NO"}, importe ${moneyMatches ? "ok" : "NO"})`);
+      }
       if (oneTimeLeak) {
         throw new ApiHttpError(
           502,
@@ -1625,23 +1846,14 @@ const patchPlan = async (
       });
     }
     if (pricePreservedFromCents !== null || clearPreservation) {
-      try {
-        // El importe y SUS cajas van siempre juntos: un importe sin las cajas a las
-        // que pertenece es una entitlement que el cron puede aplicar sobre una
-        // composición que ya no es la suya. (Aviso de Kiko, 3-sep-2026.)
-        const { error } = await supabaseAdmin()
-          .from("subscriptions")
-          .update(
-            pricePreservedFromCents !== null
-              ? { preserved_charge_cents: targetPlan.totalCents, preserved_box_count: targetBoxCount }
-              : { preserved_charge_cents: null, preserved_box_count: null },
-          )
-          .eq("customer_id", ctx.customerId)
-          .eq("seal_subscription_id", String(sealSubscriptionId));
-        if (error) log("preserved-charge-write-failed", { msg: error.message });
-      } catch (e) {
-        log("preserved-charge-write-threw", { msg: e instanceof Error ? e.message : String(e) });
-      }
+      // El importe y SUS cajas van siempre juntos: un importe sin las cajas a las
+      // que pertenece es una entitlement que el cron puede aplicar sobre una
+      // composición que ya no es la suya. (Aviso de Kiko, 3-sep-2026.)
+      await writePreservedColumns(
+        pricePreservedFromCents !== null
+          ? { preserved_charge_cents: targetPlan.totalCents, preserved_box_count: targetBoxCount }
+          : { preserved_charge_cents: null, preserved_box_count: null },
+      );
     }
 
     // ───── Preserve the prior next-ship date (don't revert earlier steps) ─────
@@ -1670,9 +1882,11 @@ const patchPlan = async (
     // the preserved date so the customer sees it immediately.
     let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
     if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
-      await writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD).catch((e) =>
-        log("reanchor-intent-write-failed", { msg: String(e) }),
-      );
+      // Fuera del deadline: es la red del calendario, y sin ella el próximo cobro puede
+      // adelantarse. Con el presupuesto gastado se cortaba a 0 ms. (2-oct-2026)
+      await runWithoutRequestDeadline(() =>
+        writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD!),
+      ).catch((e) => log("reanchor-intent-write-failed", { msg: String(e) }));
       finalNextShipDate = `${effectivePreserveYYYYMMDD}T13:00:00Z`; // optimistic; webhook/cron makes it real
       log("reanchor-intent-recorded", { effectivePreserveYYYYMMDD, reanchorMode });
     }
@@ -1696,9 +1910,9 @@ const patchPlan = async (
   // (/api/cron/reanchor-drain) preserves the prior next-ship date once Seal
   // finishes regenerating. This is exactly the case the safety net exists for.
   if (effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
-    await writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD).catch((e) =>
-      log("reanchor-intent-write-failed", { msg: String(e) }),
-    );
+    await runWithoutRequestDeadline(() =>
+      writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD!),
+    ).catch((e) => log("reanchor-intent-write-failed", { msg: String(e) }));
     log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
   }
   // No hemos podido leer Seal de vuelta (timeout, error o null), así que NO sabemos
@@ -1740,6 +1954,118 @@ const patchPlan = async (
   );
   } // fin de applyPlanChange
 };
+
+/**
+ * Corre `fn` fuera del deadline de la petición solo si ese deadline ya está agotado.
+ *
+ * Con presupuesto de sobra, el cliente está esperando la respuesta y no se le alarga.
+ * Agotado, la App Proxy ya ha dejado de esperar (le ha devuelto `gateway_timeout`) y lo
+ * que queda es dejar bien la sub y el ledger: dentro del deadline cada llamada nacería
+ * muerta a 0 ms. `maxDuration` (20 s) sigue siendo el techo. (2-oct-2026)
+ */
+function afterBudget<T>(fn: () => Promise<T>): Promise<T> {
+  return requestDeadlineLeft() === 0 ? runWithoutRequestDeadline(fn) : fn();
+}
+
+/**
+ * Lo que el `catch` de fuera necesita saber para cerrar el apunte de la petición en
+ * `subscription_changes`. Ver "EL LEDGER SIEMPRE SE CIERRA" en patchPlan.
+ */
+interface RequestLedger {
+  /** Mismo id en todas las filas de UNA petición. */
+  requestId: string;
+  /** Hay un `intent` escrito y todavía ninguna fila que lo cierre. */
+  open: boolean;
+  /** Hay una intención de reparación armada: la cerrará el cron, no esta petición. */
+  repairArmed: boolean;
+  /** Una escritura falló sin que Seal la rechazara y NO se pudo armar la red. */
+  outcomeUnknown: boolean;
+  close: (outcome: string) => Promise<void>;
+}
+
+/**
+ * 409 `change_in_progress` si esta sub tiene una escritura de líneas nuestra sin cerrar.
+ * Ver "NO SE TARIFICA SOBRE UNA ESCRITURA A MEDIAS" en patchPlan.
+ *
+ * Si Supabase no responde se deja pasar, igual que el cerrojo: bloquear TODOS los
+ * cambios de plan por un parpadeo de la base sería peor. Y sin base tampoco se arma la
+ * red, así que esa petición no llegará a hacer un add+remove (ver el pre-armado).
+ */
+async function assertNoUnfinishedLineWrite(
+  customerId: string,
+  sealSubscriptionId: number,
+  currentLines: SubscriptionLine[],
+  log: (step: string, extra?: Record<string, unknown>) => void,
+): Promise<void> {
+  let row: {
+    status: string;
+    snapshot: unknown;
+    desired: unknown;
+    created_at: string;
+    last_error: string | null;
+  } | null = null;
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from("subscription_line_repairs")
+      .select("status, snapshot, desired, created_at, last_error")
+      .eq("customer_id", customerId)
+      .eq("seal_subscription_id", String(sealSubscriptionId))
+      .maybeSingle();
+    if (error) {
+      log("line-repair-read-failed", { msg: error.message });
+      return;
+    }
+    row = data;
+  } catch (e) {
+    log("line-repair-read-threw", { msg: e instanceof Error ? e.message : String(e) });
+    return;
+  }
+  if (!row) return;
+
+  // Una fila `done` NUNCA bloquea: el cron la cerró con la sub coherente, y comparar contra
+  // su foto días después daría falsos "a medias" en cuanto el cliente hiciera un cambio de
+  // solo edits que coincida en valores (2L → 1L+1W cerrada, y luego 1L+1W → 2L+1W lee
+  // "partial" para siempre). Solo bloquean una pendiente viva, que el cron todavía no ha
+  // decidido, o una que el cron abandonó (expiró o se rindió) y que SIGUE a medias.
+  if (row.status === "done") return;
+  const ageMs = Date.now() - new Date(row.created_at).getTime();
+  const pending = row.status === "pending" && ageMs < LINE_REPAIR_TTL_MS;
+  if (!pending) {
+    const state = classifyLineState(
+      currentLines,
+      (row.snapshot ?? []) as SubscriptionLine[],
+      (row.desired ?? []) as TargetLine[],
+    );
+    if (state.kind !== "partial") return;
+  }
+
+  log("unfinished-line-write-blocks-change", {
+    status: row.status,
+    ageMs,
+    pending,
+    lastError: row.last_error,
+  });
+  if (!pending) {
+    // El cron ya no la va a cerrar (se rindió o expiró) y la sub SIGUE a medias. Este
+    // aviso es lo único que la pone delante de una persona. Awaited: justo después se
+    // lanza, y un aviso suelto puede morir con la invocación.
+    await alertSlackErrorAwaited({
+      path: "/api/subscription/plan",
+      code: "unfinished_line_write",
+      msg:
+        `sub ${sealSubscriptionId}: el cliente intenta cambiar el plan y la sub sigue a medias de una ` +
+        `escritura anterior que el cron no pudo cerrar (${row.last_error ?? row.status}). Rechazado para ` +
+        `no tarificar sobre esa foto. Dejarla a mano como la foto o como el objetivo de ` +
+        `subscription_line_repairs.`,
+      customerId,
+    });
+  }
+  throw new ApiHttpError(
+    409,
+    "change_in_progress",
+    "Your last change to this subscription is still being applied; try again in a few minutes",
+  );
+}
 
 /**
  * Mix fields for a synthetic response, projected from the target plan.

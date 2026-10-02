@@ -257,6 +257,16 @@ export function SkipOverlay({
                 en: "The service is taking longer than usual. Wait a moment and try again.",
                 es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
               })
+            : code === "change_in_progress"
+              ? t({
+                  en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",
+                  es: "Todavía estamos terminando de aplicar tu último cambio. Espera unos minutos, recarga la página y vuelve a intentarlo.",
+                })
+            : code === "seal_inconsistent_state"
+              ? t({
+                  en: "Your change didn't finish applying cleanly. We'll sort it out within a few minutes and you won't be overcharged. Reload the page then to see how your plan ended up.",
+                  es: "Tu cambio no ha terminado de aplicarse bien. En unos minutos lo dejamos en orden y no se te cobrará de más. Recarga la página entonces para ver cómo ha quedado tu plan.",
+                })
             : t({
                 en: "Couldn't update your plan. Try again or contact us.",
                 es: "No se pudo cambiar el plan. Inténtalo de nuevo o escríbenos.",
