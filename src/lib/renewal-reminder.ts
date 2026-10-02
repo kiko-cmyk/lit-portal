@@ -62,6 +62,7 @@ import {
   planTargetLines,
   preservedPriceApplies,
   repriceInPlace,
+  shapeFor,
   shortLabel,
 } from "./mix";
 import { BOX_COUNT_BY_VARIANT } from "./seal-plans";
@@ -176,6 +177,43 @@ function addressOf(s: SealSubscription): ReminderAddress {
  * the 7d bucket — it would only double the Slack alerts for the same drift.
  */
 type PriceCheckOutcome = "ok" | "por-debajo" | "no-comparable" | "sobre-cobro";
+
+/**
+ * Recibo en `subscription_changes` de una cura de precio (2-oct-2026). Best effort, nunca
+ * fatal: un apunte no puede tumbar el recordatorio.
+ *
+ * La cura cambia lo que el cliente paga, y hasta hoy no lo apuntaba en ningún sitio. El
+ * último recibo de la sub seguía siendo el de antes de curarla, así que el detector de
+ * reprecios la cantaba como "la escritura no acabó como dice nuestro propio registro": la
+ * 15144561, curada de 90,57 a 85,05 el 17-sep, llevaba dos semanas saliendo en la alerta.
+ */
+async function writeHealReceipt(after: SealSubscription, beforeCents: number, label: string): Promise<void> {
+  const customerId = after.customer_id;
+  if (!customerId) return;
+  try {
+    const composition = getComposition(after);
+    const { error } = await supabaseAdmin().from("subscription_changes").insert({
+      customer_id: String(customerId),
+      change_type: shapeFor(composition) === "split" ? "mix" : "plan",
+      payload: {
+        sealSubscriptionId: String(after.id),
+        outcome: "applied",
+        source: "renewal-heal",
+        to: {
+          composition,
+          shape: shapeFor(composition),
+          frequency: normalizeFrequency(after.delivery_interval ?? ""),
+        },
+        chargedCents: getChargeTotalCents(after),
+        pricePreservedFromCents: null,
+        note: `precio bajado en sitio por el cron de renovación (antes ${beforeCents}c)`,
+      },
+    });
+    if (error) console.warn(`[${label}] heal-receipt-write-failed sub=${after.id}: ${error.message}`);
+  } catch (e) {
+    console.warn(`[${label}] heal-receipt-write-threw sub=${after.id}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
 async function assertMixPrice(
   s: SealSubscription,
@@ -405,6 +443,7 @@ async function assertMixPrice(
         // Contra lo que pretendíamos escribir, no contra el tramo: la tolerancia de
         // un céntimo por línea absorbe el redondeo de Seal, no el del reparto.
         healed = Math.abs(now - intendedTotalCents) <= lines.length ? "healed" : "failed";
+        if (healed === "healed" && after) await writeHealReceipt(after, actual, cfg.label);
       }
     } catch (e) {
       healed = "failed";

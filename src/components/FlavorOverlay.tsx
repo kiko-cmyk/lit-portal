@@ -204,19 +204,30 @@ export function FlavorOverlay({
           }),
         );
       } else if (err.code === "seal_inconsistent_state") {
-        // A repair intent is written and the cron converges it, so promise the
-        // customer they won't be double charged instead of just sending them away.
+        // A repair intent is written and the cron settles it, so promise the customer
+        // they won't be overcharged instead of just sending them away. It does NOT promise
+        // the change will be applied: the cron completes it or confirms it never landed.
         setError(
           t({
-            en: "We're still finishing your change. You won't be charged twice, we'll sort it within the next few minutes.",
-            es: "Estamos terminando de aplicar tu cambio. No se te cobrará dos veces, lo dejamos resuelto en unos minutos.",
+            en: "Your change didn't finish applying cleanly. We'll sort it out within a few minutes and you won't be overcharged. Reload the page then to see how your flavors ended up.",
+            es: "Tu cambio no ha terminado de aplicarse bien. En unos minutos lo dejamos en orden y no se te cobrará de más. Recarga la página entonces para ver cómo han quedado tus sabores.",
+          }),
+        );
+      } else if (err.code === "change_in_progress") {
+        setError(
+          t({
+            en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",
+            es: "Todavía estamos terminando de aplicar tu último cambio. Espera unos minutos, recarga la página y vuelve a intentarlo.",
           }),
         );
       } else if (err.code === "gateway_timeout" || err.status === 504) {
+        // Same as PlanOverlay since 2026-09-04: the App Proxy gave up, the server may
+        // still be mid-swap, so the outcome is UNKNOWN. "Try again" is how the 12798642
+        // re-submitted on top of a half-written subscription on 2026-10-02.
         setError(
           t({
-            en: "The service is taking longer than usual. Wait a moment and try again.",
-            es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
+            en: "This is taking longer than usual, and your change may still be going through. Reload the page in a moment to see how your flavors ended up, and don't save again in the meantime.",
+            es: "Esto está tardando más de lo normal y puede que tu cambio se haya llegado a aplicar. Recarga la página en un momento para ver cómo han quedado tus sabores, y no vuelvas a guardar mientras tanto.",
           }),
         );
       } else {

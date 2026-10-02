@@ -501,6 +501,18 @@ function Solucion({
       });
     if (code === "gateway_timeout" || status === 504)
       return t({ en: "The service is taking longer than usual. Try again in a moment.", es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento." });
+    // Escritura a medias o sin cerrar (2-oct-2026): la ruta no deja tarificar encima y el
+    // cron la cierra en minutos. Reintentar en el acto solo devuelve el 409.
+    if (code === "change_in_progress")
+      return t({
+        en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",
+        es: "Todavía estamos terminando de aplicar tu último cambio. Espera unos minutos, recarga la página y vuelve a intentarlo.",
+      });
+    if (code === "seal_inconsistent_state")
+      return t({
+        en: "Your change didn't finish applying cleanly. We'll sort it out within a few minutes and you won't be overcharged. Reload the page then to see how your plan ended up.",
+        es: "Tu cambio no ha terminado de aplicarse bien. En unos minutos lo dejamos en orden y no se te cobrará de más. Recarga la página entonces para ver cómo ha quedado tu plan.",
+      });
     return t({ en: "Couldn't update your plan. Try again or contact us.", es: "No se pudo cambiar el plan. Inténtalo de nuevo o escríbenos." });
   };
 
