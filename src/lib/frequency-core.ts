@@ -10,11 +10,14 @@
  *   1. El `delivery_interval` exacto que Seal acepta en el `edit`
  *      (`SEAL_INTERVAL_BY_FREQUENCY`). Con un campo de más, Seal hace no-op en
  *      silencio (Juan, 2026-05-19).
- *   2. La fecha natural a la que cae la próxima entrega tras el cambio
- *      (`naturalNextShipDate`): último cobro completado + intervalo nuevo, que es
- *      como Seal regenera el calendario. Es la fecha que enseña el SkipOverlay y
- *      la que hay que preservar con el re-anclaje, porque Seal ignora los saltos
- *      previos al regenerar y puede ADELANTAR el cobro (LIT-464).
+ *   2. La fecha a la que cae la próxima entrega cuando el cliente ESPACIA
+ *      (`shiftedNextShipDate` y `spacedNextShipDate`): la que tiene, menos un ciclo
+ *      actual, más uno nuevo (`spacedFromNext` de `@/lib/cadence`, la misma función
+ *      con la que calculan su vista previa el SkipOverlay y CancelTakeover). Es la
+ *      que hay que preservar con el re-anclaje, porque Seal regenera el calendario
+ *      por su cuenta y puede caer ANTES (LIT-464). Hasta el 2026-10-02 el área
+ *      personal usaba otra, la natural (último cobro completado + intervalo nuevo),
+ *      que a quien había saltado le caía en el pasado (PR #122).
  *   3. La intención de re-anclaje (`writeReanchorIntent`) que el cron
  *      `/api/cron/reanchor-drain` converge cuando Seal termina de regenerar.
  *
@@ -30,11 +33,10 @@
  */
 
 import { ApiHttpError } from "@/lib/api-helpers";
-import { addCycle, subCycle } from "@/lib/cadence";
+import { spacedFromNext } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { FREQUENCY_DAYS, longerFrequencies } from "@/lib/plan-options";
 import {
-  getLastCompletedChargeDate,
   getNextBillingAttempt,
   normalizeFrequency,
   seal,
@@ -67,28 +69,6 @@ export function isFrequency(v: unknown): v is Frequency {
 }
 
 /**
- * Fecha (YYYY-MM-DD) a la que cae la próxima entrega si la frecuencia pasa a
- * `target`: el ancla es el último cobro COMPLETADO que Seal enseña y, si no
- * enseña ninguno (la lista trae sobre todo futuros), la próxima fecha menos un
- * ciclo actual. Mismo cálculo que usaba el plan route en línea
- * (`computeNaturalYYYYMMDD`, 2026-06-19) y que el SkipOverlay hace en el cliente.
- * Null solo si no hay ni cobro completado ni próxima fecha.
- */
-export function naturalNextShipDate(
-  sub: SealSubscription | null,
-  nextAttemptDate: string | null,
-  current: Frequency,
-  target: Frequency,
-): string | null {
-  let anchorIso = sub ? getLastCompletedChargeDate(sub) : null;
-  if (!anchorIso && nextAttemptDate) {
-    anchorIso = subCycle(new Date(nextAttemptDate), current).toISOString();
-  }
-  if (!anchorIso) return null;
-  return addCycle(new Date(anchorIso), target).toISOString().slice(0, 10);
-}
-
-/**
  * Fecha (YYYY-MM-DD) de la próxima entrega si la frecuencia pasa a `target`,
  * contada DESDE LA QUE YA TIENE: un ciclo actual hacia atrás y uno nuevo hacia
  * delante. De cada 2 a cada 3 meses con la próxima el 4-oct: el 4-nov.
@@ -98,9 +78,11 @@ export function naturalNextShipDate(
  * había saltado sin escalones cercanos: en la 12320700 (cada 2 meses, último
  * cobro 27-may, próxima 4-oct) 3 y 4 meses caían en agosto y septiembre, y el
  * primero que alejaba la entrega era 5. Contada desde la próxima, un ritmo más
- * largo siempre la aleja. Seal sigue regenerando en «último cobro + intervalo»;
- * el re-anclaje (`seal.reanchorCadence`, que REPROGRAMA todos los pendientes) la
- * lleva hasta aquí. Espejo: `next_date_from_next` de lit-agentic-workflows.
+ * largo siempre la aleja. Seal regenera el calendario por su cuenta (en los cuatro
+ * casos medidos el 2026-10-02 ancló en el último intento, aunque estuviera
+ * saltado, y cayó aquí mismo); si no, el re-anclaje (`seal.reanchorCadence`, que
+ * REPROGRAMA todos los pendientes) la lleva hasta aquí. Espejo:
+ * `next_date_from_next` de lit-agentic-workflows.
  */
 export function shiftedNextShipDate(
   nextAttemptDate: string | null,
@@ -108,7 +90,33 @@ export function shiftedNextShipDate(
   target: Frequency,
 ): string | null {
   if (!nextAttemptDate) return null;
-  return addCycle(subCycle(new Date(nextAttemptDate), current), target).toISOString().slice(0, 10);
+  return spacedFromNext(new Date(nextAttemptDate), current, target).toISOString().slice(0, 10);
+}
+
+/**
+ * La fecha de la próxima entrega cuando el cliente ESPACIA desde el área personal:
+ * «Ajustar mi plan» del SkipOverlay, la oferta de CancelTakeover y la de la
+ * encuesta de perfil. Es la misma cuenta que `shiftedNextShipDate`, y es la que
+ * esas tres pantallas ya ENSEÑABAN (`spacedFromNext` de `@/lib/cadence`, que ahora
+ * comparten con el backend).
+ *
+ * Hasta el 2026-10-02 el plan route escribía otra: la natural, contada desde el
+ * último cobro completado. A quien había saltado le caía en el pasado (la 12320700:
+ * pantalla 4-nov, intención 27-ago), la intención moría en el guard del corte y el
+ * re-anclaje no hacía nada. Al cliente se le prometía una fecha y se guardaba otra.
+ *
+ * Solo devuelve la fecha si de verdad ALEJA la entrega. Si no (frecuencia igual o
+ * más corta, que hoy ninguna de las tres ofrece), null: quien llama se queda en la
+ * fecha que el cliente ya tiene, porque el próximo cobro nunca va hacia atrás.
+ */
+export function spacedNextShipDate(
+  nextAttemptDate: string | null,
+  current: Frequency,
+  target: Frequency,
+): string | null {
+  const shifted = shiftedNextShipDate(nextAttemptDate, current, target);
+  if (!shifted || !nextAttemptDate) return null;
+  return shifted > nextAttemptDate.slice(0, 10) ? shifted : null;
 }
 
 /**
@@ -124,94 +132,6 @@ export function assertMovesLater(nextAttemptDate: string | null, newYYYYMMDD: st
       `The new date ${newYYYYMMDD ?? "?"} would not move the next delivery past ${nextAttemptDate?.slice(0, 10) ?? "?"}`,
     );
   }
-}
-
-/**
- * El ancla CONSERVADORA con la que se decide si una frecuencia gana. Igual que
- * `naturalNextShipDate` usa el último cobro completado que Seal enseña; pero
- * cuando no enseña ninguno (en la 14030060 no hay ni uno, ni `invoices`, solo
- * saltos), no toma la próxima menos un ciclo, sino UN CICLO ANTES DEL PRIMER
- * SALTO visible: los saltos prueban que el cobro real es anterior a ellos. Es
- * una cota superior del ancla real (saltos más viejos pueden haber salido de la
- * lista), pero siempre igual o anterior a la ingenua, así que solo puede hacer
- * el guard más estricto. Revisión de Juan del PR #119 (2026-09-22).
- */
-export function conservativeAnchorIso(
-  sub: SealSubscription,
-  nextAttemptDate: string | null,
-  current: Frequency,
-): string | null {
-  const completed = getLastCompletedChargeDate(sub);
-  if (completed) return completed;
-  if (!nextAttemptDate) return null;
-  const nextDay = nextAttemptDate.slice(0, 10);
-  const skipped = (sub.billing_attempts ?? [])
-    .filter((ba) => ba.skipped_on && ba.date && ba.date.slice(0, 10) < nextDay)
-    .map((ba) => ba.date)
-    .sort((a, b) => a.localeCompare(b));
-  return subCycle(new Date(skipped[0] ?? nextAttemptDate), current).toISOString();
-}
-
-/**
- * ¿Pasar a `target` ALEJA la próxima entrega respecto a la fecha que ya tiene?
- *
- * Es la defensa de LIT-464 en la puerta: el drain solo empuja hacia adelante
- * (`reanchorCadence` devuelve 0 cuando el primer pendiente ya está en o después
- * de la fecha a preservar), así que si la fecha natural cae antes de la que el
- * cliente tenía, la intención es un no-op y Seal le cobra ANTES justo después de
- * pedir más tiempo. Se mide con el ancla conservadora, opción por opción.
- */
-export function gainsFor(
-  sub: SealSubscription,
-  nextAttemptDate: string | null,
-  current: Frequency,
-  target: Frequency,
-): boolean {
-  if (!nextAttemptDate) return false;
-  const anchor = conservativeAnchorIso(sub, nextAttemptDate, current);
-  if (!anchor) return false;
-  const natural = addCycle(new Date(anchor), target).toISOString().slice(0, 10);
-  return natural > nextAttemptDate.slice(0, 10);
-}
-
-/** La puerta no puede depender de que el de fuera se porte bien: se comprueba
- *  en la propuesta Y en la escritura, no solo en la consulta. */
-export function assertGains(
-  sub: SealSubscription,
-  nextAttemptDate: string | null,
-  current: Frequency,
-  target: Frequency,
-): void {
-  if (!gainsFor(sub, nextAttemptDate, current, target)) {
-    throw new ApiHttpError(
-      409,
-      "no_gain",
-      `Switching ${current} → ${target} would not move the next delivery past ${nextAttemptDate?.slice(0, 10) ?? "?"}: the last completed charge is too far back, Seal would regenerate earlier and the drain only moves forward`,
-    );
-  }
-}
-
-export interface LongerOption {
-  frequency: Frequency;
-  /** Dónde caería la próxima entrega con esa frecuencia. */
-  naturalNextShipDate: string | null;
-  /**
-   * Si de verdad ALEJA la entrega respecto a la fecha que ya tiene, medido con
-   * el ancla conservadora (`gainsFor`). Se lee OPCIÓN POR OPCIÓN: si 2 meses no
-   * aleja la entrega pero 4 sí, se ofrecen 4, 5 y 6; solo cuando no gana ninguna
-   * se pasa a ofrecer el salto.
-   */
-  gains: boolean;
-}
-
-/** Las frecuencias más largas que la actual, cada una con su fecha natural. */
-export function longerOptions(sub: SealSubscription, current: Frequency): LongerOption[] {
-  const next = getNextBillingAttempt(sub)?.date ?? null;
-  return longerFrequencies(current).map((frequency) => ({
-    frequency,
-    naturalNextShipDate: naturalNextShipDate(sub, next, current, frequency),
-    gains: gainsFor(sub, next, current, frequency),
-  }));
 }
 
 export interface LongerOptionFromNext {
@@ -251,17 +171,28 @@ export function assertLonger(current: Frequency, target: Frequency): void {
 
 /**
  * Persiste (o refresca) la intención «la próxima entrega tiene que quedarse en
- * esta fecha» para que el cron drain (`/api/cron/reanchor-drain`) remate el
- * trabajo cuando Seal termine de regenerar el calendario. Una intención viva por
- * (cliente, suscripción); la siguiente la sobrescribe.
+ * esta fecha» para que el webhook de Seal y el cron drain (`/api/cron/reanchor-drain`)
+ * rematen el trabajo cuando Seal termine de regenerar el calendario. Una intención
+ * viva por (cliente, suscripción); la siguiente la sobrescribe.
+ *
+ * LANZA si no se ha escrito. supabase-js no lanza por sí solo: devuelve `{ error }`,
+ * también cuando salta el timeout de `fetchDeadline`. Hasta el 2026-10-05 este
+ * `error` no se miraba, así que una intención que no se escribía pasaba por escrita:
+ * el plan route anotaba `reanchor-intent-recorded` y devolvía la fecha como hecha, y
+ * el `502 reanchor_intent_failed` de la ruta del bot no podía saltar nunca (revisión
+ * de Kiko del PR #122). Con `fromNext` la intención es lo único que sujeta la fecha
+ * prometida, así que quien llama TIENE que enterarse.
+ *
+ * `db` solo existe para los tests.
  */
 export async function writeReanchorIntent(
   customerId: string,
   sealSubscriptionId: number,
   preserveYYYYMMDD: string,
+  db: Pick<ReturnType<typeof supabaseAdmin>, "from"> = supabaseAdmin(),
 ): Promise<void> {
   const nowIso = new Date().toISOString();
-  await supabaseAdmin()
+  const { error } = await db
     .from("subscription_reanchor_intents")
     .upsert(
       {
@@ -277,6 +208,9 @@ export async function writeReanchorIntent(
       // cambio en una sub pise la intención pendiente de una hermana.
       { onConflict: "customer_id,seal_subscription_id" },
     );
+  if (error) {
+    throw new Error(`reanchor intent not written for sub ${sealSubscriptionId} → ${preserveYYYYMMDD}: ${error.message}`);
+  }
 }
 
 export interface FrequencyAuditRow {
@@ -332,14 +266,14 @@ export interface FrequencyChangeArgs {
   /** El motivo que dio el cliente, si lo dio (los valores del SkipOverlay). */
   reason?: string | null;
   /**
-   * `natural`: la próxima entrega cae en último cobro + intervalo nuevo (lo que
-   * hace el SkipOverlay al «Ajustar mi plan»). `preserve`: se queda en la fecha
-   * que ya tenía (cambio de plan normal). `fromNext`: la próxima menos un ciclo
-   * actual más uno nuevo (`shiftedNextShipDate`), la que promete el bot desde el
-   * 2026-10-01; aquí el re-anclaje es lo único que impide que Seal cobre antes,
-   * así que sin intención escrita no hay «hecho».
+   * `preserve`: se queda en la fecha que ya tenía (cambio de plan normal).
+   * `fromNext`: la próxima menos un ciclo actual más uno nuevo
+   * (`shiftedNextShipDate`), la que promete el bot desde el 2026-10-01 y la que
+   * enseña el área personal; aquí el re-anclaje es lo único que impide que Seal
+   * cobre antes, así que sin intención escrita no hay «hecho». (El modo `natural`,
+   * último cobro + intervalo nuevo, se quitó el 2026-10-05: no lo usaba nadie.)
    */
-  reanchorMode: "natural" | "preserve" | "fromNext";
+  reanchorMode: "preserve" | "fromNext";
   log?: (step: string, extra?: Record<string, unknown>) => void;
 }
 
@@ -401,16 +335,11 @@ export async function changeFrequencyOnly(
     };
   }
 
-  // LIT-464 en la puerta: nada se escribe si la opción no aleja la entrega.
-  if (reanchorMode === "natural") assertGains(sealSub, nextIso, current, target);
-
   const expectedInterval = SEAL_INTERVAL_BY_FREQUENCY[target];
   const preserve =
-    reanchorMode === "natural"
-      ? naturalNextShipDate(sealSub, nextIso, current, target)
-      : reanchorMode === "fromNext"
-        ? shiftedNextShipDate(nextIso, current, target)
-        : (nextIso?.slice(0, 10) ?? null);
+    reanchorMode === "fromNext"
+      ? shiftedNextShipDate(nextIso, current, target)
+      : (nextIso?.slice(0, 10) ?? null);
 
   // En `fromNext` lo que Seal regenere puede caer ANTES de la fecha que tenía el
   // cliente (LIT-464) y solo el re-anclaje lo arregla. Si la fecha no aleja la
@@ -527,7 +456,8 @@ export async function changeFrequencyOnly(
         log("reanchor-intent-recorded", { preserve, reanchorMode });
       } catch (e) {
         // El cambio ya está hecho y verificado; sin intención, la fecha será la que
-        // Seal regenere (en modo natural es la misma salvo saltos previos). Se dice.
+        // Seal regenere. Se dice. (Desde el 2026-10-05 este catch SÍ salta cuando
+        // Supabase no escribe: `writeReanchorIntent` ya no se traga el `error`.)
         const msg = e instanceof Error ? e.message : String(e);
         log("reanchor-intent-write-failed", { msg });
         reanchor = "intent_failed";

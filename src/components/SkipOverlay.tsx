@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { addCycle, subCycle } from "@/lib/cadence";
+import { addCycle, spacedFromNext } from "@/lib/cadence";
 import { T, useLang } from "@/lib/i18n";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
 import type {
@@ -22,15 +22,16 @@ import type {
  *   reason  → why are you skipping? (chips, captured for Klaviyo + offer routing)
  *   offer   → "what if you space it out?" frequency / box change with a live
  *             preview of the new next-order date. Spacing uses the plan route in
- *             reanchorMode="natural" so the next order lands on
- *             (last charge + new interval) — it really moves later.
+ *             reanchorMode="fromNext" so the next order lands on
+ *             (current next − current interval + new interval), the same date
+ *             the preview shows — it really moves later.
  *   confirm → the original skip confirmation (escape hatch, still one tap)
  *
  * All three entry points (Hub button, Account button, the renewal email's
  * ?action=skip deep-link) open this same overlay, so they inherit the flow.
  *
  * Mutations:
- *   - Spacing  → PATCH /api/subscription/plan (reanchorMode: "natural")
+ *   - Spacing  → PATCH /api/subscription/plan (reanchorMode: "fromNext")
  *   - Skip     → POST  /api/subscription/skip (no 24h cutoff; Seal rejects with
  *                `already_charged` once the charge fires)
  * Analytics: skip_flow_started (open) + skip_retained (saved) via /skip/track,
@@ -112,11 +113,11 @@ export function SkipOverlay({
   const currentShip = subscription.nextShipDate ? new Date(subscription.nextShipDate) : null;
   // Skip moves the next order forward one cycle of the CURRENT cadence.
   const skipShip = currentShip ? addCycle(currentShip, subscription.frequency) : null;
-  // Spacing anchors on the last charge (≈ current next ship − current interval)
-  // and adds the NEW interval — matching Seal's natural regeneration. This is
-  // a preview; the done screen shows the date the backend returns.
-  const anchor = currentShip ? subCycle(currentShip, subscription.frequency) : null;
-  const offerNewShip = anchor ? addCycle(anchor, offerFreq) : null;
+  // Spacing: current next − current interval + new interval. `spacedFromNext` is
+  // the SAME function the backend writes the re-anchor intent with, so this
+  // preview can't drift from what gets saved. The done screen shows the date the
+  // backend returns.
+  const offerNewShip = currentShip ? spacedFromNext(currentShip, subscription.frequency, offerFreq) : null;
 
   const freqChanged = offerFreq !== subscription.frequency;
   const boxesChanged = offerBoxes !== subscription.boxCount;
@@ -218,10 +219,13 @@ export function SkipOverlay({
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
           expectedLineIds: subscription.lines?.map((l) => l.itemId),
-          // Skip retention: move the next order to (last charge + new interval)
-          // so spacing actually pushes the imminent order later, rather than
+          // Skip retention: move the next order to (current next − current
+          // interval + new interval), the date the preview above shows, so
+          // spacing actually pushes the imminent order later, rather than
           // preserving the current date the way a normal plan change does.
-          reanchorMode: "natural",
+          // (Was "natural" = last charge + new interval until 2026-10-02, which
+          // for anyone who had skipped did NOT match this preview.)
+          reanchorMode: "fromNext",
         }),
       });
       onAdjusted(updated);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, clearSelectedSubscription, clearSessionToken } from "@/lib/api-client";
-import { addCycle, subCycle } from "@/lib/cadence";
+import { addCycle, spacedFromNext } from "@/lib/cadence";
 import { T, useLang, useLangValue } from "@/lib/i18n";
 import { compositionLabel } from "@/lib/mix";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
@@ -422,11 +422,11 @@ function Solucion({
   const fmt = (d: Date) => d.toLocaleDateString(locale, { day: "numeric", month: "long" });
 
   // Espaciar (No lo uso): offer a longer frequency; next order moves to
-  // (last charge + new interval). Preview via cadence.
+  // (current next − current interval + new interval), via `spacedFromNext`,
+  // the same function the backend saves the date with.
   const longer = longerFrequencies(freq);
   const [offerFreq, setOfferFreq] = useState<Frequency>(longer[0] ?? freq);
-  const anchor = currentShip ? subCycle(currentShip, freq) : null;
-  const spacedShip = anchor ? addCycle(anchor, offerFreq) : null;
+  const spacedShip = currentShip ? spacedFromNext(currentShip, freq, offerFreq) : null;
 
   // Menos cajas (Me parece caro): default to 1 box (biggest saving). Only
   // offer options BELOW the current count — the screen promises "with fewer
@@ -896,7 +896,7 @@ function Solucion({
         <button
           type="button"
           disabled={busy || longer.length === 0}
-          onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "natural" })}
+          onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "fromNext" })}
           className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
         >
           {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Space out my deliveries" es="Espaciar mis entregas" />}
