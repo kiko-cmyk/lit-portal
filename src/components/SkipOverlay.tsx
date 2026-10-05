@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { addCycle, subCycle } from "@/lib/cadence";
+import { addCycle, spacedFromNext } from "@/lib/cadence";
 import { T, useLang } from "@/lib/i18n";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
 import type {
@@ -113,11 +113,11 @@ export function SkipOverlay({
   const currentShip = subscription.nextShipDate ? new Date(subscription.nextShipDate) : null;
   // Skip moves the next order forward one cycle of the CURRENT cadence.
   const skipShip = currentShip ? addCycle(currentShip, subscription.frequency) : null;
-  // Spacing anchors on the last charge (≈ current next ship − current interval)
-  // and adds the NEW interval — matching Seal's natural regeneration. This is
-  // a preview; the done screen shows the date the backend returns.
-  const anchor = currentShip ? subCycle(currentShip, subscription.frequency) : null;
-  const offerNewShip = anchor ? addCycle(anchor, offerFreq) : null;
+  // Spacing: current next − current interval + new interval. `spacedFromNext` is
+  // the SAME function the backend writes the re-anchor intent with, so this
+  // preview can't drift from what gets saved. The done screen shows the date the
+  // backend returns.
+  const offerNewShip = currentShip ? spacedFromNext(currentShip, subscription.frequency, offerFreq) : null;
 
   const freqChanged = offerFreq !== subscription.frequency;
   const boxesChanged = offerBoxes !== subscription.boxCount;

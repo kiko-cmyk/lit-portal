@@ -7,40 +7,39 @@
  *
  * Qué protege. El módulo se extrajo el 2026-09-21 para que la ruta del cliente y
  * la entrada máquina a máquina del bot de WhatsApp compartan el `delivery_interval`
- * que Seal acepta, la fecha natural y la intención de re-anclaje. Los casos que
- * no se pueden romper:
- *   - la fecha natural es último cobro completado + intervalo nuevo, con el
- *     fallback de «próxima menos un ciclo»; el pantallazo del área personal
- *     (45 días → 2 meses, del 24-oct al 9-nov) tiene que cuadrar;
- *   - una opción que no ALEJA la entrega sale con `gains: false` (LIT-464);
+ * que Seal acepta, la fecha a la que se espacia y la intención de re-anclaje. Los
+ * casos que no se pueden romper:
  *   - la escritura releída con el intervalo viejo es `frequency_not_persisted` y
  *     una que no se pudo releer es `frequency_unverified`: en la entrada del bot
  *     no hay «hecho» sin relectura, al revés que en la ruta del cliente;
- *   - la intención de re-anclaje se escribe con la fecha natural y NO dentro del
+ *   - la intención de re-anclaje se escribe con la fecha espaciada y NO dentro del
  *     corte de 24 h; y si falla, el cambio ya hecho no se deshace ni se esconde;
+ *   - `writeReanchorIntent` LANZA cuando Supabase devuelve `{ error }` (antes se lo
+ *     tragaba y una intención no escrita pasaba por escrita);
  *   - en modo `fromNext` (el del bot desde el 2026-10-01) la fecha se cuenta desde
  *     la próxima entrega, a quien ya saltó no se le niega el cambio, y sin
  *     intención de re-anclaje escrita no hay «hecho» (`reanchor_intent_failed`);
- *   - `spacedNextShipDate` (el área personal desde el 2026-10-02) da EXACTAMENTE la
- *     fecha que enseñan SkipOverlay, CancelTakeover y la encuesta, también a quien
- *     ya saltó, y nunca una que no aleje la entrega.
+ *   - `spacedNextShipDate` (el área personal desde el 2026-10-02) nunca da una fecha
+ *     que no aleje la entrega, en toda la escalera y con fechas incómodas. Que sea
+ *     la MISMA que enseñan SkipOverlay y CancelTakeover lo garantiza el código, no
+ *     este test: las tres usan `spacedFromNext` de `@/lib/cadence`.
+ *
+ * El modo `natural` (último cobro + intervalo nuevo), `gainsFor`/`assertGains`, el
+ * ancla conservadora y `longerOptions` se quitaron el 2026-10-05 con sus tests: tras
+ * el PR #122 no los usaba nadie.
  */
 
 import {
-  assertGains,
   assertLonger,
   changeFrequencyOnly,
   type FrequencyChangeDeps,
-  gainsFor,
   isFrequency,
-  longerOptions,
   longerOptionsFromNext,
-  naturalNextShipDate,
   SEAL_INTERVAL_BY_FREQUENCY,
   shiftedNextShipDate,
   spacedNextShipDate,
+  writeReanchorIntent,
 } from "@/lib/frequency-core";
-import { addCycle, subCycle } from "@/lib/cadence";
 import { longerFrequencies } from "@/lib/plan-options";
 import type { SealSubscription } from "@/lib/seal";
 import type { Frequency } from "@/lib/types";
@@ -137,106 +136,6 @@ function fakeDeps(o: {
 
 const run = async () => {
   // ── la aritmética del portal ──────────────────────────────────────────────
-  check(
-    "el pantallazo: 45 días → 2 meses mueve la entrega del 24-oct al 9-nov",
-    naturalNextShipDate(sub(), "2026-10-24T10:00:00+00:00", "45d", "2mo") === "2026-11-09",
-  );
-  check(
-    "sin cobro completado a la vista, el ancla es la próxima menos un ciclo (da lo mismo, 9-nov)",
-    naturalNextShipDate(sub({ billing_attempts: [attempt(2, "2026-10-24")] }), "2026-10-24T10:00:00+00:00", "45d", "2mo") ===
-      "2026-11-09",
-  );
-  check("sin ancla ninguna, null", naturalNextShipDate(sub({ billing_attempts: [] }), null, "45d", "2mo") === null);
-  check(
-    "los meses son de calendario: 9-sep + 3 meses es el 9-dic",
-    naturalNextShipDate(sub(), null, "45d", "3mo") === "2026-12-09",
-  );
-
-  const opts = longerOptions(sub(), "45d");
-  check(
-    "solo se ofrece hacia arriba",
-    opts.map((o) => o.frequency).join(",") === "2mo,3mo,4mo,5mo,6mo",
-    opts.map((o) => o.frequency).join(","),
-  );
-  check("todas las del pantallazo alejan la entrega", opts.every((o) => o.gains));
-  check("y traen su fecha", opts[0].naturalNextShipDate === "2026-11-09");
-
-  // LIT-464: quien ya había saltado tiene el último cobro lejos.
-  const saltos = sub({
-    delivery_interval: "1 month",
-    billing_attempts: [
-      attempt(1, "2026-03-01", { completed: true }),
-      attempt(2, "2026-04-01", { skipped: true }),
-      attempt(3, "2026-05-01", { skipped: true }),
-      attempt(4, "2026-10-24"),
-    ],
-  });
-  const opts464 = longerOptions(saltos, "1mo");
-  check(
-    "LIT-464: con el último cobro en marzo ninguna opción aleja una entrega de octubre",
-    opts464.length === 6 && opts464.every((o) => !o.gains),
-    opts464.map((o) => `${o.frequency}:${o.naturalNextShipDate}`).join(" "),
-  );
-
-  // La forma REAL de la 14030060 el 2026-09-22: mensual, sin cobro completado a la
-  // vista, saltados de julio a diciembre, pendientes desde el 1-ene. La ingenua
-  // anclaría en diciembre; los saltos prueban que el cobro real es de junio.
-  const real14030060 = sub({
-    delivery_interval: "1 month",
-    billing_attempts: [
-      ...[7, 8, 9, 10, 11, 12].map((m, i) => attempt(i + 1, `2026-${String(m).padStart(2, "0")}-01`, { skipped: true })),
-      attempt(7, "2027-01-01"),
-      attempt(8, "2027-02-01"),
-    ],
-  });
-  const opts14030060 = longerOptions(real14030060, "1mo");
-  check(
-    "la 14030060 real: ninguna opción gana (ancla en junio, no en diciembre)",
-    opts14030060.length === 6 && opts14030060.every((o) => !o.gains),
-    opts14030060.map((o) => `${o.frequency}:${o.gains}`).join(" "),
-  );
-  check(
-    "pero la fecha natural (la que se preservaría) sigue siendo la ingenua, la que ve el cliente en pantalla",
-    opts14030060[0].naturalNextShipDate === "2027-01-15",
-  );
-  try {
-    assertGains(real14030060, "2027-01-01T10:00:00+00:00", "1mo", "2mo");
-    failures++;
-    console.error("✗ assertGains no lanzó en la 14030060");
-  } catch (err) {
-    check("assertGains sobre la 14030060 es no_gain", (err as { code?: string }).code === "no_gain");
-  }
-  {
-    const { deps, calls } = fakeDeps();
-    await rejects(
-      "changeFrequencyOnly sobre la 14030060 es no_gain ANTES de tocar Seal",
-      changeFrequencyOnly(
-        { sealSub: real14030060, target: "2mo", customerId: "27453541548381", source: "whatsapp", reanchorMode: "natural" },
-        deps,
-      ),
-      "no_gain",
-    );
-    check("y no hay edit ni auditoría", calls.edits.length === 0 && calls.audits.length === 0);
-  }
-  // Saltos solo desde octubre: el ancla retrocede a septiembre, y gana a partir de 5 meses.
-  const saltosOct = sub({
-    delivery_interval: "1 month",
-    billing_attempts: [
-      attempt(1, "2026-10-01", { skipped: true }),
-      attempt(2, "2026-11-01", { skipped: true }),
-      attempt(3, "2026-12-01", { skipped: true }),
-      attempt(4, "2027-01-01"),
-    ],
-  });
-  const optsOct = longerOptions(saltosOct, "1mo");
-  check(
-    "gains se lee opción por opción: con saltos desde octubre ganan 5 y 6 meses, no las de antes",
-    optsOct.map((o) => `${o.frequency}:${o.gains}`).join(" ") === "45d:false 2mo:false 3mo:false 4mo:false 5mo:true 6mo:true",
-    optsOct.map((o) => `${o.frequency}:${o.gains}`).join(" "),
-  );
-  check("gainsFor con el pantallazo, todo gana", gainsFor(sub(), "2026-10-24T10:00:00+00:00", "45d", "2mo"));
-  check("sin próxima fecha no se puede ganar", !gainsFor(sub({ billing_attempts: [] }), null, "45d", "2mo"));
-
   check("SEAL_INTERVAL_BY_FREQUENCY va en singular, como acepta Seal", SEAL_INTERVAL_BY_FREQUENCY["45d"] === "45 day" && SEAL_INTERVAL_BY_FREQUENCY["2mo"] === "2 month");
   check("isFrequency acepta la escalera y nada más", isFrequency("2mo") && !isFrequency("7mo") && !isFrequency(2));
 
@@ -259,18 +158,18 @@ const run = async () => {
   const vivo = sub({
     billing_attempts: [attempt(1, completedDay, { completed: true }), attempt(2, nextDay)],
   });
-  const base = { sealSub: vivo, target: "2mo" as const, customerId: "27453541548381", source: "whatsapp", reanchorMode: "natural" as const };
+  const base = { sealSub: vivo, target: "2mo" as const, customerId: "27453541548381", source: "whatsapp", reanchorMode: "fromNext" as const };
 
   {
     const { deps, calls } = fakeDeps({
       readBack: async () => sub({ delivery_interval: "2 months", billing_attempts: [attempt(9, day(55))] }),
     });
     const r = await changeFrequencyOnly({ ...base, reason: "not_using_enough" }, deps);
-    const esperado = naturalNextShipDate(vivo, `${nextDay}T10:00:00+00:00`, "45d", "2mo");
+    const esperado = shiftedNextShipDate(`${nextDay}T10:00:00+00:00`, "45d", "2mo");
     check("escritura ok: changed y frecuencia nueva", r.changed && r.frequency === "2mo" && r.previousFrequency === "45d");
     check("el edit manda SOLO delivery_interval, en singular", JSON.stringify(calls.edits) === JSON.stringify([{ delivery_interval: "2 month" }]));
     check("auditoría: intent y verified, en ese orden", calls.audits.join(",") === "intent,verified", calls.audits.join(","));
-    check("la intención de re-anclaje lleva la fecha natural", calls.intents.length === 1 && calls.intents[0] === esperado, `${calls.intents[0]} vs ${esperado}`);
+    check("la intención de re-anclaje lleva la fecha contada desde la próxima", calls.intents.length === 1 && calls.intents[0] === esperado, `${calls.intents[0]} vs ${esperado}`);
     check("y la fecha prometida es esa, a las 13:00Z", r.nextShipDate === `${esperado}T13:00:00Z` && r.reanchor === "intent_written");
     check("el intervalo devuelto es el releído", r.deliveryInterval === "2 months");
     check("espera entre edit y relectura", calls.sleeps.includes(500));
@@ -328,9 +227,12 @@ const run = async () => {
   }
 
   {
+    // En `preserve` la intención solo protege una fecha que el cliente ya tenía:
+    // si no se escribe, el cambio hecho se devuelve con `intent_failed`, no se
+    // esconde. (En `fromNext` es un 502, más abajo.)
     const { deps } = fakeDeps({ intentFails: true });
-    const r = await changeFrequencyOnly(base, deps);
-    check("si la intención no se puede escribir, el cambio hecho no se esconde", r.changed && r.reanchor === "intent_failed" && r.nextShipDate !== null);
+    const r = await changeFrequencyOnly({ ...base, reanchorMode: "preserve" }, deps);
+    check("preserve: si la intención no se puede escribir, el cambio hecho no se esconde", r.changed && r.reanchor === "intent_failed" && r.nextShipDate !== null);
   }
 
   // ── fromNext: la fecha que promete el bot desde el 2026-10-01 ─────────────
@@ -339,10 +241,20 @@ const run = async () => {
     shiftedNextShipDate("2026-10-04T10:00:00+00:00", "2mo", "3mo") === "2026-11-04",
   );
   check(
-    "fromNext: el pantallazo da lo mismo que la natural, 9-nov",
+    "fromNext: el pantallazo del SkipOverlay, 9-nov",
     shiftedNextShipDate("2026-10-24T10:00:00+00:00", "45d", "2mo") === "2026-11-09",
   );
   check("fromNext: sin próxima, null", shiftedNextShipDate(null, "45d", "2mo") === null);
+  // Mensual, cobró el 1-mar y saltó abril y mayo: la próxima es el 24-oct.
+  const saltos = sub({
+    delivery_interval: "1 month",
+    billing_attempts: [
+      attempt(1, "2026-03-01", { completed: true }),
+      attempt(2, "2026-04-01", { skipped: true }),
+      attempt(3, "2026-05-01", { skipped: true }),
+      attempt(4, "2026-10-24"),
+    ],
+  });
   const desdeLaProxima = longerOptionsFromNext(saltos, "1mo");
   check(
     "fromNext: a quien ya saltó (último cobro en marzo) todas las opciones le alejan la entrega",
@@ -350,8 +262,8 @@ const run = async () => {
     desdeLaProxima.map((o) => `${o.frequency}:${o.nextShipDate}`).join(" "),
   );
 
-  // Cada 2 meses, cobró hace 120 días y saltó hace 60: la natural de 3 meses cae
-  // en el pasado (no_gain); contada desde la próxima, no.
+  // Cada 2 meses, cobró hace 120 días y saltó hace 60: contada desde el último
+  // cobro (la natural de antes) 3 meses caería en el pasado; desde la próxima, no.
   const saltadoVivo = sub({
     delivery_interval: "2 months",
     billing_attempts: [
@@ -362,14 +274,6 @@ const run = async () => {
   });
   const tresMeses = async () => sub({ delivery_interval: "3 months", billing_attempts: [attempt(9, day(1))] });
   const baseFromNext = { ...base, sealSub: saltadoVivo, target: "3mo" as const, reanchorMode: "fromNext" as const };
-  {
-    const { deps } = fakeDeps();
-    await rejects(
-      "contraste: en modo natural ese mismo cambio es no_gain",
-      changeFrequencyOnly({ ...baseFromNext, reanchorMode: "natural" }, deps),
-      "no_gain",
-    );
-  }
   {
     const { deps, calls } = fakeDeps({ readBack: tresMeses });
     const r = await changeFrequencyOnly(baseFromNext, deps);
@@ -388,67 +292,49 @@ const run = async () => {
     check("y la auditoría lo apunta", calls.audits.at(-1) === "reanchor_intent_failed", calls.audits.join(","));
   }
 
-  // ── área personal: la fecha que se escribe es la que se enseña (2026-10-02) ─
+  // ── área personal: la fecha que se escribe (2026-10-02) ─────────────────
   //
-  // La pantalla del SkipOverlay (y la de CancelTakeover) calcula su vista previa
-  // así, en el navegador. Si el backend escribe otra, al cliente se le promete una
-  // fecha y se guarda otra: es lo que pasaba con la natural a quien había saltado.
-  const pantalla = (nextIso: string, cur: Frequency, tgt: Frequency) =>
-    addCycle(subCycle(new Date(nextIso), cur), tgt).toISOString().slice(0, 10);
-
+  // Que pantalla y backend den la MISMA fecha ya no lo prueba un test que compare
+  // dos copias de la misma suma (no podía fallar, revisión de Kiko del PR #122): lo
+  // garantiza que SkipOverlay, CancelTakeover y `spacedNextShipDate` llamen a la
+  // misma `spacedFromNext`. Aquí se prueba lo que SÍ puede romperse: que la fecha
+  // aleje siempre la entrega y que la cuenta de calendario sea la esperada.
   check(
-    "área personal: la 12320700 (2 → 3 meses, próxima 4-oct) se escribe en 4-nov, lo que dice la pantalla",
+    "área personal: la 12320700 (2 → 3 meses, próxima 4-oct) se espacia al 4-nov",
     spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "3mo") === "2026-11-04",
   );
   check(
-    "área personal: y de 2 a 6 meses, el 4-feb",
+    "área personal: y de 2 a 6 meses, al 4-feb",
     spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "6mo") === "2027-02-04",
   );
-
-  // La regresión de fondo: con su historial real (último cobro 27-may, tres
-  // saltados) la natural caía en el PASADO y el guard del corte mataba la intención.
-  const kiko = sub({
-    delivery_interval: "2 month",
-    billing_attempts: [
-      attempt(1, "2026-05-20", { skipped: true }),
-      attempt(2, "2026-05-27", { completed: true }),
-      attempt(3, "2026-06-20", { skipped: true }),
-      attempt(4, "2026-08-04", { skipped: true }),
-      attempt(5, "2026-10-04"),
-    ],
-  });
-  const natural464 = naturalNextShipDate(kiko, "2026-10-04T11:00:00+00:00", "2mo", "3mo");
   check(
-    "área personal: con ese historial la natural de antes caía en el pasado (27-ago), la causa del fallo",
-    natural464 === "2026-08-27",
-    String(natural464),
+    "área personal: el pantallazo del SkipOverlay, 45 días → 2 meses con la próxima el 24-oct, al 9-nov",
+    spacedNextShipDate("2026-10-24T10:00:00+00:00", "45d", "2mo") === "2026-11-09",
   );
   check(
-    "área personal: la nueva no depende del historial, solo de la próxima",
-    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "3mo") === "2026-11-04",
+    "área personal: el bot y el área personal prometen la misma fecha",
+    spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "4mo") ===
+      shiftedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "4mo"),
   );
 
-  // Pantalla = backend para TODA la escalera, con fechas incómodas (fin de mes,
-  // febrero, cambio de año).
-  let iguales = 0;
+  // Propiedad: en TODA la escalera, con fin de mes, febrero y cambio de año, una
+  // frecuencia más larga da una fecha posterior a la próxima. Si alguien cambia la
+  // suma de `spacedFromNext` por una que retrocede, aquí salta.
+  const noAlejan: string[] = [];
   let casos = 0;
-  const desiguales: string[] = [];
   for (const next of ["2026-10-04", "2026-10-31", "2026-01-31", "2026-12-15", "2027-02-28", "2026-08-30"]) {
-    const nextIso = `${next}T10:00:00+00:00`;
     for (const cur of ["15d", "1mo", "45d", "2mo", "3mo", "4mo", "5mo"] as Frequency[]) {
       for (const tgt of longerFrequencies(cur)) {
         casos++;
-        const back = spacedNextShipDate(nextIso, cur, tgt);
-        const front = pantalla(nextIso, cur, tgt);
-        if (back === front && back > next) iguales++;
-        else desiguales.push(`${next} ${cur}→${tgt}: pantalla ${front}, backend ${back}`);
+        const d = spacedNextShipDate(`${next}T10:00:00+00:00`, cur, tgt);
+        if (!d || d <= next) noAlejan.push(`${next} ${cur}→${tgt}: ${d}`);
       }
     }
   }
   check(
-    `área personal: pantalla y backend dan la misma fecha, y posterior a la próxima, en los ${casos} casos`,
-    iguales === casos,
-    desiguales.slice(0, 3).join(" | "),
+    `área personal: una frecuencia más larga siempre aleja la entrega (${casos} casos)`,
+    noAlejan.length === 0,
+    noAlejan.slice(0, 3).join(" | "),
   );
 
   check(
@@ -460,6 +346,44 @@ const run = async () => {
     spacedNextShipDate("2026-10-04T11:00:00+00:00", "2mo", "2mo") === null,
   );
   check("área personal: sin próxima, null", spacedNextShipDate(null, "2mo", "3mo") === null);
+
+  // ── writeReanchorIntent: el `error` de supabase-js (2026-10-05) ───────────
+  //
+  // supabase-js no lanza: devuelve `{ error }`, también cuando salta el timeout de
+  // `fetchDeadline`. Si `writeReanchorIntent` no lo mira, el `502
+  // reanchor_intent_failed` del bot no salta nunca y el plan route promete la fecha
+  // sin nada que la sujete.
+  const fakeDb = (error: { message: string } | null) => {
+    const upserts: Record<string, unknown>[] = [];
+    const db = {
+      from: (table: string) => ({
+        upsert: async (row: Record<string, unknown>) => {
+          upserts.push({ table, ...row });
+          return { error };
+        },
+      }),
+    } as unknown as Parameters<typeof writeReanchorIntent>[3];
+    return { db, upserts };
+  };
+  {
+    const { db, upserts } = fakeDb(null);
+    await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    check(
+      "writeReanchorIntent escribe la fila pendiente con la fecha",
+      upserts.length === 1 && upserts[0].table === "subscription_reanchor_intents" &&
+        upserts[0].preserve_date === "2026-11-04" && upserts[0].status === "pending",
+    );
+  }
+  {
+    const { db } = fakeDb({ message: "AbortError: fetch deadline exceeded" });
+    let lanzo = false;
+    try {
+      await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    } catch (err) {
+      lanzo = String(err).includes("fetch deadline exceeded");
+    }
+    check("writeReanchorIntent LANZA cuando Supabase devuelve { error } (antes se lo tragaba)", lanzo);
+  }
 
   if (failures) {
     console.error(`\n${failures} aserciones fallidas`);
