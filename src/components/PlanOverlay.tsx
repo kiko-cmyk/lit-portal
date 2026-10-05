@@ -213,12 +213,23 @@ export function PlanOverlay({
           }),
         );
       } else if (err.code === "seal_inconsistent_state") {
-        // Both items present — Seal got into a state we couldn't safely
-        // roll back. Customer needs human help.
+        // The change stopped halfway (or we can't tell whether it landed). A repair
+        // intent is armed and the cron settles it within minutes, so the honest message
+        // is "we're sorting it, reload then", and saving again is exactly what must not
+        // happen: it would start from the half-written state (incident 2026-10-02).
+        setUncertain(true);
         setError(
           t({
-            en: "Something went wrong updating your plan. Please contact support so we can fix it.",
-            es: "Algo no fue bien actualizando tu plan. Por favor contáctanos y lo arreglamos.",
+            en: "Your change didn't finish applying cleanly. We'll sort it out within a few minutes and you won't be overcharged. Reload the page then to see how your plan ended up.",
+            es: "Tu cambio no ha terminado de aplicarse bien. En unos minutos lo dejamos en orden y no se te cobrará de más. Recarga la página entonces para ver cómo ha quedado tu plan.",
+          }),
+        );
+      } else if (err.code === "change_in_progress") {
+        setUncertain(true);
+        setError(
+          t({
+            en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",
+            es: "Todavía estamos terminando de aplicar tu último cambio. Espera unos minutos, recarga la página y vuelve a intentarlo.",
           }),
         );
       } else if (err.code === "gateway_timeout" || err.status === 504) {
