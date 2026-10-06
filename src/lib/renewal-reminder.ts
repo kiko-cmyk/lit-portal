@@ -66,7 +66,8 @@ import {
   shortLabel,
 } from "./mix";
 import { BOX_COUNT_BY_VARIANT } from "./seal-plans";
-import { getLadderPrices } from "./pricing";
+import { getLadderPrices, getLadderPricesForWrite, PricingConfigError } from "./pricing";
+import { ladderDeltaCents } from "./pricing-core";
 import {
   extractFlavorSummary,
   getBoxCount,
@@ -422,6 +423,36 @@ async function assertMixPrice(
       }));
     }
 
+    // ── LA ESCALERA SE CONFIRMA ANTES DE ESCRIBIR (6-oct-2026) ──
+    //
+    // `prices` sale de la caché de 60 s, que basta para COMPARAR pero no para escribir.
+    // Desde que el -25% vive en los planes, una lectura cogida a mitad del cambio de
+    // planes y precios (planes al 25% con la caja todavía a 28,35 → 21,26) haría que
+    // TODAS las subs a catálogo parecieran sobre-cobradas, y esta cura se las bajaría
+    // una a una. Las firmas de pricing-core paran ese caso al leer; esto es la segunda
+    // red: se relee en fresco y, si la escalera no es exactamente la misma con la que
+    // se ha decidido curar, no se cura. El cron de mañana lo vuelve a mirar.
+    if (editsToApply.length) {
+      const confirmed = await getLadderPricesForWrite(composition[0].flavor);
+      if (ladderDeltaCents(confirmed, prices) !== 0) {
+        console.warn(
+          `[${cfg.label}] sub ${s.id}: la escalera cambió entre la comparación ` +
+            `(${prices.oneBoxCents}/${prices.pack4Cents}c) y la cura ` +
+            `(${confirmed.oneBoxCents}/${confirmed.pack4Cents}c) — no se cura`,
+        );
+        await alertSlackErrorAwaited({
+          path: cfg.path,
+          code: "pricing_changed_before_heal",
+          msg:
+            `sub ${s.id}: parecía cobrar ${actual}c contra ${expected}c, pero los precios de ` +
+            `suscripción cambiaron entre la lectura y la cura (${prices.oneBoxCents}/${prices.pack4Cents}c → ` +
+            `${confirmed.oneBoxCents}/${confirmed.pack4Cents}c). No se ha tocado. Revisar si el ` +
+            `cobro del ${chargeDate.slice(0, 10)} es correcto.`,
+        });
+        return "no-comparable";
+      }
+    }
+
     console.error(`[${cfg.label}] mix price drift`, {
       sealId: s.id, actual, expected, boxCount, charge: chargeDate, healStrategy,
     });
@@ -475,6 +506,18 @@ async function assertMixPrice(
     });
     return "sobre-cobro";
   } catch (e) {
+    // Shopify no deja saber el precio de suscripción con certeza (planes que no
+    // coinciden, cambio a medias…): ni se compara ni se cura, y se avisa. El aviso se
+    // deduplica por código, así que una configuración rota da un mensaje, no uno por sub.
+    if (e instanceof PricingConfigError) {
+      await alertSlackErrorAwaited({
+        path: cfg.path,
+        code: `pricing_config:${e.code}`,
+        msg:
+          `sub ${s.id}: no se puede comparar el cobro con la escalera (${e.message}). ` +
+          `No se ha curado nada en esta pasada.`,
+      });
+    }
     // Never let the price check stop the reminder from going out.
     console.warn(`[${cfg.label}] price check failed for sub ${s.id}:`, e);
     return "no-comparable";

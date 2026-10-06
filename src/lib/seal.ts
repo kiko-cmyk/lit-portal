@@ -768,6 +768,12 @@ export class SealClient {
    * Seal honours a custom per-unit `price` — SL30 went in at 22.64 when its
    * catalogue price is 28.35. `total_value` comes back as Σ(price × quantity).
    *
+   * PRECIO FINAL (6-oct-2026). El portal escribe aquí el precio de SUSCRIPCIÓN ya neto
+   * (28,35), nunca el de la variante, que desde ese día es el de compra única (37,80)
+   * con el 25% en el plan. Se asume que Seal guarda `price` tal cual, como hasta hoy
+   * con los planes al 0%; que no vuelva a aplicar el % del plan encima está SIN
+   * VERIFICAR con planes al 25% (comprobar en una sub de prueba tras el cambio).
+   *
    * GOTCHA: `price` is per-unit, not total. With quantity=2 and price=10,
    * Seal charges 20. To preserve a desired total, divide first. And it is
    * REQUIRED, not optional: omitting it returns "Item is missing price value."

@@ -32,7 +32,7 @@ import {
   type SubscriptionLine,
   validateMix,
 } from "@/lib/mix";
-import { getLadderPrices } from "@/lib/pricing";
+import { getLadderPricesForWrite, PricingConfigError } from "@/lib/pricing";
 import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
@@ -660,13 +660,37 @@ const patchPlan = async (
     targetPlan = planFromCurrentLines(currentLines);
     tierTotalCents = targetPlan.tierTotalCents;
   } else {
-    // Escalera web para el TARGET box count, desde precios vivos de Shopify (caché
-    // 5 min): 1-3 = n × 1 caja, 4 = pack 3+1, 5-6 = pack + sueltas. planTargetLines
-    // comparte los MISMOS LadderPrices, así que tier y líneas no pueden divergir.
+    // Escalera web para el TARGET box count, desde precios vivos de Shopify: 1-3 =
+    // n × 1 caja, 4 = pack 3+1, 5-6 = pack + sueltas. planTargetLines comparte los
+    // MISMOS LadderPrices, así que tier y líneas no pueden divergir.
+    //
+    // PRECIO DE SUSCRIPCIÓN, LEÍDO PARA ESCRIBIR (6-oct-2026). Desde que el -25% vive en
+    // los planes y no en la variante, el precio es variante × (1 − % del plan), y esta
+    // rama lo ESCRIBE en Seal (add_items/edit_items con `price` explícito). Por eso se lee
+    // en fresco y no de la caché de 60 s que usa la UI, y si Shopify está a medio cambiar
+    // (planes que no coinciden, doble descuento, precios moviéndose entre dos lecturas)
+    // se rechaza con un 503 y un aviso, sin tocar nada. Nunca se cae al precio crudo.
     let prices: LadderPrices;
     try {
-      prices = await getLadderPrices(targetComposition[0].flavor);
+      prices = await getLadderPricesForWrite(targetComposition[0].flavor);
     } catch (e) {
+      if (e instanceof PricingConfigError) {
+        log("pricing-config-error", { code: e.code, msg: e.message, targetComposition });
+        alertSlackError({
+          path: "/api/subscription/plan",
+          code: `pricing_config:${e.code}`,
+          msg:
+            `sub ${sealSubscriptionId}: no se puede saber el precio de suscripción con certeza ` +
+            `(${e.message}). Cambio RECHAZADO sin tocar nada. Si es el cambio de planes y precios ` +
+            `en curso, debería desaparecer en cuanto termine; si no, revisar planes y variantes en Shopify.`,
+          customerId: ctx.customerId,
+        });
+        throw new ApiHttpError(
+          503,
+          "pricing_unavailable",
+          "Our prices are being updated right now. Nothing was changed; please try again in a minute.",
+        );
+      }
       throw new ApiHttpError(
         500,
         "pricing_unavailable",
