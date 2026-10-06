@@ -34,7 +34,10 @@ export interface FlavorDef {
   /**
    * Variant id by box count (1..6). The variant determines:
    *  - Sachets per shipment (30 / 60 / 90 / 120 / 150 / 180)
-   *  - Per-shipment price (bulk discount baked in: 25% / 40% / 45%)
+   *  - The ONE-TIME price since 2026-10-06 (SL30 37,80). Until then the -25% of the
+   *    subscription was baked into the variant price (SL30 28,35) and the plans were
+   *    at 0%; now it lives in the selling plans. The subscription price is always
+   *    computed by pricing.ts as variant × (1 − plan %), never read raw from here.
    * Prices are identical across flavors as of launch.
    */
   variantByBoxCount: Record<BoxCount, string>;
@@ -58,7 +61,7 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     // conservan y deben seguir leyéndose igual). Desde la escalera web 2026-08-22
     // planTargetLines solo escribe la variante de 1 caja y el PACK4 de abajo.
     variantByBoxCount: {
-      1: "63887092154717",  // SL30  €28.35 (compare €37.80, -25%)
+      1: "63887092154717",  // SL30  1 caja (sub 28,35: hasta 6-oct variante a 28,35 al 0%; después 37,80 al 25%)
       2: "64629025341789",  // SL60  €56.70 (escalera vieja, solo lectura)
       3: "63887092220253",  // SL90  €67.93 (escalera vieja, solo lectura)
       4: "64629029077341",  // SL120 €90.57 (escalera vieja, solo lectura)
@@ -72,7 +75,7 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     productId: "16272445112669",
     skuPrefix: "W",
     variantByBoxCount: {
-      1: "65046727459165",  // W30  €28.35 (compare €37.80, -25%)
+      1: "65046727459165",  // W30  1 caja (sub 28,35, ver SL30)
       2: "65046727491933",  // W60  €56.70 (escalera vieja, solo lectura)
       3: "65046727524701",  // W90  €67.93 (escalera vieja, solo lectura)
       4: "65046727557469",  // W120 €90.57 (escalera vieja, solo lectura)
@@ -86,7 +89,7 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
     productId: "16272456188253",
     skuPrefix: "P",
     variantByBoxCount: {
-      1: "65046790537565",  // P30  €28.35 (compare €37.80, -25%)
+      1: "65046790537565",  // P30  1 caja (sub 28,35, ver SL30)
       2: "65046790570333",  // P60  €56.70 (escalera vieja, solo lectura)
       3: "65046790603101",  // P90  €67.93 (escalera vieja, solo lectura)
       4: "65046790635869",  // P120 €90.57 (escalera vieja, solo lectura)
@@ -116,8 +119,9 @@ export const VARIANT_BY_BOX_COUNT: Record<BoxCount, string> =
 //
 // El pack de 4 cajas (pagas 3, la 4ª gratis) es UN producto cuyas variantes son
 // las combinaciones de sabores. Una suscripción de 4 cajas es UNA línea de este
-// producto a 85,05 (precio de catálogo, nunca un descuento); 5-6 cajas = pack +
-// líneas de 1 caja a 28,35. IDs y SKUs copiados de Shopify Admin GraphQL el
+// producto a 85,05 (precio de suscripción, nunca un descuento por línea); 5-6 cajas =
+// pack + líneas de 1 caja a 28,35. Desde el 6-oct-2026 la variante vale 113,40 (compra
+// única) y el 25% lo pone el plan: pricing.ts calcula el neto. IDs y SKUs copiados de Shopify Admin GraphQL el
 // 2026-08-22 (scripts/verify-pack-setup.ts los re-verifica contra la tienda).
 
 /** Cajas dentro del pack: pagas 3, recibes 4. */
@@ -272,8 +276,10 @@ export function flavorLabel(flavor: FlavorKey | null | undefined): string {
 }
 
 /**
- * Seal selling plan ID by frequency. The selling plan determines cadence only;
- * NO discount config (discount is on the variant, not the plan).
+ * Seal selling plan ID by frequency. The selling plan determines cadence AND, since
+ * 2026-10-06, the subscription discount: the 8 plans carry the SAME percentage (25%;
+ * 0% before, when the discount was baked into the variant price). pricing-core.ts
+ * reads that percentage live and refuses to price if the 8 disagree.
  *
  * These are the *canonical* IDs we write on plan changes. Legacy IDs (see
  * LEGACY_SELLING_PLAN_ALIASES) are read-only — subs on those IDs still

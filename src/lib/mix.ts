@@ -12,6 +12,11 @@
  *               canónico: las sueltas salen del sabor con MÁS cajas (empate →
  *               orden del registro, Lemon primero). 5 = 113,40 · 6 = 141,75.
  *
+ * "Catálogo" aquí es el precio de SUSCRIPCIÓN efectivo, no el `price` crudo de la
+ * variante: desde el 6-oct-2026 el -25% vive en los planes de venta y la variante
+ * está a precio de compra única (37,80 / 113,40). pricing.ts entrega ya el neto
+ * (28,35 / 85,05) en LadderPrices; este fichero no sabe nada de planes.
+ *
  * Los modelos VIEJOS siguen siendo legibles y diff-noop mientras el cliente no
  * edite: la variante-por-tramo (SL90 ×1 @67.93) y el split con precio custom
  * (SL30 ×2 @22.64 + W30 ×1 @22.65) existen en contratos vivos y solo se
@@ -272,11 +277,15 @@ export function distributeUnitPrices(
  * Los dos precios de catálogo de los que se deriva TODA la escalera web. Siempre
  * en céntimos ENTEROS: 3 × 28.35 en float es 85.05000000000001 y un céntimo de
  * divergencia entre el tier y las líneas dispara mix_price_mismatch en cada edición.
+ *
+ * Son precios de SUSCRIPCIÓN ya netos: variante × (1 − % del plan), calculados en
+ * pricing-core.ts. Nunca el `price` crudo de Shopify, que desde el 6-oct-2026 es el
+ * de compra única.
  */
 export interface LadderPrices {
-  /** Variante de 1 caja, catálogo (2835 = 28,35 €). */
+  /** Caja suelta, precio de suscripción (2835 = 28,35 €; variante 37,80 al 25%). */
   oneBoxCents: number;
-  /** Variante del PACK4, catálogo (8505 = 85,05 €). */
+  /** PACK4, precio de suscripción (8505 = 85,05 €; variante 113,40 al 25%). */
   pack4Cents: number;
 }
 
@@ -342,7 +351,7 @@ export function packSplit(
 /**
  * Turn a composition into the exact lines Seal should hold — escalera web, todo
  * a precio de catálogo (residual 0 estructural). Los precios llegan como
- * LadderPrices desde pricing.ts (precios vivos de Shopify), así que un cambio de
+ * LadderPrices desde pricing.ts (precios vivos de Shopify, netos del % del plan), así que un cambio de
  * precio de marketing se propaga sin tocar código.
  */
 export function planTargetLines(
