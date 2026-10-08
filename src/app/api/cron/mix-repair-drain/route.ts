@@ -4,10 +4,12 @@ import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import {
   discountedItemIds,
   LINE_REPAIR_TTL_MS,
+  planDiscountForRemoval,
   planLineRepair,
 } from "@/lib/line-repair";
 import { compositionFromLines, shapeFor, type SubscriptionLine, type TargetLine } from "@/lib/mix";
 import {
+  findAllAppliedDiscountCodeIds,
   getChargeTotalCents,
   getLines,
   normalizeFrequency,
@@ -269,8 +271,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     // plan.kind === "converge": solo edits y removes, que el cron sí sabe hacer.
-    const discounted = discountedItemIds(sub, plan.removes);
-    if (discounted.length) {
+    //
+    // EL 15% DE RETENCIÓN YA NO BLOQUEA (8-oct-2026, sub 15950195). Antes, cualquier código
+    // en la línea a quitar mandaba el caso a una persona, y la ruta deja SIEMPRE el 15%
+    // puesto antes de pasarle el caso al cron. Ahora, si el único código es el que seguimos
+    // en `retention_discounts`, se suelta, se quita la línea y se repone, como en la ruta.
+    const retentionCode = discountedItemIds(sub, plan.removes).length
+      ? await trackedRetentionCode(intent.customer_id, subId)
+      : null;
+    const discountPlan = planDiscountForRemoval(sub, plan.removes, retentionCode);
+    if (discountPlan.kind === "foreign") {
+      const discounted = discountPlan.itemIds;
       await bump(`línea(s) ${discounted.join(", ")} con descuento: no se quitan desde el cron`);
       deferred++;
       if (shouldAlert) {
@@ -289,16 +300,39 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
-    try {
-      if (plan.edits.length) {
-        await seal.editItems(
-          subId,
-          plan.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
-        );
-        await sleep(500);
+    // Soltar el 15% ANTES de tocar líneas. Si falla, no se toca nada en esta pasada: quitar
+    // la línea con el código puesto es justo el arrastre invisible que esto evita. El código
+    // puede haberse soltado aunque la llamada falle, así que se asegura igual.
+    if (discountPlan.kind === "retention") {
+      try {
+        for (const id of discountPlan.ids) await seal.removeDiscountCode(subId, id);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await ensureRetentionDiscount(subId, intent.customer_id, discountPlan.code);
+        await bump(`no se pudo soltar ${discountPlan.code} antes de quitar líneas: ${msg}`);
+        deferred++;
+        continue;
       }
-      if (plan.removes.length) {
-        await seal.removeItems(subId, plan.removes);
+    }
+
+    try {
+      try {
+        if (plan.edits.length) {
+          await seal.editItems(
+            subId,
+            plan.edits.map((e) => ({ itemId: e.itemId, quantity: e.quantity, price: e.unitPrice })),
+          );
+          await sleep(500);
+        }
+        if (plan.removes.length) {
+          await seal.removeItems(subId, plan.removes);
+        }
+      } finally {
+        // Se repone pase lo que pase con las líneas: el cliente nunca se queda sin su 15%.
+        if (discountPlan.kind === "retention") {
+          await sleep(500);
+          await ensureRetentionDiscount(subId, intent.customer_id, discountPlan.code);
+        }
       }
 
       // Verify by reading back, never by trusting the mutation response.
@@ -429,6 +463,83 @@ async function clearStalePreservation(customerId: string, subId: number, desired
     else console.log("[mix-repair-drain] preserved cleared", { subId, from: data.preserved_box_count, to: desiredBoxes });
   } catch (e) {
     console.warn(`[mix-repair-drain] preserved-clear-threw sub=${subId}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/**
+ * El código del 15% de retención que seguimos para esta sub, o null. Ante cualquier fallo
+ * de lectura, null: el cron trata entonces el código como ajeno y no quita la línea.
+ */
+async function trackedRetentionCode(customerId: string, subId: number): Promise<string | null> {
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from("retention_discounts")
+      .select("code")
+      .eq("customer_id", customerId)
+      .eq("seal_subscription_id", String(subId))
+      .eq("status", "pending_charge")
+      .maybeSingle();
+    if (error) {
+      console.warn(`[mix-repair-drain] retention-read-failed sub=${subId}: ${error.message}`);
+      return null;
+    }
+    return (data?.code as string | undefined) ?? null;
+  } catch (e) {
+    console.warn(`[mix-repair-drain] retention-read-threw sub=${subId}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+/**
+ * Deja el 15% de retención puesto y su fila de seguimiento apuntando al UUID vivo, como
+ * `reattachRetentionDiscountNow` en la ruta del plan (8-oct-2026).
+ *
+ * Mira antes de poner: si el código sigue visible (el "soltar" falló de verdad) no se
+ * aplica encima, solo se refresca el UUID. Se reaviva la fila a `pending_charge` por lo
+ * mismo que en la ruta: un consumidor que leyó el hueco sin código puede haberla cerrado,
+ * y sin la fila viva nadie quitaría el 15% después de su cobro.
+ */
+async function ensureRetentionDiscount(subId: number, customerId: string, code: string): Promise<void> {
+  try {
+    let fresh = await seal.getSubscriptionById(subId);
+    if (!fresh) throw new Error("no se pudo releer la sub");
+    let ids = findAllAppliedDiscountCodeIds(fresh, code);
+    if (!ids.length) {
+      await seal.applyDiscountCode(subId, code);
+      fresh = await seal.getSubscriptionById(subId);
+      ids = fresh ? findAllAppliedDiscountCodeIds(fresh, code) : [];
+    }
+    const { error } = await supabaseAdmin()
+      .from("retention_discounts")
+      .update({
+        discount_code_id: ids[0] ?? null,
+        status: "pending_charge",
+        removed_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("customer_id", customerId)
+      .eq("seal_subscription_id", String(subId));
+    if (error || !ids.length) {
+      await alertSlackErrorAwaited({
+        path: "/api/cron/mix-repair-drain",
+        code: "retention_discount_revive_failed",
+        msg:
+          `sub ${subId}: ${code} repuesto tras reparar las líneas, pero ` +
+          (ids.length ? `la fila de seguimiento no se actualizó (${error?.message})` : "Seal no lo enseña al releer") +
+          `. Comprobar en Seal que el código está UNA vez y que retention_discounts apunta a su UUID.`,
+        customerId,
+      });
+    }
+    console.log("[mix-repair-drain] retention discount ensured", { subId, uuid: ids[0] ?? null });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[mix-repair-drain] retention discount lost", { subId, msg });
+    await alertSlackErrorAwaited({
+      path: "/api/cron/mix-repair-drain",
+      code: "retention_discount_lost",
+      msg: `sub ${subId}: el cron soltó ${code} para reparar las líneas y no pudo reponerlo (${msg}). Reponer ${code} a mano en Seal.`,
+      customerId,
+    });
   }
 }
 

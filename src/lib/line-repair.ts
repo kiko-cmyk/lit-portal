@@ -34,7 +34,7 @@
  */
 
 import { diffLines, type LineDiff, type SubscriptionLine, type TargetLine } from "./mix";
-import { SealApiError, type SealSubscription } from "./seal";
+import { findAllAppliedDiscountCodeIds, SealApiError, type SealSubscription } from "./seal";
 
 const priceToCents = (p: string): number => Math.round(parseFloat(p) * 100);
 
@@ -221,12 +221,57 @@ export function planLineRepair(
  * Quitar una línea con descuento hace que Seal arrastre el código, INVISIBLE, a otra
  * línea (incidente 2026-06-02, ver `seal.addItems`), y ese 15% de "un solo cobro" se
  * repite para siempre. La ruta lo evita soltando el código antes del swap y volviéndolo
- * a poner después; el cron no tiene esa maquinaria, así que no quita esas líneas y lo
- * deja para una persona.
+ * a poner después. El cron hace lo mismo SOLO con el 15% de retención que seguimos en
+ * `retention_discounts` (ver `planDiscountForRemoval`); cualquier otro código lo deja
+ * para una persona.
  */
 export function discountedItemIds(sub: SealSubscription, itemIds: number[]): number[] {
   const wanted = new Set(itemIds.map(Number));
   return (sub.items ?? [])
     .filter((it) => wanted.has(Number(it.id)) && (it.discount_codes ?? []).length > 0)
     .map((it) => Number(it.id));
+}
+
+/**
+ * Qué hacer con los descuentos de las líneas que el cron tiene que quitar.
+ *
+ * POR QUÉ (8-oct-2026, sub 15950195). Un cambio de mezcla murió entre `add_items` y
+ * `remove_items` y la sub se quedó con los dos packs de 4 cajas: 144,59 por ciclo en vez
+ * de 72,29. La ruta, como hace en todo resultado desconocido, volvió a poner LITSTAY15
+ * antes de dejarle el caso al cron, y Seal enseña ese código en TODAS las líneas. Con eso
+ * la línea a quitar llevaba descuento y el cron se negó 72 veces hasta caducar. Es decir:
+ * cualquier sub con el 15% de retención que se quedara a medias no tenía arreglo
+ * automático, y la retención es justo la gente que más toca su plan.
+ *
+ *   - `clear`: ninguna línea a quitar lleva código. Se quita sin más.
+ *   - `retention`: el único código es el 15% que seguimos. Se suelta, se quitan las
+ *     líneas y se vuelve a poner, igual que en la ruta.
+ *   - `foreign`: hay otro código (o no sabemos cuál seguimos). No se toca: para una persona.
+ */
+export type RemovalDiscountPlan =
+  | { kind: "clear" }
+  | { kind: "retention"; code: string; ids: string[] }
+  | { kind: "foreign"; itemIds: number[] };
+
+export function planDiscountForRemoval(
+  sub: SealSubscription,
+  removeIds: number[],
+  trackedRetentionCode: string | null,
+): RemovalDiscountPlan {
+  const discounted = discountedItemIds(sub, removeIds);
+  if (!discounted.length) return { kind: "clear" };
+  const norm = (c: string | null | undefined) => (c ?? "").trim().toLowerCase();
+  const tracked = norm(trackedRetentionCode);
+  const onRemoved = new Set<string>();
+  for (const it of sub.items ?? []) {
+    if (!discounted.includes(Number(it.id))) continue;
+    for (const dc of it.discount_codes ?? []) onRemoved.add(norm(dc.code));
+  }
+  if (!tracked || onRemoved.size !== 1 || !onRemoved.has(tracked)) {
+    return { kind: "foreign", itemIds: discounted };
+  }
+  const ids = findAllAppliedDiscountCodeIds(sub, trackedRetentionCode as string);
+  // Sin UUID no se puede soltar, y quitar la línea con el código puesto es el arrastre.
+  if (!ids.length) return { kind: "foreign", itemIds: discounted };
+  return { kind: "retention", code: trackedRetentionCode as string, ids };
 }
