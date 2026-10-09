@@ -221,9 +221,9 @@ export function planLineRepair(
  * Quitar una línea con descuento hace que Seal arrastre el código, INVISIBLE, a otra
  * línea (incidente 2026-06-02, ver `seal.addItems`), y ese 15% de "un solo cobro" se
  * repite para siempre. La ruta lo evita soltando el código antes del swap y volviéndolo
- * a poner después. El cron hace lo mismo SOLO con el 15% de retención que seguimos en
- * `retention_discounts` (ver `planDiscountForRemoval`); cualquier otro código lo deja
- * para una persona.
+ * a poner después. El cron hace lo mismo SOLO con los códigos que seguimos: el 15% de
+ * retención (`retention_discounts`) y el crédito Discovery (`discovery_set_coupons`),
+ * ver `planDiscountForRemoval`; cualquier otro código lo deja para una persona.
  */
 export function discountedItemIds(sub: SealSubscription, itemIds: number[]): number[] {
   const wanted = new Set(itemIds.map(Number));
@@ -244,34 +244,45 @@ export function discountedItemIds(sub: SealSubscription, itemIds: number[]): num
  * automático, y la retención es justo la gente que más toca su plan.
  *
  *   - `clear`: ninguna línea a quitar lleva código. Se quita sin más.
- *   - `retention`: el único código es el 15% que seguimos. Se suelta, se quitan las
- *     líneas y se vuelve a poner, igual que en la ruta.
- *   - `foreign`: hay otro código (o no sabemos cuál seguimos). No se toca: para una persona.
+ *   - `tracked`: todos los códigos de esas líneas son de los que seguimos (el 15% de
+ *     `retention_discounts` y, desde el 9-oct-2026, el crédito Discovery de
+ *     `discovery_set_coupons`). Se sueltan todos, se quitan las líneas y se reponen,
+ *     igual que en la ruta.
+ *   - `foreign`: hay algún otro código (o no sabemos cuál seguimos). No se toca: para
+ *     una persona.
  */
+export interface TrackedDiscount {
+  kind: "retention" | "discovery";
+  code: string;
+}
+
 export type RemovalDiscountPlan =
   | { kind: "clear" }
-  | { kind: "retention"; code: string; ids: string[] }
+  | { kind: "tracked"; codes: Array<TrackedDiscount & { ids: string[] }> }
   | { kind: "foreign"; itemIds: number[] };
 
 export function planDiscountForRemoval(
   sub: SealSubscription,
   removeIds: number[],
-  trackedRetentionCode: string | null,
+  tracked: TrackedDiscount[],
 ): RemovalDiscountPlan {
   const discounted = discountedItemIds(sub, removeIds);
   if (!discounted.length) return { kind: "clear" };
   const norm = (c: string | null | undefined) => (c ?? "").trim().toLowerCase();
-  const tracked = norm(trackedRetentionCode);
+  const byCode = new Map(tracked.filter((t) => norm(t.code)).map((t) => [norm(t.code), t]));
   const onRemoved = new Set<string>();
   for (const it of sub.items ?? []) {
     if (!discounted.includes(Number(it.id))) continue;
     for (const dc of it.discount_codes ?? []) onRemoved.add(norm(dc.code));
   }
-  if (!tracked || onRemoved.size !== 1 || !onRemoved.has(tracked)) {
-    return { kind: "foreign", itemIds: discounted };
+  const codes: Array<TrackedDiscount & { ids: string[] }> = [];
+  for (const c of onRemoved) {
+    const t = byCode.get(c);
+    if (!t) return { kind: "foreign", itemIds: discounted };
+    const ids = findAllAppliedDiscountCodeIds(sub, t.code);
+    // Sin UUID no se puede soltar, y quitar la línea con el código puesto es el arrastre.
+    if (!ids.length) return { kind: "foreign", itemIds: discounted };
+    codes.push({ ...t, ids });
   }
-  const ids = findAllAppliedDiscountCodeIds(sub, trackedRetentionCode as string);
-  // Sin UUID no se puede soltar, y quitar la línea con el código puesto es el arrastre.
-  if (!ids.length) return { kind: "foreign", itemIds: discounted };
-  return { kind: "retention", code: trackedRetentionCode as string, ids };
+  return { kind: "tracked", codes };
 }

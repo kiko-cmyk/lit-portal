@@ -155,6 +155,58 @@ check(
   "En una sub de varias líneas sale una entrada por línea; quitar solo una deja 4,99 € de descuento para siempre.",
 );
 
+console.log("\n── al tocar líneas (cambio de plan o sabor, reparación) ──\n");
+
+const ensureStart = code.indexOf("export async function ensureDiscoveryCreditAttached");
+const ensureFn = ensureStart >= 0 ? code.slice(ensureStart, code.indexOf("\nexport ", ensureStart + 10)) : "";
+check(
+  "solo se repone si se le sigue debiendo (antes de aplicar mira fila y cobros)",
+  ensureFn.indexOf("firstChargeSince") > 0 &&
+    ensureFn.indexOf("if (!owed)") > 0 &&
+    ensureFn.indexOf("if (!owed)") < ensureFn.indexOf("seal.applyDiscountCode"),
+  "Si la renovación ya se cobró mientras se tocaban las líneas, reponer el código descontaría OTRO envío.",
+);
+check(
+  "si ya no se debe, quita lo que haya puesto",
+  /if \(!owed\) \{[\s\S]{0,120}removeDiscountCode/.test(ensureFn),
+  "Un código visible sin deuda detrás es justo la fuga de 4,99 € por envío.",
+);
+check(
+  "no aplica encima de un código visible",
+  /if \(!ids\.length\) \{[\s\S]{0,80}seal\.applyDiscountCode/.test(ensureFn),
+  "Aplicar dos veces el mismo código en Seal descuenta el doble (incidente BONUS5).",
+);
+
+const planRoute = readFileSync("src/app/api/subscription/plan/route.ts", "utf8");
+const carryDecl = planRoute.indexOf("let discoveryCarry");
+const pendingRead = planRoute.indexOf("pendingDiscoveryCreditForSub(sealSubscriptionId)");
+const detachCall = planRoute.indexOf("seal.removeDiscountCode(sealSubscriptionId, id)", pendingRead);
+const firstAdd = planRoute.indexOf("seal.addItems(");
+check(
+  "la ruta del plan suelta el crédito Discovery antes del swap",
+  carryDecl > 0 && carryDecl < pendingRead && pendingRead < detachCall && detachCall < firstAdd,
+  "Sin soltarlo, add_items + remove_items lo dejan invisible y se repetiría en cada envío.",
+);
+check(
+  "la ruta del plan nunca lo repone sin haberlo soltado",
+  /if \(!discoveryCarry\.detached\) \{\s*alertSlackError[\s\S]{0,400}return;/.test(planRoute),
+  "Reponer encima de un código que no se pudo soltar es el duplicado invisible.",
+);
+check(
+  "todas las salidas de la ruta reponen los dos códigos",
+  !/reattachRetentionDiscount\(\)/.test(planRoute) &&
+    (planRoute.match(/await reattachCarriedDiscounts\(\);/g) ?? []).length >= 6 &&
+    /reattachRetentionDiscountNow\(\);\s*await reattachDiscoveryCreditNow\(\);/.test(planRoute),
+  "Si alguna salida solo repusiera el 15%, el cliente perdería su crédito Discovery en ese camino.",
+);
+
+const drain = readFileSync("src/app/api/cron/mix-repair-drain/route.ts", "utf8");
+check(
+  "el cron de reparación trata el crédito Discovery como código seguido",
+  /trackedDiscoveryCode\(subId\)/.test(drain) && /ensureDiscoveryCreditAttached\(/.test(drain),
+  "Si no, la reparación se para con el código puesto y la sub puede quedarse cobrando de más.",
+);
+
 console.log("");
 if (failed > 0) {
   console.error(`${failed} comprobación(es) fallida(s)`);

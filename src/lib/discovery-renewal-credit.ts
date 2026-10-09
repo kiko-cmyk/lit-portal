@@ -451,6 +451,141 @@ export async function consumeDiscoveryRenewalCreditIfCharged(
   return "no-visible-code";
 }
 
+// ============ Al tocar las líneas de la sub (cambio de plan/sabor, reparación) ============
+//
+// Seal arrastra un código de descuento, INVISIBLE, de una línea que se quita a otra que
+// se añade (incidente 2026-06-02, ver `seal.addItems`): sigue descontando, pero ya no sale
+// en `item.discount_codes`, así que el consumidor no lo encuentra para retirarlo y los
+// 4,99 € se repetirían en CADA envío. Quien toca líneas hace con este crédito lo mismo que
+// con el 15 % de retención: lo suelta antes (todas sus entradas) y lo repone después con
+// `ensureDiscoveryCreditAttached`.
+
+/** El crédito Discovery pendiente de cobro de esta sub, o null. Lanza si la lectura falla:
+ *  quien llama decide qué hacer (la ruta del plan avisa; el cron no toca la línea). */
+export async function pendingDiscoveryCreditForSub(
+  subId: number | string,
+): Promise<{ customerId: string; code: string; codeId: string | null } | null> {
+  const { data, error } = await supabaseAdmin()
+    .from(TABLE)
+    .select("customer_id, discount_code, discount_code_id")
+    .eq("seal_subscription_id", String(subId))
+    .eq("mode", "renewal")
+    .eq("status", "pending_charge")
+    .maybeSingle<{ customer_id: string; discount_code: string; discount_code_id: string | null }>();
+  if (error) throw new Error(`discovery-renewal-credit pending read: ${error.message}`);
+  return data
+    ? { customerId: String(data.customer_id), code: data.discount_code, codeId: data.discount_code_id }
+    : null;
+}
+
+export type EnsureAttachedResult = "attached" | "not-owed" | "lost";
+
+/**
+ * Deja el crédito puesto UNA vez después de tocar las líneas, y la fila apuntando a su
+ * UUID vivo. Es el gemelo de `ensureRetentionDiscount` (cron) y de
+ * `reattachRetentionDiscountNow` (ruta del plan), con una guarda más, porque aquí la
+ * promesa es "solo el siguiente envío":
+ *
+ *   - Solo se repone si se le SIGUE DEBIENDO: fila en `pending_charge` y ningún cobro
+ *     con éxito desde `applied_at`. Si la renovación se cobró mientras se tocaban las
+ *     líneas, reponerlo descontaría OTRO envío: se quita lo que haya y se cierra la fila.
+ *   - Mira antes de poner: si el código sigue visible no se aplica encima (sería doble).
+ *   - Error al aplicar ≠ no aplicado: se decide releyendo.
+ *   - Si la fila cambia entre la lectura y la escritura (un consumidor la cerró porque
+ *     entró el cobro), se quita lo repuesto.
+ *
+ * Nunca lanza: los fallos acaban en un aviso de Slack con lo que hay que mirar a mano.
+ */
+export async function ensureDiscoveryCreditAttached(
+  subId: number,
+  code: string,
+  path: string,
+): Promise<EnsureAttachedResult> {
+  const sb = supabaseAdmin();
+  let customerId: string | undefined;
+  try {
+    const { data: row, error } = await sb
+      .from(TABLE)
+      .select(ROW_COLUMNS)
+      .eq("seal_subscription_id", String(subId))
+      .eq("mode", "renewal")
+      .maybeSingle<RenewalRow>();
+    if (error) throw new Error(`lectura de la fila: ${error.message}`);
+    customerId = row?.customer_id;
+
+    let fresh = await seal.getSubscriptionById(subId);
+    if (!fresh) throw new Error("no se pudo releer la sub");
+    let ids = findAllAppliedDiscountCodeIds(fresh, code);
+
+    const appliedAtMs = row?.applied_at ? Date.parse(row.applied_at) : 0;
+    const owed = !!row && row.status === "pending_charge" && !firstChargeSince(fresh, appliedAtMs);
+    if (!owed) {
+      for (const id of ids) await seal.removeDiscountCode(subId, id);
+      if (row && row.status === "pending_charge") {
+        const now = new Date().toISOString();
+        await sb
+          .from(TABLE)
+          .update({ status: "removed", removed_at: now, updated_at: now })
+          .eq("customer_id", row.customer_id)
+          .eq("status", "pending_charge")
+          .eq("updated_at", row.updated_at);
+      }
+      console.log("[discovery-renewal-credit] not owed after a line change, not re-applied", { subId, removed: ids.length });
+      return "not-owed";
+    }
+
+    if (!ids.length) {
+      try {
+        await seal.applyDiscountCode(subId, code);
+      } catch (e) {
+        console.warn("[discovery-renewal-credit] re-apply errored, re-reading", { subId, msg: e instanceof Error ? e.message : String(e) });
+      }
+      fresh = await seal.getSubscriptionById(subId);
+      ids = fresh ? findAllAppliedDiscountCodeIds(fresh, code) : [];
+    }
+    if (!ids.length) {
+      alertSlackError({
+        path,
+        code: "discovery_credit_lost",
+        msg: `sub ${subId}: se soltó el crédito Discovery ${code} para tocar las líneas y no se pudo reponer. Ponerlo a mano en Seal (UNA vez); la fila de discovery_set_coupons sigue en pending_charge.`,
+        customerId,
+      });
+      return "lost";
+    }
+
+    const { data: updated, error: upErr } = await sb
+      .from(TABLE)
+      .update({ discount_code_id: ids[0], updated_at: new Date().toISOString() })
+      .eq("customer_id", row!.customer_id)
+      .eq("status", "pending_charge")
+      .select("customer_id");
+    if (upErr) {
+      alertSlackError({
+        path,
+        code: "discovery_credit_track_failed",
+        msg: `sub ${subId}: crédito Discovery ${code} repuesto, pero la fila no se actualizó (${upErr.message}). El consumidor lo busca por código; revisar discovery_set_coupons.`,
+        customerId,
+      });
+    } else if (!updated?.length) {
+      // La fila dejó de estar pendiente entre medias: el cobro entró. Lo repuesto sobra.
+      for (const id of ids) await seal.removeDiscountCode(subId, id);
+      console.log("[discovery-renewal-credit] row closed meanwhile, re-applied credit removed", { subId });
+      return "not-owed";
+    }
+    console.log("[discovery-renewal-credit] re-attached after a line change", { subId, entries: ids.length });
+    return "attached";
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    alertSlackError({
+      path,
+      code: "discovery_credit_lost",
+      msg: `sub ${subId}: no se pudo comprobar o reponer el crédito Discovery ${code} tras tocar las líneas (${msg}). Mirar en Seal que está puesto UNA vez y que discovery_set_coupons apunta a su UUID.`,
+      customerId,
+    });
+    return "lost";
+  }
+}
+
 // ============ Entrada desde el webhook de Seal ============
 
 /**

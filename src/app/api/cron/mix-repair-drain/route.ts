@@ -1,11 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackErrorAwaited } from "@/lib/alert";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
+import { ensureDiscoveryCreditAttached, pendingDiscoveryCreditForSub } from "@/lib/discovery-renewal-credit";
 import {
   discountedItemIds,
   LINE_REPAIR_TTL_MS,
   planDiscountForRemoval,
   planLineRepair,
+  type RemovalDiscountPlan,
+  type TrackedDiscount,
 } from "@/lib/line-repair";
 import { compositionFromLines, shapeFor, type SubscriptionLine, type TargetLine } from "@/lib/mix";
 import {
@@ -276,10 +279,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // en la línea a quitar mandaba el caso a una persona, y la ruta deja SIEMPRE el 15%
     // puesto antes de pasarle el caso al cron. Ahora, si el único código es el que seguimos
     // en `retention_discounts`, se suelta, se quita la línea y se repone, como en la ruta.
-    const retentionCode = discountedItemIds(sub, plan.removes).length
-      ? await trackedRetentionCode(intent.customer_id, subId)
-      : null;
-    const discountPlan = planDiscountForRemoval(sub, plan.removes, retentionCode);
+    //
+    // Lo mismo con el crédito Discovery de la primera renovación (9-oct-2026): si se queda en
+    // una línea que se quita, Seal lo arrastra invisible y los 4,99 € se repetirían en cada envío.
+    const tracked: TrackedDiscount[] = [];
+    if (discountedItemIds(sub, plan.removes).length) {
+      const retentionCode = await trackedRetentionCode(intent.customer_id, subId);
+      if (retentionCode) tracked.push({ kind: "retention", code: retentionCode });
+      const discoveryCode = await trackedDiscoveryCode(subId);
+      if (discoveryCode) tracked.push({ kind: "discovery", code: discoveryCode });
+    }
+    const discountPlan = planDiscountForRemoval(sub, plan.removes, tracked);
     if (discountPlan.kind === "foreign") {
       const discounted = discountPlan.itemIds;
       await bump(`línea(s) ${discounted.join(", ")} con descuento: no se quitan desde el cron`);
@@ -303,13 +313,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // Soltar el 15% ANTES de tocar líneas. Si falla, no se toca nada en esta pasada: quitar
     // la línea con el código puesto es justo el arrastre invisible que esto evita. El código
     // puede haberse soltado aunque la llamada falle, así que se asegura igual.
-    if (discountPlan.kind === "retention") {
+    if (discountPlan.kind === "tracked") {
       try {
-        for (const id of discountPlan.ids) await seal.removeDiscountCode(subId, id);
+        for (const c of discountPlan.codes) {
+          for (const id of c.ids) await seal.removeDiscountCode(subId, id);
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        await ensureRetentionDiscount(subId, intent.customer_id, discountPlan.code);
-        await bump(`no se pudo soltar ${discountPlan.code} antes de quitar líneas: ${msg}`);
+        await ensureTrackedDiscounts(subId, intent.customer_id, discountPlan);
+        await bump(`no se pudo soltar ${discountPlan.codes.map((c) => c.code).join(" + ")} antes de quitar líneas: ${msg}`);
         deferred++;
         continue;
       }
@@ -328,10 +340,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           await seal.removeItems(subId, plan.removes);
         }
       } finally {
-        // Se repone pase lo que pase con las líneas: el cliente nunca se queda sin su 15%.
-        if (discountPlan.kind === "retention") {
+        // Se repone pase lo que pase con las líneas: el cliente nunca se queda sin su 15%
+        // ni sin su crédito Discovery (este, solo si se le sigue debiendo).
+        if (discountPlan.kind === "tracked") {
           await sleep(500);
-          await ensureRetentionDiscount(subId, intent.customer_id, discountPlan.code);
+          await ensureTrackedDiscounts(subId, intent.customer_id, discountPlan);
         }
       }
 
@@ -487,6 +500,32 @@ async function trackedRetentionCode(customerId: string, subId: number): Promise<
   } catch (e) {
     console.warn(`[mix-repair-drain] retention-read-threw sub=${subId}: ${e instanceof Error ? e.message : String(e)}`);
     return null;
+  }
+}
+
+/**
+ * El código del crédito Discovery pendiente de cobro para esta sub, o null. Ante cualquier
+ * fallo de lectura, null: igual que con la retención, el cron trata entonces el código como
+ * ajeno y no quita la línea.
+ */
+async function trackedDiscoveryCode(subId: number): Promise<string | null> {
+  try {
+    return (await pendingDiscoveryCreditForSub(subId))?.code ?? null;
+  } catch (e) {
+    console.warn(`[mix-repair-drain] discovery-read-failed sub=${subId}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+/** Repone cada código que se soltó, cada uno con su lógica. */
+async function ensureTrackedDiscounts(
+  subId: number,
+  customerId: string,
+  discountPlan: Extract<RemovalDiscountPlan, { kind: "tracked" }>,
+): Promise<void> {
+  for (const c of discountPlan.codes) {
+    if (c.kind === "retention") await ensureRetentionDiscount(subId, customerId, c.code);
+    else await ensureDiscoveryCreditAttached(subId, c.code, "/api/cron/mix-repair-drain");
   }
 }
 
