@@ -42,11 +42,13 @@ import { acquirePlanLock, type PlanLock } from "@/lib/plan-lock";
 import {
   canStartApply,
   checkApplyPostcondition,
+  chooseCandidate,
   decideRewardAction,
   eurosToCents,
   generateReferralCode,
   generateRewardCode,
   hasB2BTag,
+  hasOtherDiscount,
   isRenewalSource,
   isRewardCode,
   nextCheckAt,
@@ -63,6 +65,7 @@ import {
   type RewardAction,
   type RewardStatus,
   type SubCandidate,
+  type SubForReward,
 } from "@/lib/referral-core";
 import {
   bulkAddFriendCodes,
@@ -88,9 +91,6 @@ import { supabaseAdmin } from "@/lib/supabase";
 
 const LOG = "[referrals]";
 const PATH = "lib/referral-reward";
-
-/** El código de un solo cobro del flujo de cancelación. Con él puesto, la recompensa espera. */
-const RETENTION_CODE = normalizeCode(process.env.RETENTION_DISCOUNT_CODE ?? "LITSTAY15");
 
 /**
  * Vida del cerrojo del cambio de plan mientras el cron aplica: el doble del
@@ -1015,10 +1015,9 @@ function codesOnSub(s: SealSubscription): string[] {
   return (s.items ?? []).flatMap((it) => (it.discount_codes ?? []).map((dc) => normalizeCode(dc.code)));
 }
 
-/** Lleva un código de un solo cobro que no es `ownCode` (LITSTAY15 u otro LITREF). */
+/** Lleva algún descuento que no es `ownCode` (ver `hasOtherDiscount`): la recompensa espera. */
 function hasBlockingCode(s: SealSubscription, ownCode: string | null): boolean {
-  const own = ownCode ? normalizeCode(ownCode) : null;
-  return codesOnSub(s).some((c) => c !== own && (c === RETENTION_CODE || isRewardCode(c)));
+  return hasOtherDiscount(codesOnSub(s), ownCode);
 }
 
 function nextChargeMs(s: SealSubscription): number | null {
@@ -1027,25 +1026,13 @@ function nextChargeMs(s: SealSubscription): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-/**
- * La sub donde se aplicaría: la activa que cobra antes entre las que no llevan
- * otro código de un solo cobro ni otra recompensa viva.
- */
+function toSubForReward(s: SealSubscription): SubForReward {
+  return { id: String(s.id), active: mapStatus(s) === "active", nextChargeAtMs: nextChargeMs(s), codes: codesOnSub(s) };
+}
+
+/** La sub donde se aplicaría (ver `chooseCandidate`). */
 function pickCandidate(subs: SealSubscription[], liveSubIds: Set<string>): SubCandidate | null {
-  const eligible = subs
-    .filter((s) => mapStatus(s) === "active")
-    .map((s) => ({ s, at: nextChargeMs(s) }))
-    .filter((x): x is { s: SealSubscription; at: number } => x.at !== null)
-    .filter((x) => !liveSubIds.has(String(x.s.id)) && !hasBlockingCode(x.s, null))
-    .sort((a, b) => a.at - b.at);
-  const best = eligible[0];
-  if (!best) return null;
-  return {
-    sealSubscriptionId: String(best.s.id),
-    nextChargeAtMs: best.at,
-    hasBlockingCode: false,
-    hasLiveReward: false,
-  };
+  return chooseCandidate(subs.map(toSubForReward), liveSubIds);
 }
 
 /** Pedidos ya leídos en esta pasada, para no releer el mismo dos veces. */
@@ -1783,10 +1770,10 @@ async function applyRewardLocked(
   // 3. Lectura fresca.
   const before = await seal.getSubscriptionById(subId, undefined, { throwTransient: true }).catch(() => null);
   if (!before) return backToQueue("seal_unreadable");
-  if (mapStatus(before) !== "active") return backToQueue("sub_not_active");
-  if (hasBlockingCode(before, r.reward_code)) return backToQueue("sub_has_other_code");
   if (r.reward_code && findAllAppliedDiscountCodeIds(before, r.reward_code).length) {
-    // Ya está puesto (una pasada anterior que murió tras aplicar): se adopta.
+    // Ya está puesto (una pasada anterior que murió tras aplicar): se adopta. Va
+    // ANTES que las demás comprobaciones: devolverla a la cola por otro motivo
+    // dejaría nuestro código puesto en Seal sin ninguna recompensa viva detrás.
     await sb
       .from("referral_rewards")
       .update({
@@ -1799,6 +1786,8 @@ async function applyRewardLocked(
       .eq("status", "applying");
     return { outcome: "adopted" };
   }
+  if (mapStatus(before) !== "active") return backToQueue("sub_not_active");
+  if (hasBlockingCode(before, r.reward_code)) return backToQueue("sub_has_other_code");
 
   // 4. El descuento de Shopify, una vez por recompensa (se reutiliza al reaplicar).
   let code = r.reward_code ? normalizeCode(r.reward_code) : null;

@@ -115,6 +115,12 @@ export function nextCheckAt(
     case "rewards_disabled":
       at = now + DAY_MS;
       break;
+    case "sub_has_other_code":
+    case "sub_has_live_reward":
+      // Se libera con el cobro de esa sub (el otro descuento o la otra recompensa
+      // se consumen en él): se vuelve a mirar justo después.
+      at = candidateNextChargeAtMs !== null ? candidateNextChargeAtMs + HOUR_MS : now + SWEEP_INTERVAL_MS;
+      break;
     default:
       at = now + SWEEP_INTERVAL_MS;
   }
@@ -441,10 +447,57 @@ export interface RewardSnapshot {
 export interface SubCandidate {
   sealSubscriptionId: string;
   nextChargeAtMs: number;
-  /** Lleva un código de un solo cobro nuestro (LITSTAY15 u otro LITREF). */
+  /** Lleva otro descuento puesto (cualquiera que no sea el de esta recompensa). */
   hasBlockingCode: boolean;
   /** Ya tiene una recompensa viva en BD (el índice lo impediría igualmente). */
   hasLiveReward: boolean;
+}
+
+/** Lo que la elección de sub necesita de cada suscripción de quien invita. */
+export interface SubForReward {
+  id: string;
+  /** Activa: ni pausada ni cancelada. */
+  active: boolean;
+  nextChargeAtMs: number | null;
+  /** Los códigos puestos en la sub (`items[].discount_codes`). */
+  codes: string[];
+}
+
+/**
+ * ¿Lleva la sub algún descuento que no es el de esta recompensa? El 15 % de
+ * retención, el crédito Discovery de la primera renovación, otra recompensa, uno
+ * puesto a mano… Entonces la recompensa ESPERA al cobro siguiente: un descuento
+ * de un solo cobro por cargo, como dice el plan («si ya lleva cualquier código,
+ * espera»), y la comprobación tras aplicar sigue midiendo solo nuestros 10 €.
+ */
+export function hasOtherDiscount(codes: readonly string[], ownCode: string | null): boolean {
+  const own = ownCode ? normalizeCode(ownCode) : null;
+  return codes.some((c) => {
+    const n = normalizeCode(c);
+    return !!n && n !== own;
+  });
+}
+
+/**
+ * La sub donde se aplicaría: la activa que cobra antes entre las LIBRES (sin otro
+ * descuento y sin otra recompensa viva). Si todas las activas están ocupadas, la
+ * que cobra antes, marcada: la recompensa espera a que se libere y NO caduca,
+ * porque quien invita sí tiene una sub cobrable (las condiciones solo la caducan
+ * si no la tiene). `null` solo si no hay ninguna activa con cobro programado.
+ */
+export function chooseCandidate(subs: readonly SubForReward[], liveSubIds: ReadonlySet<string>): SubCandidate | null {
+  const active = subs
+    .filter((s): s is SubForReward & { nextChargeAtMs: number } => s.active && s.nextChargeAtMs !== null)
+    .map((s) => ({ s, live: liveSubIds.has(s.id), blocked: hasOtherDiscount(s.codes, null) }))
+    .sort((a, b) => a.s.nextChargeAtMs - b.s.nextChargeAtMs);
+  const best = active.find((x) => !x.live && !x.blocked) ?? active[0];
+  if (!best) return null;
+  return {
+    sealSubscriptionId: best.s.id,
+    nextChargeAtMs: best.s.nextChargeAtMs,
+    hasBlockingCode: best.blocked,
+    hasLiveReward: best.live,
+  };
 }
 
 /** Estado en Seal de la sub donde la recompensa está (o se estaba) aplicando. */

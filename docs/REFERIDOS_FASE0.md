@@ -6,6 +6,7 @@
 
 - lo aplica un único sitio (el cron, cada 4 h), entre 1 y 48 h antes del cobro, con el cerrojo del cambio de plan de esa sub tomado ANTES de reclamar la recompensa (120 s, más que la vida de la función);
 - nunca antes de 48 h desde el pago del amigo (carencia);
+- nunca en un cobro que ya lleva otro descuento (el 15 % de retención, el crédito de 4,99 € del Discovery Set, otra recompensa): espera al siguiente;
 - se da por consumido solo con el pedido de renovación que lleva el código delante;
 - se retira en cuanto se consume;
 - si una pasada muere a mitad, `apply_sent_at` dice si la orden llegó a salir.
@@ -107,6 +108,7 @@ Tras cambiar cualquiera, hay que hacer **Redeploy**: Vercel no aplica cambios de
   - `friend_order_missing`: Shopify no encuentra el pedido del amigo. Si se borró tras cancelarlo, no le corresponde; si existe, se reencola.
 - **En el resumen, `deadline_left` o `apply_deferred_time`:** la pasada no da abasto. Hay que mirarlo antes de que una recompensa se salte su cobro (cada cobro tiene una docena de pasadas dentro de su ventana, así que una sola no es grave; varias seguidas, sí).
 - **`skip:plan_change_in_progress`:** el cliente estaba cambiando su plan justo en ese momento. La pasada siguiente lo reintenta.
+- **Una recompensa en cola semanas con `sub_has_other_code`:** su sub lleva un código que no se va (uno puesto a mano, por ejemplo). Mirarlo en Seal.
 
 ## Marcha atrás
 
@@ -180,7 +182,7 @@ Reglas: tuteo, sin guiones largos y sin emojis. En los emails, «tu próximo LIT
    - No se combina con otros descuentos.
 3. **Qué recibes tú.**
    - 10 € de descuento en tu siguiente cobro de suscripción por cada amigo que complete su pedido, si ese cobro cae al menos 48 h después.
-   - Se aplica un descuento por cobro; si traes a varias personas, se aplican en los cobros siguientes.
+   - Se aplica un descuento por cobro; si traes a varias personas, se aplican en los cobros siguientes. Si ese cobro ya lleva otro descuento, el tuyo pasa al siguiente.
    - Los descuentos no tienen valor en efectivo.
    - Caducan si en 180 días no tienes una suscripción activa en la que aplicarlos.
 4. **Cuándo se retira.** Si el pedido de tu amigo se cancela o se reembolsa antes de que se aplique tu descuento.

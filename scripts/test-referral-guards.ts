@@ -173,6 +173,17 @@ console.log("\n── lib/referral-reward.ts ──\n");
       "Mientras el cerrojo está tomado el cliente no puede cambiar su plan: nada lento dentro.",
     );
     check(
+      "si nuestro código ya está puesto se ADOPTA antes de mirar otros descuentos",
+      locked.indexOf('outcome: "adopted"') > 0 && locked.indexOf('outcome: "adopted"') < locked.indexOf('backToQueue("sub_has_other_code")') &&
+        locked.indexOf('outcome: "adopted"') < locked.indexOf('backToQueue("sub_not_active")'),
+      "Devolverla a la cola con el código puesto lo dejaría en Seal sin recompensa viva detrás.",
+    );
+    check(
+      "cualquier descuento ajeno hace esperar (lógica pura, no una lista a mano)",
+      /hasOtherDiscount\(codesOnSub\(s\), ownCode\)/.test(body) && /chooseCandidate\(/.test(body) && !/RETENTION_CODE/.test(body),
+      "Con una lista a mano, el crédito Discovery (#126) se quedó fuera: 4,99 € y 10 € en el mismo cobro sin que nadie lo decidiera.",
+    );
+    check(
       "si el apunte final falla y la fila se movió, se quita el código huérfano",
       /handleUnrecordedApply\(/.test(locked) && /referral_reward_apply_orphan_removed/.test(body),
       "Un código puesto sin recompensa viva detrás se cobraría en cada renovación.",

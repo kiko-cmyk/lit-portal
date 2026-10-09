@@ -20,11 +20,13 @@ import {
   SWEEP_INTERVAL_MS,
   CHARGE_MOVED_AWAY_MS,
   checkApplyPostcondition,
+  chooseCandidate,
   decideRewardAction,
   eurosToCents,
   generateReferralCode,
   generateRewardCode,
   hasB2BTag,
+  hasOtherDiscount,
   isRenewalSource,
   isRewardCode,
   normalizeAddress,
@@ -40,6 +42,7 @@ import {
   type QualifyFacts,
   type RewardFacts,
   type RewardSnapshot,
+  type SubForReward,
 } from "../src/lib/referral-core";
 
 let failed = 0;
@@ -436,8 +439,13 @@ check(
   nextCheckAt("cooling_off", null, NOW - 10 * H, NOW) === NOW + 38 * H,
 );
 check(
-  "una espera sin motivo conocido → la pasada siguiente, NUNCA sin fecha",
-  nextCheckAt("sub_has_other_code", null, null, NOW) === NOW + SWEEP_INTERVAL_MS,
+  "una espera sin fecha propia → la pasada siguiente, NUNCA sin fecha",
+  nextCheckAt("friend_order_unknown", null, null, NOW) === NOW + SWEEP_INTERVAL_MS,
+);
+check(
+  "sub ocupada (otro descuento u otra recompensa) → volver justo después de su cobro",
+  nextCheckAt("sub_has_other_code", NOW + 3 * 24 * H, null, NOW) === NOW + 3 * 24 * H + H &&
+    nextCheckAt("sub_has_live_reward", NOW + 30 * H, null, NOW) === NOW + 31 * H,
 );
 check("nunca en el pasado", nextCheckAt("charge_not_in_window", NOW + H, null, NOW) === NOW);
 check("flag de recompensas apagado → volver en un día", nextCheckAt("rewards_disabled", null, null, NOW) === NOW + 24 * H);
@@ -449,6 +457,59 @@ check(
 check(
   "la ventana tiene una docena de pasadas dentro (una que falle no se lleva el cobro)",
   APPLY_WINDOW_MS / SWEEP_INTERVAL_MS >= 10,
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log("\n── en qué sub, y qué descuentos hacen esperar ──\n");
+
+check("sin códigos → libre", !hasOtherDiscount([], null));
+check("el 15 % de retención → espera", hasOtherDiscount(["LITSTAY15"], null));
+check("el crédito Discovery de la 1.ª renovación (PR #126) → espera", hasOtherDiscount(["LIT-AB12CD34"], null));
+check("otra recompensa → espera", hasOtherDiscount(["LITREF-ZZZZ2222"], "LITREF-AAAA1111"));
+check("un código puesto a mano → espera", hasOtherDiscount(["BONUS5"], null));
+check("el PROPIO código no bloquea (minúsculas y espacios da igual)", !hasOtherDiscount([" litref-aaaa1111 "], "LITREF-AAAA1111"));
+check("una entrada vacía no cuenta", !hasOtherDiscount(["", "  "], null));
+
+const sfr = (id: string, patch: Partial<SubForReward> = {}): SubForReward => ({
+  id,
+  active: true,
+  nextChargeAtMs: NOW + 30 * H,
+  codes: [],
+  ...patch,
+});
+check(
+  "elige la activa libre que cobra antes",
+  chooseCandidate([sfr("A", { nextChargeAtMs: NOW + 90 * H }), sfr("B", { nextChargeAtMs: NOW + 20 * H })], new Set())
+    ?.sealSubscriptionId === "B",
+);
+check(
+  "se salta la que lleva otro descuento si hay otra libre, aunque cobre después",
+  chooseCandidate(
+    [sfr("A", { nextChargeAtMs: NOW + 20 * H, codes: ["LITSTAY15"] }), sfr("B", { nextChargeAtMs: NOW + 90 * H })],
+    new Set(),
+  )?.sealSubscriptionId === "B",
+);
+check(
+  "se salta la que tiene otra recompensa viva si hay otra libre",
+  chooseCandidate([sfr("A"), sfr("B", { nextChargeAtMs: NOW + 40 * H })], new Set(["A"]))?.sealSubscriptionId === "B",
+);
+{
+  const c = chooseCandidate([sfr("A", { codes: ["LIT-AB12CD34"] })], new Set());
+  check(
+    "su única sub lleva el crédito Discovery → candidata MARCADA (espera, no «sin sub»)",
+    c?.sealSubscriptionId === "A" && c.hasBlockingCode === true && c.hasLiveReward === false,
+  );
+  check(
+    "y la decisión es esperar a que se libere, no caducar",
+    eq(decideRewardAction(snap("queued", { expiresAtMs: NOW - 1 }), facts({ candidate: c })), {
+      kind: "wait",
+      reason: "sub_has_other_code",
+    }),
+  );
+}
+check(
+  "pausadas, canceladas o sin cobro programado no cuentan → null",
+  chooseCandidate([sfr("A", { active: false }), sfr("B", { nextChargeAtMs: null })], new Set()) === null,
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
