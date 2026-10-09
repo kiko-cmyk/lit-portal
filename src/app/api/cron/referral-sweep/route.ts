@@ -13,10 +13,14 @@ import {
 /**
  * GET /apps/portal/api/cron/referral-sweep — referidos, fase 0 (2026-10-10).
  *
- * La pasada cada 4 h (minuto 50: "50 *\/4 * * *"). Con una ventana de 48 h antes
- * de cada cobro, cada cobro tiene una docena de pasadas dentro: si una falla o no
- * da abasto, la siguiente lo recoge. Tres fases, en este orden y cada una con su
- * trozo del presupuesto (la ruta tiene 60 s de maxDuration):
+ * La pasada cada 4 h, desde el cron EXTERNO del VPS de LIT (crontab del usuario
+ * `kiko`, con el mismo `Authorization: Bearer CRON_SECRET`, como mix-repair-drain).
+ * Vercel es Hobby: solo admite crons diarios y RECHAZA EL DESPLIEGUE ENTERO si hay
+ * uno más frecuente (pasó con uno cada 5 min en junio y con este el 9-oct), así que
+ * `vercel.json` lo lanza una vez al día (06:50 UTC) como red. Con la ventana de
+ * 48 h antes de cada cobro, cada 4 h son una docena de pasadas por cobro; solo con
+ * la diaria quedan una o dos. Tres fases, en este orden y cada una con su trozo
+ * del presupuesto (la ruta tiene 60 s de maxDuration):
  *
  *   1. Recompensas (no empieza ninguna nueva pasados 30 s): consumir, revocar,
  *      retirar, caducar, limpiar las fallidas y APLICAR. Va primero porque es la

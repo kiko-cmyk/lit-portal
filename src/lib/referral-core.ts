@@ -42,7 +42,11 @@ export const REWARD_CODE_PREFIX = "LITREF-";
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** Cada cuánto corre el cron `referral-sweep` (vercel.json: "50 *\/4 * * *"). */
+/**
+ * Cada cuánto corre el cron `referral-sweep`: cada 4 h desde el crontab del VPS.
+ * Vercel (Hobby) solo lo lanza una vez al día, como red: no admite crons más
+ * frecuentes y rechazaría el despliegue entero.
+ */
 export const SWEEP_INTERVAL_MS = 4 * HOUR_MS;
 
 /**

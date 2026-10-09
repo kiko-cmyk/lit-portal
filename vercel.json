@@ -51,7 +51,7 @@
     },
     {
       "path": "/api/cron/referral-sweep",
-      "schedule": "50 */4 * * *"
+      "schedule": "50 6 * * *"
     },
     {
       "path": "/api/cron/survey-discount-cleanup",

@@ -4,7 +4,7 @@
 
 **Lo que manda en el diseño:** en Seal, un código aplicado a una suscripción se repite en cada cobro hasta que se quita, y aplicar dos veces duplica el descuento. Por eso el premio de quien invita sigue estas reglas:
 
-- lo aplica un único sitio (el cron, cada 4 h), entre 1 y 48 h antes del cobro, con el cerrojo del cambio de plan de esa sub tomado ANTES de reclamar la recompensa (120 s, más que la vida de la función);
+- lo aplica un único sitio (el cron `referral-sweep`), entre 1 y 48 h antes del cobro, con el cerrojo del cambio de plan de esa sub tomado ANTES de reclamar la recompensa (120 s, más que la vida de la función);
 - nunca antes de 48 h desde el pago del amigo (carencia);
 - nunca en un cobro que ya lleva otro descuento (el 15 % de retención, el crédito de 4,99 € del Discovery Set, otra recompensa): espera al siguiente;
 - se da por consumido solo con el pedido de renovación que lleva el código delante;
@@ -24,7 +24,7 @@ Cualquier alerta de dinero lleva el id de la recompensa en su código de Slack.
 | `src/app/api/webhooks/shopify/route.ts` | `orders/paid`: registra la conversión y, en `after()`, cualifica |
 | `src/app/api/webhooks/seal/route.ts` | Consume premios tras un cobro (nunca aplica) |
 | `src/app/api/subscription/plan/route.ts` | Retira el premio (y cualquier `LITREF` suelto) antes de un alta y baja de líneas. Si no puede, 409 `referral_reward_busy` sin tocar nada |
-| `src/app/api/cron/referral-sweep/route.ts` | Cron cada 4 h (minuto 50): aplica, consume y retira premios, cualifica pendientes y emite códigos |
+| `src/app/api/cron/referral-sweep/route.ts` | Cron: aplica, consume y retira premios, cualifica pendientes y emite códigos. Cada 4 h desde el crontab del VPS; Vercel (Hobby, solo crons diarios) lo lanza además a las 06:50 UTC como red |
 | `src/app/api/referral/code/route.ts` | La tarjeta de Mi LIT (solo lee) |
 | `src/app/api/referral/track/route.ts` | «Ha compartido» (solo el canal, para el KPI) |
 | `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN» en Mi LIT |
@@ -62,7 +62,9 @@ Tras cambiar cualquiera, hay que hacer **Redeploy**: Vercel no aplica cambios de
    - `REFERRALS=allowlist`.
    - `npx tsx scripts/referral-backfill-codes.ts --reserve --only=<ids>` y después `--issue --only=<ids>`.
    - E2E 1, 2 y 7.
-6. **Lado de quien invita:** `REFERRAL_REWARDS=allowlist` y E2E 3 a 6 y 8.
+6. **Lado de quien invita:**
+   - Cron externo cada 4 h en el crontab del usuario `kiko` del VPS (37.27.200.214), clonando con `sed` la línea de `mix-repair-drain` (lleva comillas anidadas y la lectura del `.env` con `LIT_PORTAL_CRON_SECRET`): `50 */4 * * *` contra `/api/cron/referral-sweep`. Sin él todo funciona, pero con una o dos pasadas por cobro en vez de una docena, y un código nuevo puede tardar hasta un día en darse de alta (la tarjeta dice «en unas horas»). Tiene que estar antes del paso 8.
+   - `REFERRAL_REWARDS=allowlist` y E2E 3 a 6 y 8.
 7. **Backfill completo:** `--reserve` y después `--issue` (sigue en bucle hasta que no queda ningún `pending`). Comprobar que el preflight da `códigos colgados` igual a las filas `active`. Va ANTES del paso 8: el cron emite como mucho 40 códigos por pasada, y sin el backfill la tarjeta diría «estará listo en unas horas» a casi todo el mundo durante días.
 8. `REFERRALS=on`, `REFERRAL_REWARDS=on` y Redeploy. Campaña de lanzamiento al segmento «`referral_code` is set».
 

@@ -365,9 +365,14 @@ check("el cron está en vercel.json", /"\/api\/cron\/referral-sweep"/.test(verce
   const crons = (JSON.parse(vercel).crons ?? []) as Array<{ path: string; schedule: string }>;
   const sweep = crons.find((c) => c.path === "/api/cron/referral-sweep");
   check(
-    "y corre cada 4 h (la ventana de 48 h tiene una docena de pasadas)",
-    sweep?.schedule === "50 */4 * * *",
-    `schedule = ${sweep?.schedule}: una vez al día deja cobros con una sola oportunidad de aplicar.`,
+    "en vercel.json va DIARIO: Vercel es Hobby y rechaza el despliegue entero con un cron más frecuente",
+    !!sweep && /^\d+ \d+ \* \* \*$/.test(sweep.schedule),
+    `schedule = ${sweep?.schedule}. Pasó el 9-oct con «50 */4 * * *» (y en junio con uno cada 5 min). La cadencia de 4 h la da el crontab del VPS.`,
+  );
+  check(
+    "y la ruta explica que la cadencia de 4 h viene del cron externo del VPS",
+    /cron EXTERNO del VPS/.test(cron) && /Hobby/.test(cron),
+    "Sin esto, la próxima persona que lo vea diario lo «arreglará» a */4 y romperá el despliegue.",
   );
   const hard = Number(/hardDeadlineMs: started \+ (\d+)_?(\d*)/.exec(cron)?.slice(1).join("") ?? 0);
   const phase = Number(/runRewardSweep\(\{[\s\S]*?deadlineMs: started \+ (\d+)_?(\d*)/.exec(cron)?.slice(1).join("") ?? 0);
