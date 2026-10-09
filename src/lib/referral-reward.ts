@@ -1448,11 +1448,11 @@ export async function runRewardSweep(
     }
     let outcome: string;
     if (action.kind === "apply") {
-      // El cerrojo se toma con la clave del DUEÑO de la sub, la misma que usa
-      // /api/subscription/plan con el cliente que ha iniciado sesión.
+      // El dueño de la sub (clave del cerrojo) lo resuelve applyReward: el listado
+      // de Seal no trae `customer_id`.
       const sub = (subs ?? []).find((s) => String(s.id) === action.sealSubscriptionId);
-      const owner = sub?.customer_id ? String(sub.customer_id) : r.referrer_customer_id;
-      outcome = await applyReward(r, Number(action.sealSubscriptionId), action.chargeDueAtMs, owner);
+      const listOwner = sub?.customer_id ? String(sub.customer_id) : null;
+      outcome = await applyReward(r, Number(action.sealSubscriptionId), action.chargeDueAtMs, listOwner);
       if (outcome === "applied") applies++;
       if (outcome === "applied" || outcome === "adopted") liveSubIds.add(action.sealSubscriptionId);
     } else {
@@ -1682,7 +1682,23 @@ async function executeRewardAction(r: RewardRow, action: RewardAction): Promise<
  * Slack) van DESPUÉS de soltar el cerrojo: mientras está tomado, el cliente no
  * puede cambiar su plan.
  */
-async function applyReward(r: RewardRow, subId: number, chargeDueAtMs: number, ownerCustomerId: string): Promise<string> {
+async function applyReward(
+  r: RewardRow,
+  subId: number,
+  chargeDueAtMs: number,
+  listOwner: string | null,
+): Promise<string> {
+  // La clave del cerrojo es la del DUEÑO de la sub: la misma que usa
+  // /api/subscription/plan con el cliente que ha iniciado sesión. Si no coincidiera,
+  // el cerrojo no excluiría nada. El listado de Seal (el de la búsqueda por email,
+  // de donde salen las subs de la pasada) NO trae `customer_id`; la lectura de una
+  // sub suelta sí. Sin dueño no se aplica.
+  let ownerCustomerId = listOwner;
+  if (!ownerCustomerId) {
+    const one = await seal.getSubscriptionById(subId, undefined, { throwTransient: true }).catch(() => null);
+    ownerCustomerId = one?.customer_id ? String(one.customer_id) : null;
+  }
+  if (!ownerCustomerId) return "skip:owner_unreadable";
   let lock: PlanLock;
   try {
     lock = await acquirePlanLock(ownerCustomerId, subId, "referral-sweep", {

@@ -23,6 +23,7 @@
 import { runAsBackgroundJob } from "../src/lib/http-timeout";
 import { ensurePendingCode, issuePendingCodes } from "../src/lib/referral-reward";
 import { mapStatus, seal } from "../src/lib/seal";
+import { shopifyAdmin } from "../src/lib/shopify-admin";
 import { supabaseAdmin } from "../src/lib/supabase";
 
 const args = process.argv.slice(2);
@@ -31,14 +32,57 @@ const issue = args.includes("--issue");
 const onlyArg = args.find((a) => a.startsWith("--only="));
 const only = onlyArg ? onlyArg.slice("--only=".length).split(",").map((s) => s.trim()).filter(Boolean) : null;
 
+/**
+ * Clientes de Shopify con al menos una sub ACTIVA en Seal, con su nombre de pila.
+ *
+ * OJO: el LISTADO de Seal (`/subscriptions`) NO trae `customer_id`; solo lo trae la
+ * lectura de una sub suelta (medido el 2026-10-09: 0 de 3.533 en el listado). La
+ * primera versión filtraba por ese campo y no encontraba a nadie. El cliente sale
+ * del pedido de origen de cada sub (`order_id`), en tandas de 250 contra Shopify, y
+ * si el pedido no lo da, de la sub suelta en Seal.
+ */
 async function activeCustomers(): Promise<Map<string, string | null>> {
-  const subs = await runAsBackgroundJob(() => seal.listAllSubscriptions());
-  const out = new Map<string, string | null>();
-  for (const s of subs) {
-    if (mapStatus(s) !== "active" || !s.customer_id) continue;
-    if (only && !only.includes(String(s.customer_id))) continue;
-    if (!out.has(String(s.customer_id))) out.set(String(s.customer_id), s.first_name || null);
+  const subs = (await runAsBackgroundJob(() => seal.listAllSubscriptions())).filter((s) => mapStatus(s) === "active");
+  const tail = (gid: string) => gid.split("/").pop() ?? gid;
+
+  const byOrder = new Map<string, { customerId: string; firstName: string | null }>();
+  const orderIds = [...new Set(subs.map((s) => String(s.order_id ?? "")).filter((id) => /^\d+$/.test(id)))];
+  for (let i = 0; i < orderIds.length; i += 250) {
+    const chunk = orderIds.slice(i, i + 250);
+    const data = await runAsBackgroundJob(() =>
+      shopifyAdmin.graphql<{ nodes: Array<{ id: string; customer: { id: string; firstName: string | null } | null } | null> }>(
+        `query referralBackfillOrders($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id customer { id firstName } } } }`,
+        { ids: chunk.map((id) => `gid://shopify/Order/${id}`) },
+      ),
+    );
+    for (const n of data.nodes) {
+      if (n?.id && n.customer?.id) byOrder.set(tail(n.id), { customerId: tail(n.customer.id), firstName: n.customer.firstName });
+    }
   }
+
+  const out = new Map<string, string | null>();
+  let viaOrder = 0;
+  let viaSeal = 0;
+  let missing = 0;
+  for (const s of subs) {
+    const fromOrder = byOrder.get(String(s.order_id ?? ""));
+    let customerId = fromOrder?.customerId ?? null;
+    if (customerId) viaOrder++;
+    else {
+      const one = await runAsBackgroundJob(() => seal.getSubscriptionById(s.id, undefined, { throwTransient: true })).catch(
+        () => null,
+      );
+      customerId = one?.customer_id ? String(one.customer_id) : null;
+      if (customerId) viaSeal++;
+      else missing++;
+    }
+    if (!customerId) continue;
+    if (only && !only.includes(customerId)) continue;
+    if (!out.has(customerId)) out.set(customerId, s.first_name || fromOrder?.firstName || null);
+  }
+  console.log(
+    `Subs activas: ${subs.length} (cliente por su pedido: ${viaOrder}, por Seal: ${viaSeal}, sin cliente: ${missing})`,
+  );
   return out;
 }
 
