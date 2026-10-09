@@ -9,6 +9,7 @@ import { acquirePlanLock } from "@/lib/plan-lock";
 import { alertSlackError, alertSlackErrorAwaited } from "@/lib/alert";
 import { naturalNextShipDate, SEAL_INTERVAL_BY_FREQUENCY, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
+import { ensureDiscoveryCreditAttached, pendingDiscoveryCreditForSub } from "@/lib/discovery-renewal-credit";
 import {
   centsToPrice,
   chargeTotalCents,
@@ -1230,6 +1231,46 @@ const patchPlan = async (
     }
   }
 
+  // ── Lo mismo con el crédito Discovery de la primera renovación (9-oct-2026) ──
+  // Quien compra el Discovery Set junto con su suscripción lleva 4,99 € de descuento en su
+  // segundo envío (lib/discovery-renewal-credit). Es un código de Seal como el 15%, así que
+  // el arrastre invisible le pasa igual: se repetiría en CADA envío sin que el consumidor
+  // pudiera verlo para retirarlo. Mismo trato: soltar antes, reponer después (solo si se le
+  // sigue debiendo, ver `ensureDiscoveryCreditAttached`).
+  let discoveryCarry: { code: string; detached: boolean } | null = null;
+  if (swapsItems) {
+    let dc: Awaited<ReturnType<typeof pendingDiscoveryCreditForSub>> = null;
+    try {
+      dc = await pendingDiscoveryCreditForSub(sealSubscriptionId);
+    } catch (e) {
+      // Sin saber si hay crédito no podemos soltarlo. Se sigue (como con la retención),
+      // pero avisando: si lo había, puede haberse quedado invisible.
+      log("discovery-credit-read-failed", { msg: e instanceof Error ? e.message : String(e) });
+      alertSlackError({
+        path: "/api/subscription/plan",
+        code: "discovery_credit_read_failed",
+        msg: `sub ${sealSubscriptionId}: no se pudo leer discovery_set_coupons antes de cambiar las líneas. Si tenía crédito Discovery pendiente, comprobar en Seal que sigue puesto UNA vez y visible.`,
+        customerId: ctx.customerId,
+      });
+    }
+    if (dc) {
+      const appliedIds = preMutationSub ? findAllAppliedDiscountCodeIds(preMutationSub, dc.code) : [];
+      const ids = appliedIds.length ? appliedIds : dc.codeId ? [dc.codeId] : [];
+      discoveryCarry = { code: dc.code, detached: false };
+      if (ids.length) {
+        try {
+          for (const id of ids) await seal.removeDiscountCode(sealSubscriptionId, id);
+          discoveryCarry.detached = true;
+          log("discovery-credit-detached-pre-swap", { count: ids.length });
+        } catch (e) {
+          log("discovery-credit-detach-failed", { msg: e instanceof Error ? e.message : String(e) });
+        }
+      } else {
+        log("discovery-credit-no-uuid-pre-swap");
+      }
+    }
+  }
+
   // Re-attach after the swap — and after a FAILED swap too (every throw path
   // below calls this first), so the customer never silently loses their 15%.
   // Never applies unless the detach succeeded (see gotcha above).
@@ -1311,13 +1352,50 @@ const patchPlan = async (
     }
   };
 
+  // Reponer el crédito Discovery, con la misma guarda que el 15%: nunca se aplica encima
+  // de un código que no se pudo soltar (sería el duplicado invisible).
+  const reattachDiscoveryCreditNow = async () => {
+    if (!discoveryCarry) return;
+    if (!discoveryCarry.detached) {
+      try {
+        const fresh = await seal.getSubscriptionById(sealSubscriptionId);
+        const lateIds = fresh ? findAllAppliedDiscountCodeIds(fresh, discoveryCarry.code) : [];
+        if (lateIds.length) {
+          for (const id of lateIds) await seal.removeDiscountCode(sealSubscriptionId, id);
+          discoveryCarry.detached = true;
+        }
+      } catch {
+        // cae al aviso de abajo
+      }
+    }
+    if (!discoveryCarry.detached) {
+      alertSlackError({
+        path: "/api/subscription/plan",
+        code: "discovery_credit_carryover",
+        msg: `sub ${sealSubscriptionId}: el cambio de líneas se hizo con el crédito Discovery puesto y no se pudo soltar. Puede haberse quedado invisible y repetirse en cada envío: comprobar en Seal (código ${discoveryCarry.code}).`,
+        customerId: ctx.customerId,
+      });
+      return;
+    }
+    const result = await ensureDiscoveryCreditAttached(sealSubscriptionId, discoveryCarry.code, "/api/subscription/plan");
+    log("discovery-credit-reattached", { result });
+  };
+
   // Con el presupuesto casi gastado, el 15% se repone FUERA del deadline (2-oct-2026). Es el
   // caso típico de los caminos de error (se perdió el deadline a mitad del swap) y el del
   // remove que "falló" pero entró: dentro del deadline cada llamada se cortaba y el cliente
   // se quedaba sin su descuento, o con el código puesto y sin seguimiento. Con presupuesto
   // de sobra se sigue corriendo dentro, para no alargar una respuesta que sí espera.
-  const reattachRetentionDiscount = () =>
-    afterBudget(reattachRetentionDiscountNow, RETENTION_REATTACH_RESERVE_MS);
+  // Todos los códigos que se soltaron para el swap se reponen juntos, en cada salida de la
+  // ruta (la que sale bien y todas las de error), con margen para los dos.
+  const reattachCarriedDiscounts = () =>
+    afterBudget(
+      async () => {
+        await reattachRetentionDiscountNow();
+        await reattachDiscoveryCreditNow();
+      },
+      RETENTION_REATTACH_RESERVE_MS * Math.max(1, (retentionCarry ? 1 : 0) + (discoveryCarry ? 1 : 0)),
+    );
 
   // ───── Step 2: converge the lines on the target (edits → adds → removes) ─────
   //
@@ -1483,7 +1561,7 @@ const patchPlan = async (
   if (diff.adds.length || diff.removes.length) {
     const armed = await scheduleRepair("pre-armed before line mutation");
     if (!armed) {
-      await reattachRetentionDiscount();
+      await reattachCarriedDiscounts();
       throw new ApiHttpError(
         503,
         "repair_net_unavailable",
@@ -1517,7 +1595,7 @@ const patchPlan = async (
         customerId: ctx.customerId,
       });
     }
-    await reattachRetentionDiscount();
+    await reattachCarriedDiscounts();
     // 409 y no 5xx: la App Proxy de Shopify sustituye CUALQUIER 5xx por el HTML de la
     // tienda, que el front lee como `gateway_timeout` ("inténtalo de nuevo"). Un 409 sí
     // llega, y `change_in_progress` le dice lo que de verdad pasa y le quita el botón.
@@ -1547,7 +1625,7 @@ const patchPlan = async (
       // Only disarm when the sub really is back on the snapshot. On
       // "inconsistent" the pre-armed intent is the only thing that will fix it.
       if (outcome === "restored") await disarmRepairIntent();
-      await reattachRetentionDiscount();
+      await reattachCarriedDiscounts();
       throw new ApiHttpError(
         502,
         planChanged ? "variant_change_failed_after_interval" : "seal_edit_items_failed",
@@ -1589,7 +1667,7 @@ const patchPlan = async (
       if (!rejected) return await handOverUnknownOutcome("add_items", msg);
       const outcome = await restoreSnapshot();
       if (outcome === "restored") await disarmRepairIntent();
-      await reattachRetentionDiscount();
+      await reattachCarriedDiscounts();
       throw new ApiHttpError(
         502,
         planChanged ? "variant_change_failed_after_interval" : "seal_add_items_failed",
@@ -1659,7 +1737,7 @@ const patchPlan = async (
       // Si convergió, no se lanza: el bloque de después desarma la red, apunta `applied`,
       // repone el descuento y verifica, como en cualquier cambio que sale bien.
       if (!converged) {
-        await reattachRetentionDiscount();
+        await reattachCarriedDiscounts();
         // Refresh the pre-armed intent with the real reason, for the operator
         // reading `last_error` and for the alert below.
         const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
@@ -1702,7 +1780,7 @@ const patchPlan = async (
   // discounted charge. We do NOT settle it in-request: an unbounded extra Seal
   // read here could time out the plan change and drop the re-anchor intent
   // written below (audit 2026-07-23 round 2). The cron is the backstop.
-  await reattachRetentionDiscount();
+  await reattachCarriedDiscounts();
 
   // VERIFICATION POST-MUTATION (Juan 2026-05-19 round 2):
   //

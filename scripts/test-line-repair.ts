@@ -162,36 +162,65 @@ const target = (variantId: string, quantity: number, unitPriceCents: number, box
       { id: 33532774, discount_codes: [STAY] },
     ],
   } as unknown as SealSubscription;
+  const RET = { kind: "retention" as const, code: "LITSTAY15" };
   eq(
-    planDiscountForRemoval(sub, [32286784], "LITSTAY15"),
-    { kind: "retention", code: "LITSTAY15", ids: [STAY.id] },
+    planDiscountForRemoval(sub, [32286784], [RET]),
+    { kind: "tracked", codes: [{ kind: "retention", code: "LITSTAY15", ids: [STAY.id] }] },
     "15950195: el 15% que seguimos se suelta y se repone",
   );
   eq(
-    planDiscountForRemoval(sub, [32286784], "litstay15 ").kind,
-    "retention",
+    planDiscountForRemoval(sub, [32286784], [{ kind: "retention", code: "litstay15 " }]).kind,
+    "tracked",
     "el código se compara sin mayúsculas ni espacios",
   );
   eq(
-    planDiscountForRemoval(sub, [32286784], null),
+    planDiscountForRemoval(sub, [32286784], []),
     { kind: "foreign", itemIds: [32286784] },
     "sin fila de retención viva: para una persona",
   );
   eq(
-    planDiscountForRemoval(sub, [32286784], "WELCOME10").kind,
+    planDiscountForRemoval(sub, [32286784], [{ kind: "retention", code: "WELCOME10" }]).kind,
     "foreign",
     "el código de la línea no es el que seguimos: para una persona",
   );
   const twoCodes = {
     items: [{ id: 1, discount_codes: [STAY, { id: "x", code: "OTRO" }] }, { id: 2, discount_codes: [STAY] }],
   } as unknown as SealSubscription;
-  eq(planDiscountForRemoval(twoCodes, [1], "LITSTAY15").kind, "foreign", "la retención y otro código juntos: para una persona");
+  eq(planDiscountForRemoval(twoCodes, [1], [RET]).kind, "foreign", "la retención y otro código juntos: para una persona");
   const noUuid = { items: [{ id: 1, discount_codes: [{ code: "LITSTAY15" }] }] } as unknown as SealSubscription;
-  eq(planDiscountForRemoval(noUuid, [1], "LITSTAY15").kind, "foreign", "sin UUID no se puede soltar: para una persona");
+  eq(planDiscountForRemoval(noUuid, [1], [RET]).kind, "foreign", "sin UUID no se puede soltar: para una persona");
   eq(
-    planDiscountForRemoval({ items: [{ id: 1 }, { id: 2, discount_codes: [STAY] }] } as unknown as SealSubscription, [1], "LITSTAY15"),
+    planDiscountForRemoval({ items: [{ id: 1 }, { id: 2, discount_codes: [STAY] }] } as unknown as SealSubscription, [1], [RET]),
     { kind: "clear" },
     "la línea a quitar no lleva código: se quita sin más",
+  );
+
+  // Crédito Discovery de la primera renovación (9-oct-2026): mismo trato que el 15%.
+  const DS = { id: "95fe36c7-775a-46f2-be11-588b19f5ff0d", code: "LIT-M6653GZE" };
+  const DIS = { kind: "discovery" as const, code: "LIT-M6653GZE" };
+  const dsSub = {
+    items: [{ id: 1, discount_codes: [DS] }, { id: 2, discount_codes: [DS] }],
+  } as unknown as SealSubscription;
+  eq(
+    planDiscountForRemoval(dsSub, [1], [DIS]),
+    { kind: "tracked", codes: [{ kind: "discovery", code: "LIT-M6653GZE", ids: [DS.id] }] },
+    "crédito Discovery seguido: se suelta y se repone (ya no deja la reparación parada)",
+  );
+  const both = {
+    items: [{ id: 1, discount_codes: [STAY, DS] }, { id: 2, discount_codes: [STAY, DS] }],
+  } as unknown as SealSubscription;
+  const bothPlan = planDiscountForRemoval(both, [1], [RET, DIS]);
+  eq(bothPlan.kind, "tracked", "15% y Discovery juntos, los dos seguidos: se sueltan los dos");
+  eq(
+    bothPlan.kind === "tracked" ? bothPlan.codes.map((c) => c.kind).sort() : [],
+    ["discovery", "retention"],
+    "y se reponen los dos, cada uno con su lógica",
+  );
+  eq(planDiscountForRemoval(both, [1], [RET]).kind, "foreign", "si el Discovery no está seguido (sin fila viva): para una persona");
+  eq(
+    planDiscountForRemoval({ items: [{ id: 1, discount_codes: [DS, { id: "x", code: "OTRO" }] }] } as unknown as SealSubscription, [1], [DIS]).kind,
+    "foreign",
+    "Discovery y otro código juntos: para una persona",
   );
 }
 
