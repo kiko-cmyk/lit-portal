@@ -33,6 +33,11 @@ export type KlaviyoEvent =
   // plantillas leen `event.discount_code` y `event.discount_expires_label`
   // literalmente. Cambiarlo aquí obliga a editar los cinco emails.
   | "Discovery Set Purchased"
+  // Discovery Set + suscripción en el MISMO pedido (2026-10-09): en vez del
+  // código, los 4,99 € se aplican a su primera renovación en Seal. Sale cuando
+  // el crédito ya está puesto (lib/discovery-renewal-credit). Sin flow colgado
+  // todavía: existe para poder montar el aviso al cliente sin tocar código.
+  | "Discovery Set Renewal Credit"
   | "tier_unlocked"
   | "reward_claimed"
   | "winback_d14"

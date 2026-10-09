@@ -77,10 +77,23 @@ export const DISCOVERY_DISCOUNT_DAYS = 30;
  */
 const COUPON_COLLECTION_GID = "gid://shopify/Collection/726625812829";
 
+/**
+ * Las dos promesas del Discovery Set (columna `mode` de `discovery_set_coupons`):
+ *
+ *   - "checkout": la de siempre. Código por email, válido 30 días, que el cliente
+ *     canjea él en el checkout de una suscripción nueva.
+ *   - "renewal": compró el Set Y una suscripción en el MISMO pedido (decisión de
+ *     Juan, 2026-10-09, tras el pedido #11724). El código no se le manda: el
+ *     portal lo aplica a esa suscripción en Seal y se descuenta de la primera
+ *     renovación. Ver `lib/discovery-renewal-credit.ts`.
+ */
+export type DiscoveryCouponMode = "checkout" | "renewal";
+
 export interface IssuedDiscount {
   code: string;
   issuedAt: string;
-  expiresAt: string;
+  /** null en modo "renewal": ese código no caduca (ver issueDiscoveryDiscount). */
+  expiresAt: string | null;
 }
 
 /**
@@ -109,10 +122,23 @@ function generateCode(): string {
  * lleva el código en el cuerpo, así que sin código el correo sale roto y es
  * peor que no mandarlo.
  */
-export async function issueDiscoveryDiscount(customerId: string): Promise<IssuedDiscount> {
+export async function issueDiscoveryDiscount(
+  customerId: string,
+  mode: DiscoveryCouponMode = "checkout",
+): Promise<IssuedDiscount> {
   const code = generateCode();
   const now = new Date();
-  const endsAt = new Date(now.getTime() + DISCOVERY_DISCOUNT_DAYS * 24 * 60 * 60 * 1000);
+  // En modo "renewal" el código NO caduca, y es a propósito. La primera
+  // renovación de una sub de 45 días, 2, 3 o 6 meses (o una con un skip) cae
+  // más allá de los 30 días: un código caducado llega a ese cobro como
+  // CURRENTLY_INACTIVE y no descuenta, y antes de eso el cron
+  // `survey-discount-cleanup` lo habría BORRADO (borra los Discovery caducados
+  // sin usar). No es un agujero: el código no se enseña a nadie, es de un solo
+  // uso (`usageLimit: 1`) y solo vale en cajas con suscripción.
+  const endsAt =
+    mode === "renewal"
+      ? null
+      : new Date(now.getTime() + DISCOVERY_DISCOUNT_DAYS * 24 * 60 * 60 * 1000);
 
   const data = await shopifyAdmin.graphql<{
     discountCodeBasicCreate: {
@@ -132,10 +158,16 @@ export async function issueDiscoveryDiscount(customerId: string): Promise<Issued
         // es además el filtro por el que los encuentra el cron de limpieza.
         // Lleva el customerId para poder reconciliar a mano un cupón con quien
         // lo generó.
-        title: `Discovery ${code} (${customerId})`,
+        // El modo "renewal" sigue empezando por `Discovery ` (el cron de
+        // limpieza solo borra los EXPIRED, y este no caduca nunca) y lleva la
+        // palabra `renovación` para distinguirlo en el admin.
+        title:
+          mode === "renewal"
+            ? `Discovery renovación ${code} (${customerId})`
+            : `Discovery ${code} (${customerId})`,
         code,
         startsAt: now.toISOString(),
-        endsAt: endsAt.toISOString(),
+        ...(endsAt ? { endsAt: endsAt.toISOString() } : {}),
         // Ver el docstring del módulo: NUNCA un segmento.
         customerSelection: { all: true },
         customerGets: {
@@ -182,6 +214,6 @@ export async function issueDiscoveryDiscount(customerId: string): Promise<Issued
   return {
     code,
     issuedAt: now.toISOString(),
-    expiresAt: endsAt.toISOString(),
+    expiresAt: endsAt ? endsAt.toISOString() : null,
   };
 }

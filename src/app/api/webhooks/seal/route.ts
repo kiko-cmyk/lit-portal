@@ -4,6 +4,7 @@ import { alertSlackError, alertSlackNotice } from "@/lib/alert";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
 import { klaviyo } from "@/lib/klaviyo";
+import { discoveryRenewalCreditOnSealEvent } from "@/lib/discovery-renewal-credit";
 import { consumeRetentionDiscountIfCharged } from "@/lib/retention-discount";
 import {
   getNextBillingAttempt,
@@ -118,6 +119,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "subscription.created":
         await syncSubscription(sub);
         await applyReanchorIfPending(sub);
+        // Discovery Set + suscripción en el mismo pedido: este es el momento en
+        // que por fin existe la sub a la que aplicar los 4,99 € (en orders/paid
+        // Seal aún no la tenía). Nunca lanza; el cron diario es la red.
+        await discoveryRenewalCreditOnSealEvent(sub);
         break;
       case "subscription.updated":
         await syncSubscription(sub);
@@ -132,6 +137,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // daily cron sweep is the guaranteed backstop, so a transient failure must
         // never fail the whole webhook.
         await consumeRetentionDiscountSafe(sub);
+        // Mismo trato para el crédito del Discovery Set: aplica si seguía
+        // pendiente y lo retira tras su cobro. Nunca lanza.
+        await discoveryRenewalCreditOnSealEvent(sub);
         break;
       case "subscription.cancelled":
       case "subscription.expired":
@@ -222,6 +230,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // today". It is now: 74 delivered between 2026-07-22 and 2026-07-27.)
         await syncSubscription(sub);
         await consumeRetentionDiscountSafe(sub);
+        // Retira el crédito del Discovery Set tras la renovación que lo cobró.
+        await discoveryRenewalCreditOnSealEvent(sub);
         break;
       }
       case "billing_attempt.failed": {

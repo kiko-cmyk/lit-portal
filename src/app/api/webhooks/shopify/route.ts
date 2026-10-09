@@ -12,9 +12,11 @@ import { klaviyo } from "@/lib/klaviyo";
 import { alertSlackErrorAwaited } from "@/lib/alert";
 import {
   DISCOVERY_DISCOUNT_VALUE_EUR,
+  type DiscoveryCouponMode,
   issueDiscoveryDiscount,
   type IssuedDiscount,
 } from "@/lib/discovery-discount";
+import { applyDiscoveryRenewalCreditForOrder } from "@/lib/discovery-renewal-credit";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { formatShipDateEs } from "@/lib/ship-date-label";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -212,6 +214,10 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     }
   }
 
+  // Lo usa el cupón del Discovery Set (paso 3): si el mismo pedido trae una
+  // suscripción, los 4,99 € van a su renovación en vez de a un código.
+  let orderHasSubscription = false;
+
   // 2. Confirmation email trigger — fires Klaviyo event with plan details
   const email = payload.customer?.email ?? payload.email;
   if (email && payload.line_items && payload.line_items.length > 0) {
@@ -252,6 +258,7 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     // vs one-time purchases without parsing plan_label (e.g. the
     // "Área personal - Bienvenida" welcome triggers on is_subscription = true).
     const isSubscription = resolved.some((li) => li.selling_plan_allocation);
+    orderHasSubscription = isSubscription;
     // AWAIT: on Vercel the function can freeze once the response is sent, so a
     // fire-and-forget trackEvent (and the confirmation/welcome email it drives)
     // could be dropped after processed_at is marked, with no retry. Awaiting
@@ -290,7 +297,7 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
   // Un cupón sin emitir se recupera a mano desde la alerta de Slack; un
   // confirmation_sent duplicado es un segundo email al cliente.
   try {
-    await maybeIssueDiscoveryCoupon(payload);
+    await maybeIssueDiscoveryCoupon(payload, orderHasSubscription);
   } catch (err) {
     // No debería llegar aquí (la función se traga sus propios fallos y avisa),
     // pero si aparece un camino nuevo que lanza, NO se propaga.
@@ -315,8 +322,18 @@ const DISCOVERY_VARIANT_ID = "65812401652061";
  *
  * Nunca lanza. Todos sus fallos terminan en un aviso de Slack, porque un throw
  * aquí replayaría el webhook entero (ver el comentario de la llamada).
+ *
+ * Dos promesas según el pedido (decisión de Juan, 2026-10-09, pedido #11724):
+ *   - Discovery Set SOLO → código por email para su futura suscripción
+ *     (`mode = 'checkout'`) y el flow de cinco emails.
+ *   - Discovery Set + suscripción en el MISMO pedido → ni código ni flow: los
+ *     4,99 € se descuentan de la primera renovación de esa sub
+ *     (`mode = 'renewal'`, ver lib/discovery-renewal-credit).
  */
-async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<void> {
+async function maybeIssueDiscoveryCoupon(
+  payload: ShopifyOrderPayload,
+  orderHasSubscription: boolean,
+): Promise<void> {
   // ── 1. ¿Lleva el Discovery Set? ────────────────────────────────────────────
   //
   // Se miran SKU y variante, y basta con que cuadre uno. No es cinturón y
@@ -407,10 +424,19 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
   // FAIL-CLOSED: si Seal no contesta se asume que SÍ tiene suscripción y no se
   // emite. Perder un cupón recuperable a mano es preferible a regalárselo a
   // quien ya paga.
+  //
+  // La sub que nace de ESTE pedido no cuenta como "ya era suscriptor": es
+  // precisamente la conversión. Seal guarda el pedido de origen en `order_id`;
+  // según quién llegue antes, aquí puede estar ya o no (en el #11724 no estaba),
+  // y sin esta exclusión el mismo pedido daría o no crédito según la carrera.
+  const orderId = String(payload.id ?? "");
   let hadLiveSubscription: boolean;
+  let sealHasSubFromThisOrder = false;
   try {
     const subs = await seal.getSubscriptionsByEmail(email);
+    sealHasSubFromThisOrder = subs.some((sub) => orderId !== "" && String(sub.order_id ?? "") === orderId);
     hadLiveSubscription = subs.some((sub) => {
+      if (orderId !== "" && String(sub.order_id ?? "") === orderId) return false;
       const status = mapToSubscription(sub, customerId).status;
       // `paused` y `reactivating` CUENTAN como viva: una sub pausada sigue
       // siendo cliente de suscripción y no hay nada que convertir.
@@ -423,10 +449,19 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
 
   if (hadLiveSubscription) return;
 
+  // ── 3b. ¿Se suscribió en el MISMO pedido? ──────────────────────────────────
+  //
+  // Dos señales, basta una: las líneas del pedido (selling plan, leídas por la
+  // Admin API en el paso 2) o una sub de Seal nacida de este pedido. La segunda
+  // cubre el caso en que la relectura de líneas falló y volvió al body, que no
+  // trae selling plan.
+  const mode: DiscoveryCouponMode =
+    orderHasSubscription || sealHasSubFromThisOrder ? "renewal" : "checkout";
+
   // ── 4. Emitir ──────────────────────────────────────────────────────────────
   let discount: IssuedDiscount;
   try {
-    discount = await issueDiscoveryDiscount(customerId);
+    discount = await issueDiscoveryDiscount(customerId, mode);
   } catch (err) {
     // El fallo más probable el día del despliegue es que la app no tenga el
     // scope `write_discounts`, y saldría en TODOS los pedidos a la vez. Por eso
@@ -447,12 +482,17 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
   // Este orden importa. Si se guardara después del evento y la escritura
   // fallara, el cliente tendría su email con el código y nosotros ninguna fila:
   // su siguiente Discovery Set le emitiría un SEGUNDO cupón.
+  //
+  // La rama 'checkout' NO escribe las columnas de la migración del 2026-10-09
+  // (`mode` y `status` tienen default / NULL): así sigue funcionando aunque el
+  // código llegue a producción antes que la migración.
   const { error: saveErr } = await sb.from("discovery_set_coupons").insert({
     customer_id: customerId,
-    order_id: String(payload.id ?? ""),
+    order_id: orderId,
     discount_code: discount.code,
     discount_issued_at: discount.issuedAt,
     discount_expires_at: discount.expiresAt,
+    ...(mode === "renewal" ? { mode: "renewal", status: "pending_apply" } : {}),
   });
 
   if (saveErr) {
@@ -474,6 +514,23 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
       msg: `Cupón ${discount.code} CREADO en Shopify pero no guardado (${saveErr.message}). El cliente NO ha sido avisado: repartir a mano.`,
       customerId,
     });
+    return;
+  }
+
+  // ── 5b. Suscrito en el mismo pedido: crédito en la renovación ──────────────
+  //
+  // Ni código ni flow de cinco emails (le pediría suscribirse a quien ya lo
+  // está). Se intenta aplicar ya; lo normal es que Seal aún no tenga la sub
+  // ("no-sub-yet") y lo haga el webhook de Seal en cuanto la cree, con el cron
+  // diario de red. Nunca lanza: la fila ya está guardada y los otros dos
+  // caminos la recogen.
+  if (mode === "renewal") {
+    try {
+      const result = await applyDiscoveryRenewalCreditForOrder(orderId, email);
+      console.log(`[orders/paid] crédito Discovery en renovación para ${customerId}: ${result}`);
+    } catch (err) {
+      console.warn("[orders/paid] crédito Discovery: Seal no contestó, lo recoge el webhook de Seal o el cron", err);
+    }
     return;
   }
 

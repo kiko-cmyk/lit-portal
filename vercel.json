@@ -42,6 +42,10 @@
       "schedule": "30 6 * * *"
     },
     {
+      "path": "/api/cron/discovery-renewal-credit-sweep",
+      "schedule": "45 6 * * *"
+    },
+    {
       "path": "/api/cron/profile-survey-sync",
       "schedule": "45 6 * * *"
     },
