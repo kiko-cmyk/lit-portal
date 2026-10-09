@@ -40,6 +40,7 @@ const vercel = read("vercel.json");
 const card = read("src/components/ReferralCard.tsx");
 const codeRoute = read("src/app/api/referral/code/route.ts");
 const cron = read("src/app/api/cron/referral-sweep/route.ts");
+const backfill = read("scripts/referral-backfill-codes.ts");
 const surfaces = {
   PlanOverlay: read("src/components/PlanOverlay.tsx"),
   FlavorOverlay: read("src/components/FlavorOverlay.tsx"),
@@ -157,6 +158,12 @@ console.log("\n── lib/referral-reward.ts ──\n");
       outer.indexOf("acquirePlanLock(") > 0 && outer.indexOf("acquirePlanLock(") < outer.indexOf("applyRewardLocked(") &&
         locked.indexOf('status: "applying"') > 0 && !/acquirePlanLock\(/.test(locked),
       "Una fila en applying tiene que tener siempre el cerrojo detrás; si no, un swap del cliente se cruza con la aplicación.",
+    );
+    check(
+      "la clave del cerrojo es el dueño REAL de la sub, leído de la sub suelta si el listado no lo trae",
+      outer.indexOf("getSubscriptionById(") > 0 && outer.indexOf("getSubscriptionById(") < outer.indexOf("acquirePlanLock(") &&
+        /skip:owner_unreadable/.test(outer) && !/: r\.referrer_customer_id;/.test(body),
+      "El listado de Seal no trae customer_id: con el id de quien invita como clave, el cerrojo podría no coincidir con el de /plan.",
     );
     const ttl = Number(/const APPLY_LOCK_TTL_SECONDS = (\d+)/.exec(body)?.[1] ?? 0);
     check(
@@ -393,6 +400,11 @@ check(
 console.log("\n── superficies ──\n");
 check("la tarjeta no usa ?ref= (es de GoAffPro)", !/\?ref=/.test(card), "");
 check("sin guiones largos en la tarjeta", !/[—–]/.test(card.replace(/^\s*(\/\/|\*).*$/gm, "")), "Guía de copy de LIT.");
+check(
+  "el backfill NO saca el cliente del listado de Seal (no trae customer_id)",
+  !/!s\.customer_id/.test(code(backfill)) && /nodes\(ids: \$ids\)/.test(backfill),
+  "El 9-oct el backfill encontró 0 clientes: el listado de Seal no trae customer_id. Va por el pedido de origen.",
+);
 for (const [name, src] of Object.entries(surfaces)) {
   check(
     `${name} explica plan_change_in_progress y referral_reward_busy`,
