@@ -34,6 +34,7 @@ import {
   validateMix,
 } from "@/lib/mix";
 import { getLadderPricesForWrite, PricingConfigError } from "@/lib/pricing";
+import { detachReferralRewardsForSwap } from "@/lib/referral-reward";
 import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
@@ -1091,6 +1092,34 @@ const patchPlan = async (
   // Plus: a 500 ms delay between each Seal mutation. Seal's billing_attempts
   // regenerator needs ~300-500 ms to settle between calls; without this
   // pause we've seen the third mutation get silently dropped.
+
+  // ── Recompensa de referido aplicada: se retira ANTES de tocar nada (2026-10-10) ──
+  //
+  // Mismo gotcha de Seal que el 15% de abajo: un alta + baja de líneas arrastra
+  // los códigos a la línea nueva de forma INVISIBLE, y un LITREF arrastrado se
+  // cobraría en cada renovación. A diferencia del 15%, aquí NO se reaplica tras el
+  // swap: aplicar recompensas es cosa SOLO del cron (un único aplicador, porque
+  // `apply` no es idempotente), que la repondrá antes del cobro si sigue en la
+  // ventana. Por eso va antes del intento y de la primera escritura: si no se
+  // puede retirar, se aborta con la suscripción intacta y el cliente reintenta.
+  //
+  // 409 y no 503: el App Proxy de Shopify sustituye las respuestas 5xx por el HTML
+  // de la tienda, y el cliente vería un error genérico en vez de este mensaje. El
+  // cron que aplica toma este mismo cerrojo de plan, así que aquí no puede haber
+  // una aplicación a medias en curso.
+  if (diff.adds.length > 0 || diff.removes.length > 0) {
+    try {
+      const detached = await detachReferralRewardsForSwap(sealSubscriptionId, preMutationSub);
+      if (detached) log("referral-reward-detached-pre-swap", { count: detached });
+    } catch (e) {
+      log("referral-reward-detach-failed", { msg: e instanceof Error ? e.message : String(e) });
+      throw new ApiHttpError(
+        409,
+        "referral_reward_busy",
+        "Estamos actualizando un descuento de tu suscripción. Vuelve a intentarlo en un momento.",
+      );
+    }
+  }
 
   // El breadcrumb va ANTES de tocar Seal (2026-08-24). Hasta hoy solo se escribía
   // al final, con outcome "applied", así que toda petición que muriera DESPUÉS de

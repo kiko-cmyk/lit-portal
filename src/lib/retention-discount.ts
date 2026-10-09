@@ -1,5 +1,5 @@
 import { alertSlackError } from "@/lib/alert";
-import { findAppliedDiscountCodeId, seal } from "@/lib/seal";
+import { findAllAppliedDiscountCodeIds, seal } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -118,22 +118,44 @@ export async function consumeRetentionDiscountIfCharged(
       .eq("status", "pending_charge")
       .eq("updated_at", row.updated_at as string);
 
-  // Resolve the code's CURRENT UUID: the stored one only if it is still actually
-  // attached (a plan-change reattach mints a new UUID), else re-scan fresh state.
+  // Resolve ALL of the code's CURRENT UUIDs. On a multi-line sub Seal shows the
+  // same code once per line, each with its own UUID, and removing only the first
+  // left the 15% live on the others (fixed 2026-10-10; seal.ts documents the rule
+  // on findAllAppliedDiscountCodeIds). The stored UUID joins the set only if it
+  // is still actually attached (a plan-change reattach mints a new one).
   const attachedIds = new Set(
     (fresh.items ?? []).flatMap((it) => (it.discount_codes ?? []).map((dc) => dc.id)),
   );
-  const discountCodeId =
-    storedId && attachedIds.has(storedId)
-      ? storedId
-      : findAppliedDiscountCodeId(fresh, row.code as string);
+  const discountCodeIds = new Set(findAllAppliedDiscountCodeIds(fresh, row.code as string));
+  if (storedId && attachedIds.has(storedId)) discountCodeIds.add(storedId);
 
-  if (discountCodeId) {
-    // The code is VISIBLE → remove it, then close (token-guarded). This is the
-    // only close that coincides with a real removal.
-    await seal.removeDiscountCode(Number(sealSubId), discountCodeId);
+  if (discountCodeIds.size) {
+    // The code is VISIBLE → remove EVERY copy, re-read, and close (token-guarded)
+    // only when none is left. This is the only close that coincides with a real
+    // removal. A single failed DELETE is not fatal by itself (if Seal drops every
+    // copy when the first one goes, the next DELETE has nothing to remove): what
+    // decides is the re-read. Anything left → throw before the close, so the row
+    // stays pending and the next trigger retries what is left.
+    for (const id of discountCodeIds) {
+      try {
+        await seal.removeDiscountCode(Number(sealSubId), id);
+      } catch (e) {
+        console.warn("[retention-discount] remove failed, re-reading", {
+          sealSubId,
+          msg: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    const after = await seal.getSubscriptionById(Number(sealSubId));
+    const left = after ? findAllAppliedDiscountCodeIds(after, row.code as string) : [...discountCodeIds];
+    if (left.length) {
+      throw new Error(`retention discount: ${left.length} copy(ies) of ${row.code} still on sub ${sealSubId}`);
+    }
     await closeRow();
-    console.log("[retention-discount] removed after first charge", { sealSubId });
+    console.log("[retention-discount] removed after first charge", {
+      sealSubId,
+      copies: discountCodeIds.size,
+    });
     return "removed";
   }
 

@@ -224,6 +224,16 @@ export function PlanOverlay({
             es: "Tu cambio no ha terminado de aplicarse bien. En unos minutos lo dejamos en orden y no se te cobrará de más. Recarga la página entonces para ver cómo ha quedado tu plan.",
           }),
         );
+      } else if (err.code === "plan_change_in_progress" || err.code === "referral_reward_busy") {
+        // Rechazado ANTES de tocar nada: otro cambio con el cerrojo tomado (un doble
+        // clic, o el cron poniendo los 10 € de un referido), o ese descuento que hay
+        // que retirar primero. No hay nada a medias: se reintenta en unos segundos.
+        setError(
+          t({
+            en: "We're finishing another update to your subscription. Wait a moment and try again.",
+            es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+          }),
+        );
       } else if (err.code === "change_in_progress") {
         setUncertain(true);
         setError(

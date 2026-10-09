@@ -17,6 +17,7 @@ import {
   QuickActionButton,
 } from "@/components/QuickActionButton";
 import { ReactivateCard } from "@/components/ReactivateCard";
+import { ReferralCard } from "@/components/ReferralCard";
 import { SectionDivider } from "@/components/SectionDivider";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { TierPill } from "@/components/TierPill";
@@ -555,6 +556,12 @@ export default function HubPage() {
                 disabled={sub.withinCutoff}
               />
             </section>
+
+            {/* Referidos, fase 0 (2026-10-10). Solo en esta rama (suscripción
+                activa): el programa es para quien está suscrito. La tarjeta pide
+                sus propios datos y no se pinta si el programa no está abierto para
+                este cliente (flag REFERRALS, B2B) o si algo falla. */}
+            <ReferralCard />
 
             <SectionDivider
               title={t({ en: "Upcoming", es: "Próximos pedidos" })}

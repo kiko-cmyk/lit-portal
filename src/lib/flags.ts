@@ -3,7 +3,11 @@
  *
  * Follows the `SUBSCRIPTION_CACHE_FIRST=off|shadow|on` convention already in
  * .env.example. Deliberately NOT `NEXT_PUBLIC_*`: the cohort changes with a Vercel env
- * edit and no rebuild, and the allowlist never reaches the browser.
+ * edit and no code change, and the allowlist never reaches the browser.
+ *
+ * OJO (2026-10-10): Vercel NO aplica un cambio de variable a los despliegues que ya
+ * existen. Tras editarla hay que hacer Redeploy del último despliegue de producción
+ * (sin rebuild de código, pero redeploy sí), o el flag sigue como estaba.
  */
 
 /** MIX_FLAVORS=off | allowlist | on */
@@ -62,6 +66,87 @@ export function profileSurveyEnabledFor(customerId: string): boolean {
     .map((s) => s.trim())
     .filter(Boolean)
     .includes(String(customerId));
+}
+
+/** off | allowlist | on, con la lista en `${name}_ALLOWLIST`. */
+function modeOf(name: string): "off" | "allowlist" | "on" {
+  const v = (process.env[name] ?? "off").trim().toLowerCase();
+  return v === "on" ? "on" : v === "allowlist" ? "allowlist" : "off";
+}
+
+function inAllowlist(name: string, customerId: string): boolean {
+  return (process.env[`${name}_ALLOWLIST`] ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(String(customerId));
+}
+
+/**
+ * REFERRALS=off | allowlist | on — referidos, fase 0 (2026-10-10).
+ *
+ * Gatea lo que el cliente VE y lo que se EMITE: la tarjeta «Trae a alguien» de
+ * Mi LIT y la creación de su código personal en Shopify. Nunca gatea lo que ya
+ * está en marcha: si se apaga con códigos repartidos, los pedidos que lleguen
+ * con ellos se siguen registrando y cualificando, porque al amigo Shopify ya le
+ * aplicó sus 10 € y quien le invitó se ha ganado los suyos. Para cortar el lado
+ * del amigo de verdad está el descuento padre en Shopify (`endsAt` = ahora).
+ */
+export function referralsEnabledFor(customerId: string): boolean {
+  const mode = modeOf("REFERRALS");
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  return inAllowlist("REFERRALS", customerId);
+}
+
+/**
+ * El mismo flag como ALCANCE, para quien recorre filas en vez de mirar un
+ * cliente: el cron que emite códigos filtra con esto ANTES de limitar el lote.
+ * Si filtrara después, con `allowlist` las filas de fuera de la lista ocuparían
+ * el lote en cada pasada y las de dentro no llegarían nunca.
+ */
+export function referralsScope(): { mode: "off" } | { mode: "on" } | { mode: "allowlist"; ids: string[] } {
+  const mode = modeOf("REFERRALS");
+  if (mode !== "allowlist") return { mode };
+  const ids = (process.env.REFERRALS_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return { mode, ids };
+}
+
+/**
+ * REFERRAL_REWARDS=off | allowlist | on — el ÚNICO paso que escribe un
+ * descuento en Seal: aplicar los 10 € de quien invita antes de su cobro.
+ *
+ * Separado de REFERRALS a propósito: el lado del amigo puede lanzarse mientras
+ * la aplicación en Seal se verifica de punta a punta con la allowlist. Apagado,
+ * las recompensas esperan en cola sin perderse. Consumir, retirar y revocar NO
+ * se gatean nunca: un código que ya está puesto en Seal hay que poder quitarlo
+ * siempre, con el flag como esté.
+ */
+export function referralRewardsEnabledFor(customerId: string): boolean {
+  const mode = modeOf("REFERRAL_REWARDS");
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  return inAllowlist("REFERRAL_REWARDS", customerId);
+}
+
+/**
+ * REFERRAL_REWARDS como ALCANCE, para la cola del cron: con `off` la cola ni se
+ * lee (no hay nada que aplicar), con `allowlist` se filtra en la consulta. Así un
+ * apagado de emergencia no llena las pasadas de lecturas a Seal y Shopify que no
+ * van a ningún sitio. Las recompensas VIVAS se procesan siempre, con el flag como
+ * esté: un código puesto en Seal hay que poder consumirlo y quitarlo.
+ */
+export function referralRewardsScope(): { mode: "off" } | { mode: "on" } | { mode: "allowlist"; ids: string[] } {
+  const mode = modeOf("REFERRAL_REWARDS");
+  if (mode !== "allowlist") return { mode };
+  const ids = (process.env.REFERRAL_REWARDS_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return { mode, ids };
 }
 
 /**

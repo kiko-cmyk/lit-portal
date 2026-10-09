@@ -225,11 +225,38 @@ export interface ClaimResponse {
 
 // ============ Referral ============
 
+/**
+ * GET /api/referral/code — la tarjeta «Trae a alguien» de Mi LIT.
+ *
+ * Sin enlace para compartir a propósito (decisión del 9-oct): el amigo escribe
+ * el código en el checkout. Sin ningún dato de los amigos: solo contadores.
+ */
 export interface ReferralCodeResponse {
-  code: string;
-  shareUrl: string;
-  conversions: number;
-  dropsEarned: number;
+  /** Programa abierto para este cliente (flag + no es B2B). Si es false, no se pinta nada. */
+  enabled: boolean;
+  /**
+   * `active` con `code`; `pending` mientras el cron lo da de alta en Shopify (el
+   * mismo día o el siguiente); `unavailable` si no se le puede dar (p. ej. B2B).
+   */
+  status: "active" | "pending" | "unavailable";
+  code: string | null;
+  /** Importes, para que el copy no los lleve escritos a mano. */
+  friendAmountEur: number;
+  rewardAmountEur: number;
+  /** Amigos que pagaron con su código y cualificaron. */
+  friendsJoined: number;
+  rewards: {
+    /** Esperando su cobro (se aplican 1-48 h antes). */
+    queued: number;
+    /** Ya puestos en su próximo cobro. */
+    applied: number;
+    /** Ya descontados en un cobro. */
+    consumed: number;
+    /** Fecha (ISO) del cobro que lleva aplicado un premio, si lo hay. */
+    nextDiscountedChargeAt: string | null;
+  };
+  /** Página de condiciones del programa (REFERRAL_TERMS_URL), o null si no hay. */
+  termsUrl: string | null;
 }
 
 // ============ The World ============

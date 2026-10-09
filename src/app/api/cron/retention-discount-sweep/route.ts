@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { alertSlackErrorAwaited } from "@/lib/alert";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { consumeRetentionDiscountIfCharged } from "@/lib/retention-discount";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -45,10 +46,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       tally[result] = (tally[result] ?? 0) + 1;
     } catch (e) {
       tally["error"] = (tally["error"] ?? 0) + 1;
+      const msg = e instanceof Error ? e.message : String(e);
       console.error("[retention-discount-sweep] consume threw", {
         sealSubscriptionId: row.seal_subscription_id,
         customerId: row.customer_id,
-        msg: e instanceof Error ? e.message : String(e),
+        msg,
+      });
+      // Desde 2026-10-10 el consumidor lanza si tras retirar QUEDA alguna copia del
+      // 15% en la sub (multi-línea). Eso es dinero: tiene que verse, no solo
+      // loguearse. Con el id en el código para que el dedupe de 60 s no funda dos.
+      await alertSlackErrorAwaited({
+        path: "/api/cron/retention-discount-sweep",
+        code: `retention_discount_consume_failed:${row.seal_subscription_id}`,
+        msg: `sub ${row.seal_subscription_id}: no se pudo retirar el 15% tras su cobro (${msg}). Se reintenta mañana; si persiste, quitarlo a mano en Seal.`,
+        customerId: String(row.customer_id),
       });
     }
   }
