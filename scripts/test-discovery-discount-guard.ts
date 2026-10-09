@@ -106,6 +106,41 @@ check(
   "Si el evento saliera primero y la escritura fallara, el cliente tendría el código y nosotros ninguna fila: su siguiente compra emitiría un segundo cupón.",
 );
 
+console.log("\n── Discovery + suscripción en el MISMO pedido (2026-10-09, #11724) ──\n");
+
+check(
+  "la sub nacida de ESTE pedido no cuenta como 'ya era suscriptor'",
+  /String\(sub\.order_id \?\? ""\) === orderId\) return false/.test(fnCode),
+  "Es la conversión, no un suscriptor previo. Sin excluirla, el mismo pedido daría o no crédito según si Seal ha creado la sub antes de que llegue orders/paid.",
+);
+
+check(
+  "elige el modo 'renewal' si el pedido trae suscripción (líneas o Seal)",
+  /orderHasSubscription \|\| sealHasSubFromThisOrder \? "renewal" : "checkout"/.test(fnCode),
+  "Las dos señales: el selling plan de las líneas (Admin API) y una sub de Seal nacida del pedido, por si la relectura de líneas falló.",
+);
+
+const renewalBranch = fnCode.indexOf('if (mode === "renewal") {');
+check(
+  "en modo 'renewal' NO dispara el flow de cinco emails",
+  renewalBranch > 0 &&
+    renewalBranch < fnCode.indexOf("Discovery Set Purchased") &&
+    /if \(mode === "renewal"\) \{[\s\S]*?return;\s*\}/.test(fnCode),
+  "Ese flow le pide suscribirse y canjear un código a quien ya está suscrito: es justo lo que le pasó al pedido #11724.",
+);
+
+check(
+  "en modo 'renewal' guarda la fila como pending_apply",
+  /mode: "renewal", status: "pending_apply"/.test(fnCode),
+  "Sin la fila pendiente, ni el webhook de Seal ni el cron sabrían que hay que aplicar los 4,99 € a la renovación.",
+);
+
+check(
+  "la rama 'checkout' no escribe columnas de la migración nueva",
+  /\.\.\.\(mode === "renewal" \? \{ mode: "renewal", status: "pending_apply" \} : \{\}\)/.test(fnCode),
+  "Así el cupón de siempre sigue saliendo aunque el código llegue a producción antes que la migración 2026-10-09.",
+);
+
 console.log("\n── la configuración del descuento ──\n");
 
 check(
@@ -139,9 +174,15 @@ check(
 );
 
 check(
-  "el título lleva el prefijo Discovery",
-  /title: `Discovery \$\{code\}/.test(mod),
+  "el título lleva el prefijo Discovery (los dos modos)",
+  /`Discovery \$\{code\}/.test(mod) && /`Discovery renovación \$\{code\}/.test(mod),
   "Es por donde los busca el cron de limpieza y por donde se distinguen en el admin de los del perfilado.",
+);
+
+check(
+  "el código de RENOVACIÓN no caduca",
+  /mode === "renewal"\s*\?\s*null/.test(mod) && /\.\.\.\(endsAt \?/.test(mod),
+  "La primera renovación de una sub de 45 días o más cae después de 30 días: un código caducado no descuenta, y el cron de limpieza BORRA los Discovery caducados sin usar antes de que se cobre.",
 );
 
 console.log("\n── el cron de limpieza no borra cupones ajenos ──\n");
