@@ -501,6 +501,13 @@ function Solucion({
       });
     if (code === "gateway_timeout" || status === 504)
       return t({ en: "The service is taking longer than usual. Try again in a moment.", es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento." });
+    // Rechazado ANTES de tocar nada (otro cambio con el cerrojo tomado, o el descuento de
+    // un referido que había que retirar primero): se reintenta en unos segundos.
+    if (code === "plan_change_in_progress" || code === "referral_reward_busy")
+      return t({
+        en: "We're finishing another update to your subscription. Wait a moment and try again.",
+        es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+      });
     // Escritura a medias o sin cerrar (2-oct-2026): la ruta no deja tarificar encima y el
     // cron la cierra en minutos. Reintentar en el acto solo devuelve el 409.
     if (code === "change_in_progress")

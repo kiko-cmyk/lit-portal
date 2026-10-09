@@ -257,6 +257,11 @@ export function SkipOverlay({
                 en: "The service is taking longer than usual. Wait a moment and try again.",
                 es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
               })
+            : code === "plan_change_in_progress" || code === "referral_reward_busy"
+              ? t({
+                  en: "We're finishing another update to your subscription. Wait a moment and try again.",
+                  es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+                })
             : code === "change_in_progress"
               ? t({
                   en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",

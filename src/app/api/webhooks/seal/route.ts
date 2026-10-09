@@ -5,6 +5,7 @@ import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
 import { klaviyo } from "@/lib/klaviyo";
 import { discoveryRenewalCreditOnSealEvent } from "@/lib/discovery-renewal-credit";
+import { consumeReferralRewardsForSub } from "@/lib/referral-reward";
 import { consumeRetentionDiscountIfCharged } from "@/lib/retention-discount";
 import {
   getNextBillingAttempt,
@@ -140,6 +141,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Mismo trato para el crédito del Discovery Set: aplica si seguía
         // pendiente y lo retira tras su cobro. Nunca lanza.
         await discoveryRenewalCreditOnSealEvent(sub);
+        // Lo mismo para los 10 € de un referido (2026-10-10): si ya hay pedido de
+        // renovación con el código, se retira. Solo CONSUME, nunca aplica (aplicar
+        // es cosa del cron), y nunca lanza: el cron es el respaldo.
+        await consumeReferralRewardsForSub(sub);
         break;
       case "subscription.cancelled":
       case "subscription.expired":
@@ -191,6 +196,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // signal that the customer fixed the card we just emailed them about.
       case "subscription.resumed":
       case "subscription.reactivated":
+        await syncSubscription(sub);
+        // Una sub que vuelve a estar activa puede ser donde esperan los 10 € de un
+        // referido (2026-10-10): el cron la vuelve a mirar en su pasada siguiente
+        // en vez de dentro de días. Solo adelanta la mirada; nunca aplica.
+        await consumeReferralRewardsForSub(sub);
+        break;
       case "subscription.shipping_address_updated":
         await syncSubscription(sub);
         break;
@@ -232,6 +243,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         await consumeRetentionDiscountSafe(sub);
         // Retira el crédito del Discovery Set tras la renovación que lo cobró.
         await discoveryRenewalCreditOnSealEvent(sub);
+        await consumeReferralRewardsForSub(sub);
         break;
       }
       case "billing_attempt.failed": {
