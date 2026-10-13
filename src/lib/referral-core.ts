@@ -8,7 +8,7 @@
  * reúnen los hechos y le preguntan a este módulo qué hacer.
  *
  * El programa, en una frase: cada suscriptor tiene un código personal
- * (`MARIA27`); su amigo lo escribe en el checkout y tiene 10 € en su primer
+ * (`MARIA7KQ2`); su amigo lo escribe en el checkout y tiene 10 € en su primer
  * pedido de cajas (suscripción o compra única); quien invita tiene 10 € menos
  * en su siguiente cobro.
  */
@@ -265,7 +265,7 @@ export function hasB2BTag(tags: string[] | null | undefined): boolean {
 export function buildShareText(code: string, lang: "es" | "en"): string {
   return lang === "en"
     ? `I've been using LIT for a while and I can feel it. If you want to try it, use my code ${code} at litsalt.com and get €10 off your first box.`
-    : `Llevo un tiempo con LIT y lo noto. Si lo quieres probar, usa mi código ${code} en litsalt.com y tienes 10 € de descuento en tu primera caja.`;
+    : `Llevo un tiempo con LIT y lo noto. Si lo quieres probar, usa mi código ${code} en litsalt.com y tienes 10€ de descuento en tu primera caja.`;
 }
 
 export function whatsappShareUrl(text: string): string {

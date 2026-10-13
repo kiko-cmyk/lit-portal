@@ -27,7 +27,7 @@ interface ReferralCardProps {
  *  - Fondo: el mismo negro con foto velada que el resto de banners del portal
  *    (ProfileSurveyBanner, SubscribeBanner), pero con SU foto: amigos pasándolo
  *    bien (`friends-photo.ts`), no la misma imagen en todos los banners.
- *  - Los 10 € a la vista: van en el TITULAR y en amarillo, no solo en el
+ *  - Los 10€ a la vista: van en el TITULAR y en amarillo, no solo en el
  *    antetítulo pequeño.
  *  - Equilibrada: el titular a la izquierda; el texto, el código y la letra
  *    pequeña a la derecha. Con solo el código a la derecha, esa mitad se veía
@@ -93,15 +93,15 @@ export function ReferralCard({ placement }: ReferralCardProps) {
   }
   if (rewards.nextDiscountedChargeAt) {
     const d = dateLabel(rewards.nextDiscountedChargeAt);
-    lines.push(t({ en: `€10 off your delivery on ${d}`, es: `10 € menos en tu envío del ${d}` }));
+    lines.push(t({ en: `€10 off your delivery on ${d}`, es: `10€ menos en tu envío del ${d}` }));
   }
   if (rewards.queued > 0) {
     lines.push(
       rewards.queued === 1
-        ? t({ en: "€10 waiting for your next delivery", es: "10 € esperando a tu próximo envío" })
+        ? t({ en: "€10 waiting for your next delivery", es: "10€ esperando a tu próximo envío" })
         : t({
             en: `${rewards.queued} rewards of €10 waiting for your next deliveries`,
-            es: `${rewards.queued} premios de 10 € esperando a tus próximos envíos`,
+            es: `${rewards.queued} premios de 10€ esperando a tus próximos envíos`,
           }),
     );
   }
@@ -156,10 +156,10 @@ export function ReferralCard({ placement }: ReferralCardProps) {
             className="text-[11px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]"
             style={{ fontFamily: "var(--font-body)" }}
           >
-            <T en="€10 each" es="10 € para cada uno" />
+            <T en="€10 each" es="10€ para cada uno" />
           </p>
-          {/* Los 10 € en el titular y en amarillo: es lo primero que se tiene
-              que leer. Dos líneas fijas («TRAE A ALGUIEN» / «Y LLÉVATE 10 €»):
+          {/* Los 10€ en el titular y en amarillo: es lo primero que se tiene
+              que leer. Dos líneas fijas («TRAE A ALGUIEN» / «Y LLÉVATE 10€»):
               dejando que el navegador partiera, la «Y» se quedaba colgando al
               final de la primera. `whitespace-nowrap` para que «10» y «€» no se
               separen nunca. */}
@@ -178,7 +178,7 @@ export function ReferralCard({ placement }: ReferralCardProps) {
               <>
                 <span className="block">Trae a alguien</span>
                 <span className="block">
-                  y llévate <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">10 €</span>
+                  y llévate <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">10€</span>
                 </span>
               </>
             )}
@@ -190,7 +190,7 @@ export function ReferralCard({ placement }: ReferralCardProps) {
           <p className="text-[14px] leading-[1.55] text-[#cfc8b6] md:text-[15px]">
             <T
               en="Share your code with anyone you like. Your friend saves €10 on their first order, and you get €10 off your next delivery."
-              es="Comparte tu código con quien quieras. Tu amigo ahorra 10 € en su primer pedido y tú, 10 € en tu próximo envío."
+              es="Comparte tu código con quien quieras. Tu amigo ahorra 10€ en su primer pedido y tú, 10€ en tu próximo envío."
             />
           </p>
 

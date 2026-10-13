@@ -1035,7 +1035,7 @@ async function createRewardAndNotify(conv: Pick<ConversionRow, "id" | "referrer_
         email,
         {
           reward_amount: REFERRAL_REWARD_CENTS / 100,
-          reward_amount_label: "10 €",
+          reward_amount_label: "10€",
           friends_joined: joined ?? 1,
           referral_code: conv.code,
         },
@@ -2047,7 +2047,7 @@ async function notifyRewardApplied(r: RewardRow, chargeDueAtMs: number): Promise
       email,
       {
         reward_amount: r.amount_cents / 100,
-        reward_amount_label: "10 €",
+        reward_amount_label: "10€",
         charge_date: chargeIso,
         charge_date_label: formatShipDateEs(chargeIso),
       },
