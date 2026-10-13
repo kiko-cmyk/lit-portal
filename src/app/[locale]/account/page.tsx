@@ -365,7 +365,7 @@ export default function AccountPage() {
       {/* pb-32 reserves room for the fixed tab bar; without one, that is just a
           hole at the end of the page. */}
       <main
-        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-6 md:pt-[100px] md:pb-12`}
+        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
       >
         {/* Rediseño lp2 (Juan 2026-10-13, aprobado en el lienzo PRE). Orden:
             saludo con cifras → encuesta (si toca) → «Tu plan» y «Tus datos» a
@@ -373,12 +373,20 @@ export default function AccountPage() {
             Todas las tarjetas se separan con el hueco de esta columna (16 px en
             móvil, 24 en escritorio), así que ninguna lleva margen propio. */}
 
-        {/* Saludo en una línea y a dos pesos («HOLA, JUAN»), con «miembro
-            desde» y las cajas entregadas como cifras al lado (Juan: «ponlo de
-            otro modo más elegante» que las pastillas). Para un mayorista la
-            cifra cuenta pedidos, no cajas de un plan. */}
+        {/* Saludo a dos pesos («HOLA, JUAN»), con «miembro desde» y las cajas
+            entregadas como cifras al lado (Juan: «ponlo de otro modo más
+            elegante» que las pastillas). Para un mayorista la cifra cuenta
+            pedidos, no cajas de un plan.
+
+            Al tamaño de la fecha del hero del Hub, 72 px en móvil y 88 en
+            escritorio (Juan 2026-10-13). En móvil va en dos líneas («HOLA,» /
+            «JUAN»), y un nombre largo baja de tamaño para caber en la suya en
+            vez de salirse de la pantalla (`--hola-size`). */}
         <div className="mx-6 mt-1 flex flex-col gap-5 md:mx-0 md:mt-2 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-x-10 md:gap-y-6">
-          <h1 className="m-0 font-display text-[54px] uppercase leading-[0.9] tracking-[0.005em] text-[#2F343D] md:text-[104px] md:leading-[0.88]">
+          <h1
+            className="m-0 font-display text-[length:var(--hola-size)] uppercase leading-[0.95] tracking-[0.005em] text-[#2F343D] md:text-[88px] md:leading-[0.9]"
+            style={{ "--hola-size": `min(72px, calc((100vw - 48px) / ${(clashNameEm(firstName) * 1.03).toFixed(2)}))` } as React.CSSProperties}
+          >
             <span className="font-light">{t({ en: "Hi,", es: "Hola," })}</span>
             {firstName && (
               <>
@@ -723,8 +731,10 @@ export default function AccountPage() {
             que nos escriban para cancelar). Las dos alternativas abren los
             mismos overlays que «Tu plan», con el mismo bloqueo de la ventana
             de cierre. */}
+        {/* `mt-8 md:mt-6` + el hueco de la columna = 48 px, lo mismo que hay
+            entre los referidos y la banda (Juan 2026-10-13). */}
         {subActive && !subPaused && (
-          <div className="mt-7 md:mt-10">
+          <div className="mt-8 md:mt-6">
             <DangerZone
               onCancel={() => setCancelOpen(true)}
               onSkip={() => setSkipOpen(true)}
@@ -889,6 +899,26 @@ export default function AccountPage() {
   );
 }
 
+/**
+ * Ancho aproximado de un nombre en Clash Display Semibold, en «em». Medido con
+ * la fuente: la I 0,23, la M 0,93, la W 1,09, la A 0,79 y ninguna otra pasa de
+ * 0,78 (se cuentan a 0,74). Con él, en móvil, un nombre largo baja de tamaño en
+ * el saludo lo justo para caber en su línea, en vez de salirse de la pantalla.
+ * Nunca menos que «HOLA,» (2,9), que va en la línea de arriba al mismo tamaño.
+ */
+function clashNameEm(name: string): number {
+  let em = 0;
+  for (const c of name.toUpperCase()) {
+    em +=
+      c === "I" || c === "Í" ? 0.23
+      : c === "M" ? 0.93
+      : c === "W" ? 1.1
+      : c === "A" || c === "Á" ? 0.8
+      : 0.74;
+  }
+  return Math.max(em, 2.9);
+}
+
 function Section({
   title,
   children,
@@ -970,6 +1000,10 @@ function PlanCard({
   const price =
     subscription.chargeTotalCents > 0 ? formatEuro(subscription.chargeTotalCents, lang) : null;
   const cell = "border-[#2F343D]/12";
+  const manyFlavors = (subscription.composition?.length ?? 0) >= 3;
+  // Con 4 sabores, en un móvil de 360 cada columna mide 62 px: la caja y el
+  // nombre bajan un punto para caber (en escritorio, igual que con 3).
+  const fourFlavors = (subscription.composition?.length ?? 0) >= 4;
 
   return (
     <Lp2Card as="article" className="flex h-full flex-col">
@@ -982,18 +1016,40 @@ function PlanCard({
         </span>
       </div>
 
+      {/* Los sabores en UNA fila (Juan 2026-10-13). Con 1 o 2, la caja a la
+          izquierda y el texto al lado; con 3 o más, una columna por sabor con la
+          caja arriba y el texto debajo, que es lo que deja caber hasta 4 en un
+          móvil de 360 y en la tarjeta estrecha de escritorio (dos columnas desde
+          1024 px). */}
       {subscription.composition?.length ? (
-        <div className="mt-[18px] grid grid-cols-2 gap-3 border-y border-[#2F343D]/12 py-3.5 md:mt-[22px] md:gap-4">
+        <div
+          className={`mt-[18px] grid border-y border-[#2F343D]/12 py-3.5 md:mt-[22px] md:gap-4 ${
+            manyFlavors ? (subscription.composition.length >= 4 ? "gap-2" : "gap-3") : "grid-cols-2 gap-3"
+          }`}
+          style={
+            manyFlavors
+              ? { gridTemplateColumns: `repeat(${subscription.composition.length}, minmax(0, 1fr))` }
+              : undefined
+          }
+        >
           {subscription.composition.map((c) => {
             const v = flavorVisual(c.flavor);
             const name = Object.prototype.hasOwnProperty.call(FLAVORS, c.flavor)
               ? shortLabel(c.flavor as FlavorKey)
               : unknownFlavorName(c.flavor);
             return (
-              <div key={c.flavor} className="flex items-center gap-2.5 md:gap-3.5">
-                <span aria-hidden className="relative h-[58px] w-[66px] flex-none md:h-[68px] md:w-[80px]">
+              <div
+                key={c.flavor}
+                className={manyFlavors ? "flex min-w-0 flex-col items-start gap-2" : "flex items-center gap-2.5 md:gap-3.5"}
+              >
+                <span
+                  aria-hidden
+                  className={`relative flex-none md:h-[68px] md:w-[80px] ${fourFlavors ? "h-[50px] w-[56px]" : "h-[58px] w-[66px]"}`}
+                >
                   <span
-                    className="absolute bottom-0 left-1 h-[52px] w-[52px] rounded-full md:left-1.5 md:h-[60px] md:w-[60px]"
+                    className={`absolute bottom-0 left-1 rounded-full md:left-1.5 md:h-[60px] md:w-[60px] ${
+                      fourFlavors ? "h-[44px] w-[44px]" : "h-[52px] w-[52px]"
+                    }`}
                     style={{ background: v.disc }}
                   />
                   {v.box && (
@@ -1001,7 +1057,7 @@ function PlanCard({
                     <img
                       src={v.box}
                       alt=""
-                      className="absolute bottom-0.5 left-0 h-auto w-[62px] max-w-none md:w-[74px]"
+                      className={`absolute bottom-0.5 left-0 h-auto max-w-none md:w-[74px] ${fourFlavors ? "w-[53px]" : "w-[62px]"}`}
                       style={{ filter: "drop-shadow(0 8px 8px rgba(26,28,34,0.22))" }}
                     />
                   )}
@@ -1010,7 +1066,11 @@ function PlanCard({
                   <span className="block font-display text-[24px] font-semibold leading-none md:text-[28px]">
                     {c.boxes}×
                   </span>
-                  <span className="mt-[5px] block text-[9.5px] font-bold uppercase leading-[1.3] tracking-[0.14em] md:mt-1.5 md:text-[10px]">
+                  <span
+                    className={`mt-[5px] block font-bold uppercase leading-[1.3] md:mt-1.5 md:text-[10px] md:tracking-[0.14em] ${
+                      fourFlavors ? "text-[9px] tracking-[0.08em]" : "text-[9.5px] tracking-[0.14em]"
+                    }`}
+                  >
                     Salty <br className="md:hidden" />
                     {name}
                   </span>
