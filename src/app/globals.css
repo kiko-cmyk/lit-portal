@@ -306,6 +306,19 @@ button:disabled,
   to   { transform: translateX(-50%); }
 }
 
+/* Banda de cierre del rediseño lp2 (Juan 2026-10-13: «esto se debe mover»):
+   las dos filas en sentidos opuestos, en bucle continuo. Cada fila lleva el
+   texto cuatro veces y se desplaza media fila, así que el empalme no se ve. */
+.lp2-band-row {
+  animation: marquee 60s linear infinite;
+}
+/* La fila calada mide el doble (nombres de sabor más largos): el doble de
+   tiempo para que las dos vayan a la misma velocidad. */
+.lp2-band-row--rev {
+  animation-direction: reverse;
+  animation-duration: 120s;
+}
+
 /* Wax-seal slow spin — text around a circular path rotates 360deg over
    28s. The badge sits in the hero so the page has a tactile / printed
    element, not just type. */
@@ -357,7 +370,8 @@ button:disabled,
 @media (prefers-reduced-motion: reduce) {
   .mesh-bg::before,
   .cover-rise,
-  .char-rise {
+  .char-rise,
+  .lp2-band-row {
     animation: none;
   }
   .reveal {

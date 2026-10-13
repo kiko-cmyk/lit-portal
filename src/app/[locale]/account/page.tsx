@@ -328,7 +328,7 @@ export default function AccountPage() {
   };
 
   return (
-    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col overflow-x-clip bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
@@ -370,7 +370,7 @@ export default function AccountPage() {
       {/* pb-32 reserves room for the fixed tab bar; without one, that is just a
           hole at the end of the page. */}
       <main
-        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1184px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
+        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-6 md:pt-[100px] md:pb-12`}
       >
         {/* Rediseño lp2 (Juan 2026-10-13, aprobado en el lienzo PRE). Orden:
             saludo con cifras → encuesta (si toca) → «Tu plan» y «Tus datos» a
@@ -384,7 +384,7 @@ export default function AccountPage() {
             cifra cuenta pedidos, no cajas de un plan. */}
         <div className="mx-6 mt-1 flex flex-col gap-5 md:mx-0 md:mt-2 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-x-10 md:gap-y-6">
           <h1 className="m-0 font-display text-[54px] uppercase leading-[0.9] tracking-[0.005em] text-[#2F343D] md:text-[104px] md:leading-[0.88]">
-            <span className="font-extralight">{t({ en: "Hi,", es: "Hola," })}</span>
+            <span className="font-light">{t({ en: "Hi,", es: "Hola," })}</span>
             {firstName && (
               <>
                 {" "}

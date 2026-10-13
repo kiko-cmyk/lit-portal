@@ -85,7 +85,7 @@ export default async function RootLayout({
         <meta name="google" content="notranslate" />
         <link rel="preconnect" href="https://api.fontshare.com" crossOrigin="anonymous" />
         <link
-          href="https://api.fontshare.com/v2/css?f[]=clash-display@200,300,400,500,600,700&display=swap"
+          href="https://api.fontshare.com/v2/css?f[]=clash-display@300,400,500,600,700&display=swap"
           rel="stylesheet"
         />
       </head>
