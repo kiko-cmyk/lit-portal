@@ -1,6 +1,6 @@
 # Referidos «Trae a alguien», fase 0
 
-**El programa en una frase:** cada suscriptor activo tiene un código personal (`MARIA7KQ2`: su nombre, una cifra y tres caracteres al azar). Su amigo lo escribe en el checkout y tiene 10 € en su primer pedido de cajas, con suscripción o en compra única. Quien invita tiene 10 € menos en su siguiente cobro.
+**El programa en una frase:** cada suscriptor activo tiene un código personal (`MARIA7KQ2`: su nombre, una cifra y tres caracteres al azar). Su amigo lo escribe en el checkout y tiene 10€ en su primer pedido de cajas, con suscripción o en compra única. Quien invita tiene 10€ menos en su siguiente cobro.
 
 **Lo que manda en el diseño:** en Seal, un código aplicado a una suscripción se repite en cada cobro hasta que se quita, y aplicar dos veces duplica el descuento. Por eso el premio de quien invita sigue estas reglas:
 
@@ -27,7 +27,7 @@ Cualquier alerta de dinero lleva el id de la recompensa en su código de Slack.
 | `src/app/api/cron/referral-sweep/route.ts` | Cron: aplica, consume y retira premios, cualifica pendientes y emite códigos. Cada 4 h desde el crontab del VPS; Vercel (Hobby, solo crons diarios) lo lanza además a las 06:50 UTC como red |
 | `src/app/api/referral/code/route.ts` | Los datos de la tarjeta (solo lee) |
 | `src/app/api/referral/track/route.ts` | «Ha compartido» (solo el canal, para el KPI) |
-| `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN Y LLÉVATE 10 €» en Suscripción y en Cuenta, solo con la suscripción activa |
+| `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN Y LLÉVATE 10€» en Suscripción y en Cuenta, solo con la suscripción activa |
 | `scripts/referral-*.ts` | Preflight, descuento padre, backfill de códigos, operación a mano |
 | `scripts/test-referral-*.ts` | Tests (dentro de `npm test`) |
 
@@ -83,7 +83,7 @@ Tras cambiar cualquiera, hay que hacer **Redeploy**: Vercel no aplica cambios de
    - Un uso por cliente en todo el programa: con el email de una de las compras, meter en el checkout el código de OTRA persona del equipo. Shopify tiene que rechazarlo, sin llegar a pagar.
 3. **Aplicación:** sobre la sub 14692586 (creada a mano), pasada a 2 líneas y con el intento llevado a la ventana. Correr `GET /api/cron/referral-sweep?only_sub=14692586` con `CRON_SECRET`. Comprobar:
    - el código aparece en las líneas;
-   - `total_value` baja 10 € (no 20);
+   - `total_value` baja 10€ (no 20);
    - quedan guardados los UUID.
 4. **Cambio de sabor:** cambiar el sabor desde el portal. El código se retira, la recompensa vuelve a la cola y el cron la repone.
 5. **Borrado en Shopify:** con un `LITREF-PROBE` desechable, aplicarlo, borrarlo en Shopify y releer Seal (¿sigue descontando?). Después, retirarlo.
@@ -118,11 +118,11 @@ Ver `docs/ROLLBACK.md`, sección (e). Del lado del amigo, lo inmediato es poner 
 
 ## Riesgos que se aceptan en la fase 0
 
-- **Un cliente que ya ha comprado puede usar un código de amigo una vez,** porque Shopify no reconoce a los invitados sin sesión. Quien le invitó no gana nada, porque la cualificación lo rechaza. Coste máximo: 10 € por cliente, una sola vez en su vida para todo el programa. Esto último depende de que «un uso por cliente» valga para el descuento padre entero; se comprueba en el E2E (paso 2).
+- **Un cliente que ya ha comprado puede usar un código de amigo una vez,** porque Shopify no reconoce a los invitados sin sesión. Quien le invitó no gana nada, porque la cualificación lo rechaza. Coste máximo: 10€ por cliente, una sola vez en su vida para todo el programa. Esto último depende de que «un uso por cliente» valga para el descuento padre entero; se comprueba en el E2E (paso 2).
 - **Un código puede filtrarse** (una web de cupones, un grupo grande). Adivinar uno ya no es posible: desde el 13-oct son nombre + cifra + 3 caracteres, 238.328 combinaciones por nombre (con el formato viejo, nombre + 2 cifras, eran 90 y se encontraban probando). Si uno se filtra, la regla de velocidad lo para en revisión y se cambia: `npx tsx scripts/referral-regenerate-codes.ts --customer=<id> --apply` y después `referral-backfill-codes.ts --issue --only=<id>`.
 - **Un `LITREF` filtrado valdría una vez en el checkout.** Es aleatorio y solo se ve en Seal o en el pedido de quien invita, y se borra en Shopify en cuanto se consume.
 - **Con `REFERRAL_REWARDS=off` la cola ni se lee.** Revocar o caducar una recompensa en cola espera a que se abra el flag. No mueve dinero: en cola no hay nada puesto en Seal.
-- **Un cliente puede encontrarse el cerrojo tomado** si cambia su plan justo cuando el cron le está poniendo los 10 € (unos segundos, solo en las 48 h antes de su cobro). Ve «Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.»
+- **Un cliente puede encontrarse el cerrojo tomado** si cambia su plan justo cuando el cron le está poniendo los 10€ (unos segundos, solo en las 48 h antes de su cobro). Ve «Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.»
 
 ## Klaviyo
 
@@ -132,45 +132,45 @@ Ningún evento lleva datos del amigo.
 |---|---|---|
 | Propiedad de perfil `referral_code` | al activarse el código | el código |
 | `referral_friend_joined` | a quien invita, cuando un amigo cualifica | `reward_amount`, `reward_amount_label`, `friends_joined`, `referral_code` |
-| `referral_reward_applied` | a quien invita, cuando el cron aplica los 10 € | `reward_amount`, `reward_amount_label`, `charge_date`, `charge_date_label` |
+| `referral_reward_applied` | a quien invita, cuando el cron aplica los 10€ | `reward_amount`, `reward_amount_label`, `charge_date`, `charge_date_label` |
 | `referral_shared` | al copiar el código en la tarjeta | `channel` (`copy`) |
 
 **Qué montar:**
 - **Flow transaccional «Referidos · Alguien se ha unido»** (disparador `referral_friend_joined`, con reentrada permitida).
 - **Campaña de lanzamiento.**
-- **Opcional:** flow «Tu entrega llega con 10 € menos» (`referral_reward_applied`).
+- **Opcional:** flow «Tu entrega llega con 10€ menos» (`referral_reward_applied`).
 - Proceso de diseño: Figma (página email) → HTML → preview → Klaviyo.
 
 ## Copy
 
 Reglas: tuteo, sin guiones largos y sin emojis. En los emails, «tu próximo LIT» y «entrega», no «suscripción» ni «pedido».
 
-**Tarjeta** (Suscripción y Cuenta; rediseño del 13-oct: fondo negro con foto como el resto de banners, los 10 € en el titular, solo el código con su botón de copiar)
+**Tarjeta** (Suscripción y Cuenta; rediseño del 13-oct: fondo negro con foto como el resto de banners, los 10€ en el titular, solo el código con su botón de copiar)
 
 | | ES | EN |
 |---|---|---|
-| Antetítulo | 10 € para cada uno | €10 each |
-| Título | TRAE A ALGUIEN / Y LLÉVATE 10 € («10 €» en amarillo) | BRING SOMEONE IN / AND GET €10 |
-| Texto | Comparte tu código con quien quieras. Tu amigo ahorra 10 € en su primer pedido y tú, 10 € en tu próximo envío. | Share your code with anyone you like. Your friend saves €10 on their first order, and you get €10 off your next delivery. |
+| Antetítulo | 10€ para cada uno | €10 each |
+| Título | TRAE A ALGUIEN / Y LLÉVATE 10€ («10€» en amarillo) | BRING SOMEONE IN / AND GET €10 |
+| Texto | Comparte tu código con quien quieras. Tu amigo ahorra 10€ en su primer pedido y tú, 10€ en tu próximo envío. | Share your code with anyone you like. Your friend saves €10 on their first order, and you get €10 off your next delivery. |
 | Letra pequeña | Válido en la primera compra de tu amigo, con suscripción o en compra única. Ver condiciones | Valid on your friend's first purchase, with a subscription or one-time. See terms |
 
 **Sin botones de compartir** (13-oct): ni WhatsApp ni «otras formas de compartir». El cliente copia el código y se lo pasa a quien quiera, como quiera. El texto prellenado de WhatsApp sigue en `buildShareText` por si vuelve en la fase 1.
 
 **Email «Alguien se ha unido con tu código»** (transaccional)
 - **Asunto:** Alguien se ha unido con tu código
-- **Preheader:** Tienes 10 € menos en tu próximo LIT.
-- **Cuerpo:** «Alguien ha probado LIT con tu código {{ event.referral_code }}. Te has ganado 10 € menos en tu próximo LIT: se aplican solos justo antes del cobro, no tienes que hacer nada. Tu código sigue funcionando, así que si conoces a alguien más, pásaselo.»
+- **Preheader:** Tienes 10€ menos en tu próximo LIT.
+- **Cuerpo:** «Alguien ha probado LIT con tu código {{ event.referral_code }}. Te has ganado 10€ menos en tu próximo LIT: se aplican solos justo antes del cobro, no tienes que hacer nada. Tu código sigue funcionando, así que si conoces a alguien más, pásaselo.»
 - **CTA:** Ver mi código → `https://litsalt.com/apps/portal/es/mi-lit`
 
 **Email de lanzamiento** (campaña, al segmento con `referral_code` y consentimiento)
-- **Asunto:** 10 € para ti, 10 € para quien traigas
+- **Asunto:** 10€ para ti, 10€ para quien traigas
 - **Preheader:** Tu código: {{ person.referral_code }}
-- **Cuerpo:** «Si LIT te funciona, seguro que conoces a alguien a quien le vendría bien. Pásale tu código {{ person.referral_code }}: tendrá 10 € de descuento en su primera caja, la pida como la pida, y tú 10 € menos en tu próximo LIT. Vale para quien aún no ha probado LIT.»
+- **Cuerpo:** «Si LIT te funciona, seguro que conoces a alguien a quien le vendría bien. Pásale tu código {{ person.referral_code }}: tendrá 10€ de descuento en su primera caja, la pida como la pida, y tú 10€ menos en tu próximo LIT. Vale para quien aún no ha probado LIT.»
 - **CTA:** Compartir mi código → `https://litsalt.com/apps/portal/es/mi-lit`
 
-**Email opcional «Tu próxima entrega llega con 10 € menos»**
-- **Asunto:** Tu próxima entrega llega con 10 € menos
-- **Cuerpo:** «Gracias por traer a alguien a LIT. Tu próximo LIT, el {{ event.charge_date_label }}, llega con 10 € de descuento.»
+**Email opcional «Tu próxima entrega llega con 10€ menos»**
+- **Asunto:** Tu próxima entrega llega con 10€ menos
+- **Cuerpo:** «Gracias por traer a alguien a LIT. Tu próximo LIT, el {{ event.charge_date_label }}, llega con 10€ de descuento.»
 
 ## Condiciones (texto para `/pages/trae-a-alguien-condiciones`)
 
@@ -178,12 +178,12 @@ Reglas: tuteo, sin guiones largos y sin emojis. En los emails, «tu próximo LIT
 
 1. **Quién puede invitar.** Cualquier persona con una suscripción activa a LIT. Tu código personal está en Mi LIT y lleva tu nombre de pila.
 2. **Qué recibe tu amigo.**
-   - 10 € de descuento en su primer pedido de cajas LIT en litsalt.com, con suscripción o en compra única.
+   - 10€ de descuento en su primer pedido de cajas LIT en litsalt.com, con suscripción o en compra única.
    - Solo para quien no ha comprado nunca cajas LIT.
    - Un código de amigo por persona.
    - No se combina con otros descuentos.
 3. **Qué recibes tú.**
-   - 10 € de descuento en tu siguiente cobro de suscripción por cada amigo que complete su pedido, si ese cobro cae al menos 48 h después.
+   - 10€ de descuento en tu siguiente cobro de suscripción por cada amigo que complete su pedido, si ese cobro cae al menos 48 h después.
    - Se aplica un descuento por cobro; si traes a varias personas, se aplican en los cobros siguientes. Si ese cobro ya lleva otro descuento, el tuyo pasa al siguiente.
    - Los descuentos no tienen valor en efectivo.
    - Caducan si en 180 días no tienes una suscripción activa en la que aplicarlos.
