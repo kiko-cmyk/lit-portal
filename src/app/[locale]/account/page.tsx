@@ -10,6 +10,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
+import { ReferralCard } from "@/components/ReferralCard";
 import { SubscribeBanner } from "@/components/SubscribeBanner";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
@@ -494,6 +495,14 @@ export default function AccountPage() {
         {customer?.profileSurvey?.enabled && !customer.profileSurvey.answered && (
           <ProfileSurveyBanner onStart={() => setSurveyOpen(true)} />
         )}
+
+        {/* «Trae a alguien» (Juan 2026-10-13): en las dos pantallas con
+            suscripción, también aquí. Solo con la suscripción ACTIVA, igual que
+            en Suscripción (allí va en la rama activa): el programa es para quien
+            está suscrito, y una pausada no puede recibir sus 10 € hasta que
+            vuelva. La tarjeta se esconde sola si el programa no está abierto
+            para este cliente (flag REFERRALS, B2B). */}
+        {!accountOnly && subscription?.status === "active" && <ReferralCard placement="account" />}
 
 
         {justSkipped && subscription?.nextShipDate && (

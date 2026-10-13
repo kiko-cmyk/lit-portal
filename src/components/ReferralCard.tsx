@@ -3,37 +3,48 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
-import { buildShareText, whatsappShareUrl } from "@/lib/referral-core";
+import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
 import type { ReferralCodeResponse } from "@/lib/types";
+
+interface ReferralCardProps {
+  /**
+   * Dónde va, para el margen: en Suscripción (Hub) sigue el ritmo de sus
+   * secciones (40-48px encima); en Cuenta, el de las suyas (12px debajo, igual
+   * que ProfileSurveyBanner y cada `Section`).
+   */
+  placement: "hub" | "account";
+}
 
 /**
  * «Trae a alguien» (referidos, fase 0, 2026-10-10).
  *
- * Vive en el Hub, en la rama de suscripción activa, debajo de las acciones
- * rápidas. Basada en la tarjeta del hi-fi de Drops (`designs/mobile/lit-drops-hifi`):
- * índigo con el código en amarillo. Con dos diferencias deliberadas:
+ * Vive en las DOS pantallas con suscripción (Juan, 2026-10-13): Suscripción,
+ * debajo de las acciones rápidas, y Cuenta, debajo del banner del perfilado.
+ * Solo con la suscripción ACTIVA: el programa es para quien está suscrito.
  *
- *  - SIN Drops: todavía no los ve el cliente (llegarán con Drops 2.0) y prometer
- *    lo que no puede ver ni gastar es una deuda, no un incentivo (el mismo motivo
- *    por el que ProfileSurveyBanner no los anuncia).
- *  - SIN enlace: se comparte el CÓDIGO y el amigo lo escribe en el checkout
- *    (decisión del 9-oct). WhatsApp lleva un texto con el código dentro.
+ * ── Diseño (Juan, 2026-10-13) ──
+ *
+ *  - Fondo: el mismo negro con foto de marca velada que el resto de banners del
+ *    portal (ProfileSurveyBanner, SubscribeBanner). El índigo con halos del
+ *    hi-fi de Drops desentonaba a su lado.
+ *  - Los 10 € a la vista: van en el TITULAR y en amarillo, no solo en el
+ *    antetítulo pequeño.
+ *  - Solo el código, con su botón de copiar. Fuera WhatsApp y «otras formas de
+ *    compartir»: el cliente se lo pasa a quien quiera, como quiera.
+ *  - La letra pequeña dice que solo vale en la PRIMERA compra del amigo.
+ *
+ * Sin enlace: se comparte el CÓDIGO y el amigo lo escribe en el checkout
+ * (decisión del 9-oct). Sin Drops: todavía no los ve el cliente (llegarán con
+ * Drops 2.0), y prometer lo que no puede ver ni gastar es una deuda.
  *
  * Pide sus propios datos y, si algo falla o el programa no está abierto para
- * este cliente (flag, B2B), no se pinta: el Hub no puede romperse por esto.
- *
- * Nunca enseña nada de los amigos: solo cuántos y cuándo llega el descuento.
- * Sin emojis y sin guiones largos.
+ * este cliente (flag REFERRALS, B2B), no se pinta: ninguna pantalla puede
+ * romperse por esto. Nunca enseña nada de los amigos: solo cuántos y cuándo
+ * llega el descuento. Sin emojis y sin guiones largos.
  */
-export function ReferralCard() {
+export function ReferralCard({ placement }: ReferralCardProps) {
   const [data, setData] = useState<ReferralCodeResponse | null>(null);
   const [copied, setCopied] = useState(false);
-  // Se calcula una vez al montar. En el servidor da false, pero da igual: hasta
-  // que llegan los datos (ya en el cliente) la tarjeta no pinta nada, así que no
-  // hay desajuste de hidratación.
-  const [canNativeShare] = useState(
-    () => typeof navigator !== "undefined" && typeof navigator.share === "function",
-  );
   const t = useLang();
   const lang = useLangValue();
 
@@ -46,32 +57,17 @@ export function ReferralCard() {
   if (!data?.enabled || data.status === "unavailable") return null;
 
   const code = data.status === "active" ? data.code : null;
-  const shareText = code ? buildShareText(code, lang) : "";
-
-  // Solo para medir cuántos comparten (el canal, nunca el destinatario).
-  const track = (channel: "copy" | "whatsapp" | "native") => {
-    api("/api/referral/track", { method: "POST", body: JSON.stringify({ channel }) }).catch(() => undefined);
-  };
 
   const copy = async () => {
     if (!code) return;
-    track("copy");
+    // Solo para medir cuántos lo comparten (el gesto, nunca el destinatario).
+    api("/api/referral/track", { method: "POST", body: JSON.stringify({ channel: "copy" }) }).catch(() => undefined);
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
       window.prompt(t({ en: "Copy your code:", es: "Copia tu código:" }), code);
-    }
-  };
-
-  const nativeShare = async () => {
-    if (!code) return;
-    track("native");
-    try {
-      await navigator.share({ text: shareText });
-    } catch {
-      // Cancelado por el cliente, o el navegador de una app no lo deja: no pasa nada.
     }
   };
 
@@ -107,88 +103,99 @@ export function ReferralCard() {
     );
   }
 
+  const margin = placement === "hub" ? "mt-10 md:mt-12" : "mb-3";
+
   return (
     <section
-      className="relative isolate mx-6 mt-10 overflow-hidden rounded-[24px] bg-[color:var(--color-dark-indigo)] px-6 py-7 text-[color:var(--color-cream)] md:mx-0 md:mt-12 md:px-8 md:py-8"
+      className={`relative isolate mx-6 ${margin} overflow-hidden rounded-[24px] bg-[#16130C] px-6 py-7 text-[#F2EEE1] md:mx-0 md:px-8 md:py-8`}
       style={{
         boxShadow:
-          "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(31,29,48,0.55), 0 8px 16px -10px rgba(31,29,48,0.35)",
+          "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
         isolation: "isolate",
       }}
     >
-      {/* El fondo del hi-fi: dos halos (amarillo y ocre) muy velados. */}
+      {/* El fondo de los banners del portal: foto de marca en blanco y negro,
+          velada con el mismo degradado que ProfileSurveyBanner. Cierra a la
+          izquierda, donde va el texto, y deja intuir la foto a la derecha. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 opacity-25"
+        className="pointer-events-none absolute inset-0 -z-10 bg-cover"
+        style={{
+          backgroundImage: `url(${MEMBER_PHOTO_DATA_URI})`,
+          backgroundPosition: "center 32%",
+          filter: "grayscale(1)",
+        }}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
         style={{
           background:
-            "radial-gradient(circle at 82% 28%, var(--color-bold-yellow) 0%, transparent 42%), radial-gradient(circle at 18% 82%, var(--color-retro-ochre) 0%, transparent 46%)",
+            "linear-gradient(100deg, rgba(13,10,6,.92) 30%, rgba(13,10,6,.78) 68%, rgba(13,10,6,.55))",
         }}
       />
 
-      <div className="relative md:flex md:items-end md:justify-between md:gap-10">
-        <div className="min-w-0 md:max-w-md">
+      <div className="relative md:flex md:items-center md:justify-between md:gap-10">
+        <div className="min-w-0 md:max-w-[480px]">
           <p
-            className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]"
+            className="text-[11px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]"
             style={{ fontFamily: "var(--font-body)" }}
           >
             <T en="€10 each" es="10 € para cada uno" />
           </p>
+          {/* Los 10 € en el titular y en amarillo: es lo primero que se tiene
+              que leer. Dos líneas fijas («TRAE A ALGUIEN» / «Y LLÉVATE 10 €»):
+              dejando que el navegador partiera, la «Y» se quedaba colgando al
+              final de la primera. `whitespace-nowrap` para que «10» y «€» no se
+              separen nunca. */}
           <h2
-            className="mt-2.5 font-semibold uppercase leading-[0.9] tracking-[-0.02em]"
-            style={{ fontFamily: "var(--font-display)", fontSize: "clamp(32px, 9vw, 46px)" }}
+            className="mt-2.5 font-semibold uppercase leading-[0.92] tracking-[-0.02em]"
+            style={{ fontFamily: "var(--font-display)", fontSize: "clamp(30px, 8.4vw, 44px)" }}
           >
-            <T en="Bring someone in." es="Trae a alguien." />
+            {lang === "en" ? (
+              <>
+                <span className="block">Bring someone in</span>
+                <span className="block">
+                  and get <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">€10</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="block">Trae a alguien</span>
+                <span className="block">
+                  y llévate <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">10 €</span>
+                </span>
+              </>
+            )}
           </h2>
-          <p className="mt-4 text-[14px] leading-[1.55] text-[color:var(--color-warm-gray-lt)]">
+          <p className="mt-4 text-[14px] leading-[1.55] text-[#b3ab98]">
             <T
-              en="Give your code to anyone you like. They get €10 off their first box, and you get €10 off your next delivery."
-              es="Pásale tu código a quien quieras. Tiene 10 € en su primera caja, y tú 10 € menos en tu próximo envío."
+              en="Send your code to anyone you like. They get €10 off their first order, and you get €10 off your next delivery."
+              es="Envía tu código a quien tú quieras. Tendrá 10 € de descuento en su primer pedido, y tú 10 € menos en tu próximo envío."
             />
           </p>
         </div>
 
-        <div className="mt-6 md:mt-0 md:w-[320px] md:shrink-0">
+        <div className="mt-6 md:mt-0 md:w-[300px] md:shrink-0">
           {code ? (
-            <>
-              <div className="flex items-center justify-between gap-3 rounded-[4px] border border-dashed border-[color:var(--color-bold-yellow)]/40 bg-white/[0.06] px-4 py-3">
-                <span
-                  className="font-semibold tracking-[0.08em] text-[color:var(--color-bold-yellow)]"
-                  style={{ fontFamily: "var(--font-display)", fontSize: 20 }}
-                  aria-label={t({ en: `Your code: ${code}`, es: `Tu código: ${code}` })}
-                >
-                  {code}
-                </span>
-                <button
-                  type="button"
-                  onClick={copy}
-                  className="shrink-0 rounded-full border border-[color:var(--color-cream)]/25 px-3.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-cream)] transition-colors hover:border-[color:var(--color-cream)]/60"
-                >
-                  {copied ? <T en="Copied" es="Copiado" /> : <T en="Copy" es="Copiar" />}
-                </button>
-              </div>
-
-              <a
-                href={whatsappShareUrl(shareText)}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => track("whatsapp")}
-                className="mt-3 block w-full rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3.5 text-center text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0"
+            <div className="flex items-center justify-between gap-3 rounded-[6px] border border-dashed border-[color:var(--color-bold-yellow)]/45 bg-white/[0.06] px-4 py-3.5">
+              <span
+                className="font-semibold tracking-[0.08em] text-[color:var(--color-bold-yellow)]"
+                style={{ fontFamily: "var(--font-display)", fontSize: 24 }}
+                aria-label={t({ en: `Your code: ${code}`, es: `Tu código: ${code}` })}
               >
-                <T en="Send on WhatsApp" es="Enviar por WhatsApp" />
-              </a>
-              {canNativeShare && (
-                <button
-                  type="button"
-                  onClick={nativeShare}
-                  className="mt-2 w-full py-2 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--color-cream)]/80 underline-offset-4 hover:underline"
-                >
-                  <T en="Other ways to share" es="Otras formas de compartir" />
-                </button>
-              )}
-            </>
+                {code}
+              </span>
+              <button
+                type="button"
+                onClick={copy}
+                className="shrink-0 rounded-full bg-[color:var(--color-sharp-white)] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0"
+              >
+                {copied ? <T en="Copied" es="Copiado" /> : <T en="Copy" es="Copiar" />}
+              </button>
+            </div>
           ) : (
-            <div className="rounded-[4px] border border-dashed border-[color:var(--color-cream)]/25 bg-white/[0.04] px-4 py-3.5 text-[13px] text-[color:var(--color-warm-gray-lt)]">
+            <div className="rounded-[6px] border border-dashed border-[#F2EEE1]/25 bg-white/[0.04] px-4 py-3.5 text-[13px] text-[#b3ab98]">
               <T en="Your code will be ready in a few hours." es="Tu código estará listo en unas horas." />
             </div>
           )}
@@ -196,17 +203,17 @@ export function ReferralCard() {
       </div>
 
       {lines.length > 0 && (
-        <ul className="relative mt-6 space-y-1.5 border-t border-[color:var(--color-cream)]/10 pt-4 text-[13px] text-[color:var(--color-cream)]">
+        <ul className="relative mt-6 space-y-1.5 border-t border-[#F2EEE1]/10 pt-4 text-[13px] text-[#F2EEE1]">
           {lines.map((l) => (
             <li key={l}>{l}</li>
           ))}
         </ul>
       )}
 
-      <p className="relative mt-5 text-[11px] leading-[1.5] text-[color:var(--color-warm-gray-lt)]">
+      <p className="relative mt-5 text-[11px] leading-[1.5] text-[#b3ab98]">
         <T
-          en="For people new to LIT. Works on subscriptions and one-time orders."
-          es="Para quien aún no ha probado LIT. Vale en suscripción y en compra única."
+          en="Only valid on your friend's first purchase, with a subscription or one-time."
+          es="Solo vale para la primera compra de tu amigo, con suscripción o en compra única."
         />
         {data.termsUrl && (
           <>
