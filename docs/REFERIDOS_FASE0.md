@@ -27,7 +27,7 @@ Cualquier alerta de dinero lleva el id de la recompensa en su código de Slack.
 | `src/app/api/cron/referral-sweep/route.ts` | Cron: aplica, consume y retira premios, cualifica pendientes y emite códigos. Cada 4 h desde el crontab del VPS; Vercel (Hobby, solo crons diarios) lo lanza además a las 06:50 UTC como red |
 | `src/app/api/referral/code/route.ts` | Los datos de la tarjeta (solo lee) |
 | `src/app/api/referral/track/route.ts` | «Ha compartido» (solo el canal, para el KPI) |
-| `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN Y LLÉVATE 10€» en Suscripción y en Cuenta, solo con la suscripción activa |
+| `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN Y LLÉVATE 10€», solo con la suscripción activa: en Suscripción debajo de «Próximos pedidos» (el Hub ya no enseña «Mis pedidos») y en Cuenta debajo de «Mis pedidos» |
 | `scripts/referral-*.ts` | Preflight, descuento padre, backfill de códigos, operación a mano |
 | `scripts/test-referral-*.ts` | Tests (dentro de `npm test`) |
 

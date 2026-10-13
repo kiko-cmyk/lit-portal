@@ -496,14 +496,6 @@ export default function AccountPage() {
           <ProfileSurveyBanner onStart={() => setSurveyOpen(true)} />
         )}
 
-        {/* «Trae a alguien» (Juan 2026-10-13): en las dos pantallas con
-            suscripción, también aquí. Solo con la suscripción ACTIVA, igual que
-            en Suscripción (allí va en la rama activa): el programa es para quien
-            está suscrito, y una pausada no puede recibir sus 10 € hasta que
-            vuelva. La tarjeta se esconde sola si el programa no está abierto
-            para este cliente (flag REFERRALS, B2B). */}
-        {!accountOnly && subscription?.status === "active" && <ReferralCard placement="account" />}
-
 
         {justSkipped && subscription?.nextShipDate && (
           <div className="mx-6 mb-3 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
@@ -873,6 +865,15 @@ export default function AccountPage() {
             ni menos"). El `mt-7 md:mt-9` que llevaba antes hacía este hueco más
             grande que los demás. */}
         <OrdersSection orders={orders} />
+
+        {/* «Trae a alguien», debajo de «Mis pedidos» (Juan 2026-10-13). En las dos
+            pantallas con suscripción. Solo con la suscripción ACTIVA, igual que
+            en Suscripción (allí va en la rama activa): el programa es para quien
+            está suscrito, y una pausada no puede recibir sus 10€ hasta que
+            vuelva. La tarjeta se esconde sola si el programa no está abierto
+            para este cliente (flag REFERRALS, B2B). Su `mb-3` es el mismo hueco
+            de 12px que separa todas las secciones de Cuenta. */}
+        {!accountOnly && subscription?.status === "active" && <ReferralCard placement="account" />}
 
         {/* `compact` sólo cuando debajo viene el banner de AHORRA (Juan
             2026-09-22): con la banda oscura detrás, el marquee dejaba de ser el
@@ -1618,11 +1619,10 @@ function PaymentBlock() {
 // the same function and is always visible (sticky header).
 
 /**
- * Pedidos visibles antes del "Ver más" en Cuenta. Mismo número que el Hub
- * (`VISIBLE_ORDERS` en components/OrderHistory.tsx): las dos superficies
- * enseñan la misma lista y descuadrarlas no tendría motivo. Va duplicado y no
- * importado porque esta lista es una implementación aparte, con su propio
- * markup compacto; el día que se unifiquen, la constante se unifica con ellas.
+ * Pedidos visibles antes del "Ver más" en Cuenta. Mismo número que tenía el Hub
+ * (`VISIBLE_ORDERS` en components/OrderHistory.tsx). Desde el 2026-10-13 el Hub
+ * ya no enseña pedidos (Juan): esta es la única lista. Va duplicado y no
+ * importado porque es una implementación aparte, con su propio markup compacto.
  */
 const VISIBLE_ACCOUNT_ORDERS = 4;
 
