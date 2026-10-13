@@ -106,11 +106,14 @@ export function ReferralCard({ placement }: ReferralCardProps) {
     );
   }
 
-  const margin = placement === "hub" ? "mt-10 md:mt-12" : "mb-3";
-
+  // Sin margen propio desde el rediseño lp2 (2026-10-13): Suscripción y Cuenta
+  // separan sus tarjetas con el hueco de la columna (16 px en móvil, 24 en
+  // escritorio), y un margen aquí se sumaría a ese hueco. `placement` queda como
+  // atributo, por si las dos pantallas vuelven a necesitar algo distinto.
   return (
     <section
-      className={`relative isolate mx-6 ${margin} overflow-hidden rounded-[24px] bg-[#16130C] px-6 py-7 text-[#F2EEE1] md:mx-0 md:px-10 md:py-9`}
+      data-placement={placement}
+      className="relative isolate mx-6 overflow-hidden rounded-[24px] bg-[#16130C] px-6 py-7 text-[#F2EEE1] md:mx-0 md:rounded-[28px] md:px-10 md:py-9"
       style={{
         boxShadow:
           "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
@@ -163,21 +166,25 @@ export function ReferralCard({ placement }: ReferralCardProps) {
               dejando que el navegador partiera, la «Y» se quedaba colgando al
               final de la primera. `whitespace-nowrap` para que «10» y «€» no se
               separen nunca. */}
+          {/* Dos pesos y aire entre letras (Juan 2026-10-13): con todo en
+              semibold y el tracking a -0.02em «se leía como si estuviera todo
+              junto». Primera línea fina, segunda en negrita, como los títulos
+              de la landing. */}
           <h2
-            className="mt-2.5 font-semibold uppercase leading-[0.92] tracking-[-0.02em]"
-            style={{ fontFamily: "var(--font-display)", fontSize: "clamp(30px, 8.4vw, 50px)" }}
+            className="mt-3 uppercase leading-[1.02] tracking-[0.01em]"
+            style={{ fontFamily: "var(--font-display)", fontSize: "clamp(28px, 7.6vw, 44px)" }}
           >
             {lang === "en" ? (
               <>
-                <span className="block">Bring someone in</span>
-                <span className="block">
+                <span className="block font-extralight">Bring someone in</span>
+                <span className="block font-semibold">
                   and get <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">€10</span>
                 </span>
               </>
             ) : (
               <>
-                <span className="block">Trae a alguien</span>
-                <span className="block">
+                <span className="block font-extralight">Trae a alguien</span>
+                <span className="block font-semibold">
                   y llévate <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">10€</span>
                 </span>
               </>
