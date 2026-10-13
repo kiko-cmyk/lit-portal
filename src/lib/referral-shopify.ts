@@ -243,6 +243,59 @@ export async function findCodeDiscountNodeId(code: string): Promise<string | nul
   return data.codeDiscountNodeByCode?.id ?? null;
 }
 
+/**
+ * Quita UN código personal del descuento padre (para cambiarlo: un código que se
+ * ha filtrado, o el cambio de formato del 13-oct). Busca el id del código dentro
+ * del padre por coincidencia EXACTA (la búsqueda de Shopify no es fiable como
+ * filtro: ver `title:X*`), lanza el borrado, espera a que termine y comprueba que
+ * el código ya no existe. Lanza si no lo consigue. `false` si ya no estaba.
+ */
+export async function deleteFriendRedeemCode(parentId: string, code: string): Promise<boolean> {
+  const target = normalizeCode(code);
+  let cursor: string | null = null;
+  let redeemId: string | null = null;
+  for (let page = 0; page < 40 && !redeemId; page++) {
+    const data: {
+      codeDiscountNode: {
+        codeDiscount: {
+          codes?: { nodes: Array<{ id: string; code: string }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+        } | null;
+      } | null;
+    } = await shopifyAdmin.graphql(
+      `query referralRedeemCodes($id: ID!, $cursor: String) {
+        codeDiscountNode(id: $id) {
+          codeDiscount { ... on DiscountCodeBasic { codes(first: 250, after: $cursor) { nodes { id code } pageInfo { hasNextPage endCursor } } } }
+        }
+      }`,
+      { id: parentId, cursor },
+    );
+    const conn = data.codeDiscountNode?.codeDiscount?.codes;
+    if (!conn) throw new Error(`el descuento ${parentId} no existe o no es de códigos`);
+    redeemId = conn.nodes.find((n) => normalizeCode(n.code) === target)?.id ?? null;
+    if (!conn.pageInfo.hasNextPage) break;
+    cursor = conn.pageInfo.endCursor;
+  }
+  if (!redeemId) return false;
+
+  const del = await shopifyAdmin.graphql<{
+    discountCodeRedeemCodeBulkDelete: { job: { id: string; done: boolean } | null; userErrors: UserError[] };
+  }>(
+    `mutation deleteReferralCode($discountId: ID!, $ids: [ID!]) {
+      discountCodeRedeemCodeBulkDelete(discountId: $discountId, ids: $ids) {
+        job { id done }
+        userErrors { field message code }
+      }
+    }`,
+    { discountId: parentId, ids: [redeemId] },
+  );
+  throwOnUserErrors("discountCodeRedeemCodeBulkDelete", del.discountCodeRedeemCodeBulkDelete.userErrors);
+  for (let i = 0; i < 20; i++) {
+    if ((await findCodeDiscountNodeId(target)) === null) return true;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`${target} sigue existiendo en Shopify tras borrarlo`);
+}
+
 /** Borra un descuento entero (solo las recompensas ya consumidas o revocadas). */
 export async function deleteCodeDiscount(discountId: string): Promise<void> {
   const data = await shopifyAdmin.graphql<{

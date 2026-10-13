@@ -232,6 +232,14 @@ console.log("\n── lib/referral-reward.ts ──\n");
     );
   }
   {
+    const rotate = fnBody(body, "export async function rotateReferralCode(");
+    check(
+      "cambiar un código ACTIVO lo borra en Shopify antes de tocar la fila",
+      rotate.indexOf("deleteFriendRedeemCode(") > 0 && rotate.indexOf("deleteFriendRedeemCode(") < rotate.indexOf(".update({"),
+      "Al revés, un fallo dejaría el código viejo vivo en Shopify sin fila detrás: 10 € al amigo y ningún premio a quien invitó.",
+    );
+  }
+  {
     const consume = fnBody(body, "async function consumeReward(");
     check(
       "consumir: un pedido que ya cerró otra recompensa (23505) avisa",

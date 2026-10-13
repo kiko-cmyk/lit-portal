@@ -72,6 +72,7 @@ import {
   countPriorLitOrders,
   createRewardDiscount,
   deleteCodeDiscount,
+  deleteFriendRedeemCode,
   findCodeDiscountNodeId,
   readBulkCreation,
   readCustomerBasics,
@@ -184,18 +185,91 @@ export async function ensurePendingCode(customerId: string, firstName: string | 
   if (existing && existing.status !== "retired") return;
 
   for (let attempt = 0; attempt < 6; attempt++) {
-    const code = generateReferralCode(firstName, { digits: attempt < 3 ? 2 : 3 });
+    const code = generateReferralCode(firstName);
     const row = { code, status: "pending", attempts: 0, last_error: null, bulk_creation_id: null, updated_at: nowIso() };
     const { error } = existing
       ? await sb.from("referral_codes").update(row).eq("customer_id", customerId).eq("status", "retired")
       : await sb.from("referral_codes").insert({ customer_id: customerId, ...row });
     if (!error) return;
-    // 23505 en `code`: ese código ya es de otro cliente → otras cifras. En la PK:
+    // 23505 en `code`: ese código ya es de otro cliente → otro sufijo. En la PK:
     // otra petición reservó a la vez → ya está.
     if (error.code === "23505" && /customer_id|pkey/i.test(error.message)) return;
     if (error.code !== "23505") throw new Error(`referral_codes reserve: ${error.message}`);
   }
   throw new Error(`referral_codes: 6 colisiones seguidas para ${customerId}`);
+}
+
+/** ¿Código del formato de antes del 13-oct (nombre + solo cifras: `JUAN65`, `AMIGO1234`)? */
+export function isLegacyFormatCode(code: string): boolean {
+  return /^[A-Z]+\d{2,4}$/.test(code);
+}
+
+/** El nombre de un código del formato viejo: `MARIA27` → `MARIA`; `AMIGO1234` → null. */
+function nameFromLegacyCode(code: string): string | null {
+  const m = /^([A-Z]+?)\d{2,4}$/.exec(code);
+  return m && m[1] !== "AMIGO" ? m[1] : null;
+}
+
+/**
+ * Cambia el código de un cliente por uno nuevo, del formato actual. Para un código
+ * que se ha filtrado, o para pasar los del formato viejo al nuevo (2026-10-13).
+ *
+ *  - `pending` (nunca llegó a Shopify): solo la fila.
+ *  - `active`: se borra en Shopify ANTES de tocar la fila, y si no se puede no se
+ *    toca nada. Al revés, un fallo dejaría el código viejo vivo en Shopify sin fila
+ *    detrás: daría 10 € al amigo y ningún premio a quien invitó.
+ *
+ * La fila queda `pending` con el código nuevo; la emisión (cron o backfill) lo da
+ * de alta. Las conversiones ya registradas guardan el código con el que llegaron.
+ */
+export async function rotateReferralCode(
+  customerId: string,
+  opts: { dryRun: boolean },
+): Promise<{ from: string; to: string | null; was: string }> {
+  const sb = supabaseAdmin();
+  const { data: row, error } = await sb
+    .from("referral_codes")
+    .select("customer_id, code, status, bulk_creation_id")
+    .eq("customer_id", customerId)
+    .maybeSingle();
+  if (error) throw new Error(`referral_codes: ${error.message}`);
+  if (!row) throw new Error(`el cliente ${customerId} no tiene código`);
+  if (row.status !== "active" && row.status !== "pending") throw new Error(`código ${row.code} en «${row.status}»: no se cambia`);
+  if (row.status === "pending" && row.bulk_creation_id) throw new Error(`${row.code} tiene un alta en Shopify en curso: esperar a que termine`);
+  if (opts.dryRun) return { from: row.code, to: null, was: row.status };
+
+  if (row.status === "active") {
+    const parentId = process.env.REFERRAL_FRIEND_DISCOUNT_ID;
+    if (!parentId) throw new Error("falta REFERRAL_FRIEND_DISCOUNT_ID para borrar el código en Shopify");
+    await deleteFriendRedeemCode(parentId, row.code);
+  }
+  const firstName = isLegacyFormatCode(row.code)
+    ? nameFromLegacyCode(row.code)
+    : ((await readCustomerBasics(customerId))?.firstName ?? null);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const code = generateReferralCode(firstName);
+    const { data: moved, error: upErr } = await sb
+      .from("referral_codes")
+      .update({
+        code,
+        status: "pending",
+        bulk_creation_id: null,
+        activated_at: null,
+        attempts: 0,
+        last_error: `rotado desde ${row.code}`,
+        updated_at: nowIso(),
+      })
+      .eq("customer_id", customerId)
+      .eq("code", row.code)
+      .select("code");
+    if (!upErr) {
+      if (!moved?.length) throw new Error(`la fila de ${customerId} cambió mientras se rotaba`);
+      return { from: row.code, to: code, was: row.status };
+    }
+    // 23505: ese código ya es de otro cliente → otro sufijo.
+    if (upErr.code !== "23505") throw new Error(`referral_codes rotate: ${upErr.message}`);
+  }
+  throw new Error(`referral_codes: 6 colisiones seguidas rotando ${customerId}`);
 }
 
 export interface IssueSummary {
@@ -421,7 +495,7 @@ export async function issuePendingCodes(opts: {
         continue;
       }
       const basics = await readCustomerBasics(r.customer_id).catch(() => null);
-      const next = generateReferralCode(basics?.firstName ?? null, { digits: r.attempts >= 2 ? 3 : 2 });
+      const next = generateReferralCode(basics?.firstName ?? null);
       const giveUp = r.attempts + 1 >= 8;
       await patchPending(r, {
         code: next,

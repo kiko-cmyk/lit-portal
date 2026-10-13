@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
-import { MEMBER_PHOTO_DATA_URI } from "@/lib/member-photo";
+import { FRIENDS_PHOTO_DATA_URI } from "@/lib/friends-photo";
 import type { ReferralCodeResponse } from "@/lib/types";
 
 interface ReferralCardProps {
@@ -24,11 +24,14 @@ interface ReferralCardProps {
  *
  * ── Diseño (Juan, 2026-10-13) ──
  *
- *  - Fondo: el mismo negro con foto de marca velada que el resto de banners del
- *    portal (ProfileSurveyBanner, SubscribeBanner). El índigo con halos del
- *    hi-fi de Drops desentonaba a su lado.
+ *  - Fondo: el mismo negro con foto velada que el resto de banners del portal
+ *    (ProfileSurveyBanner, SubscribeBanner), pero con SU foto: amigos pasándolo
+ *    bien (`friends-photo.ts`), no la misma imagen en todos los banners.
  *  - Los 10 € a la vista: van en el TITULAR y en amarillo, no solo en el
  *    antetítulo pequeño.
+ *  - Equilibrada: el titular a la izquierda; el texto, el código y la letra
+ *    pequeña a la derecha. Con solo el código a la derecha, esa mitad se veía
+ *    vacía.
  *  - Solo el código, con su botón de copiar. Fuera WhatsApp y «otras formas de
  *    compartir»: el cliente se lo pasa a quien quiera, como quiera.
  *  - La letra pequeña dice que solo vale en la PRIMERA compra del amigo.
@@ -107,36 +110,48 @@ export function ReferralCard({ placement }: ReferralCardProps) {
 
   return (
     <section
-      className={`relative isolate mx-6 ${margin} overflow-hidden rounded-[24px] bg-[#16130C] px-6 py-7 text-[#F2EEE1] md:mx-0 md:px-8 md:py-8`}
+      className={`relative isolate mx-6 ${margin} overflow-hidden rounded-[24px] bg-[#16130C] px-6 py-7 text-[#F2EEE1] md:mx-0 md:px-10 md:py-9`}
       style={{
         boxShadow:
           "0 1px 0 rgba(255,255,255,0.06) inset, 0 26px 54px -22px rgba(30,24,12,0.5), 0 8px 16px -10px rgba(30,24,12,0.3)",
         isolation: "isolate",
       }}
     >
-      {/* El fondo de los banners del portal: foto de marca en blanco y negro,
-          velada con el mismo degradado que ProfileSurveyBanner. Cierra a la
-          izquierda, donde va el texto, y deja intuir la foto a la derecha. */}
+      {/* Su foto: tres amigos corriendo juntos (foto9 del banco de marca). Con
+          algo de color y de contraste: en blanco y negro puro, como el resto de
+          banners, la foto (desenfocada por el movimiento) se quedaba en manchas
+          y no se reconocía a nadie. */}
       <span
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-cover"
         style={{
-          backgroundImage: `url(${MEMBER_PHOTO_DATA_URI})`,
-          backgroundPosition: "center 32%",
-          filter: "grayscale(1)",
+          backgroundImage: `url(${FRIENDS_PHOTO_DATA_URI})`,
+          backgroundPosition: "center 30%",
+          filter: "saturate(0.6) contrast(1.15) brightness(1.1)",
+        }}
+      />
+      {/* El velo. En móvil el texto ocupa toda la tarjeta, de arriba abajo; en
+          escritorio hay texto a los DOS lados, así que cierra en los extremos y
+          se abre en el centro, que es donde están los amigos. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10 md:hidden"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(13,10,6,.86) 0%, rgba(13,10,6,.62) 40%, rgba(13,10,6,.88) 100%)",
         }}
       />
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10"
+        className="pointer-events-none absolute inset-0 -z-10 hidden md:block"
         style={{
           background:
-            "linear-gradient(100deg, rgba(13,10,6,.92) 30%, rgba(13,10,6,.78) 68%, rgba(13,10,6,.55))",
+            "linear-gradient(90deg, rgba(13,10,6,.9) 0%, rgba(13,10,6,.5) 46%, rgba(13,10,6,.5) 54%, rgba(13,10,6,.86) 100%)",
         }}
       />
 
-      <div className="relative md:flex md:items-center md:justify-between md:gap-10">
-        <div className="min-w-0 md:max-w-[480px]">
+      <div className="relative md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,380px)] md:items-center md:gap-12">
+        <div className="min-w-0">
           <p
             className="text-[11px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]"
             style={{ fontFamily: "var(--font-body)" }}
@@ -150,7 +165,7 @@ export function ReferralCard({ placement }: ReferralCardProps) {
               separen nunca. */}
           <h2
             className="mt-2.5 font-semibold uppercase leading-[0.92] tracking-[-0.02em]"
-            style={{ fontFamily: "var(--font-display)", fontSize: "clamp(30px, 8.4vw, 44px)" }}
+            style={{ fontFamily: "var(--font-display)", fontSize: "clamp(30px, 8.4vw, 50px)" }}
           >
             {lang === "en" ? (
               <>
@@ -168,62 +183,66 @@ export function ReferralCard({ placement }: ReferralCardProps) {
               </>
             )}
           </h2>
-          <p className="mt-4 text-[14px] leading-[1.55] text-[#b3ab98]">
+        </div>
+
+        {/* La mitad derecha: qué gana cada uno, el código y la letra pequeña. */}
+        <div className="mt-4 min-w-0 md:mt-0">
+          <p className="text-[14px] leading-[1.55] text-[#cfc8b6] md:text-[15px]">
             <T
               en="Send your code to anyone you like. They get €10 off their first order, and you get €10 off your next delivery."
               es="Envía tu código a quien tú quieras. Tendrá 10 € de descuento en su primer pedido, y tú 10 € menos en tu próximo envío."
             />
           </p>
-        </div>
 
-        <div className="mt-6 md:mt-0 md:w-[300px] md:shrink-0">
-          {code ? (
-            <div className="flex items-center justify-between gap-3 rounded-[6px] border border-dashed border-[color:var(--color-bold-yellow)]/45 bg-white/[0.06] px-4 py-3.5">
-              <span
-                className="font-semibold tracking-[0.08em] text-[color:var(--color-bold-yellow)]"
-                style={{ fontFamily: "var(--font-display)", fontSize: 24 }}
-                aria-label={t({ en: `Your code: ${code}`, es: `Tu código: ${code}` })}
-              >
-                {code}
-              </span>
-              <button
-                type="button"
-                onClick={copy}
-                className="shrink-0 rounded-full bg-[color:var(--color-sharp-white)] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0"
-              >
-                {copied ? <T en="Copied" es="Copiado" /> : <T en="Copy" es="Copiar" />}
-              </button>
-            </div>
-          ) : (
-            <div className="rounded-[6px] border border-dashed border-[#F2EEE1]/25 bg-white/[0.04] px-4 py-3.5 text-[13px] text-[#b3ab98]">
-              <T en="Your code will be ready in a few hours." es="Tu código estará listo en unas horas." />
-            </div>
+          <div className="mt-5">
+            {code ? (
+              <div className="flex items-center justify-between gap-3 rounded-[6px] border border-dashed border-[color:var(--color-bold-yellow)]/45 bg-white/[0.06] px-4 py-3.5">
+                <span
+                  className="min-w-0 truncate font-semibold tracking-[0.06em] text-[color:var(--color-bold-yellow)]"
+                  style={{ fontFamily: "var(--font-display)", fontSize: 22 }}
+                  aria-label={t({ en: `Your code: ${code}`, es: `Tu código: ${code}` })}
+                >
+                  {code}
+                </span>
+                <button
+                  type="button"
+                  onClick={copy}
+                  className="shrink-0 rounded-full bg-[color:var(--color-sharp-white)] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-lit-grey)] transition-transform duration-200 ease-out hover:-translate-y-[1px] active:translate-y-0"
+                >
+                  {copied ? <T en="Copied" es="Copiado" /> : <T en="Copy" es="Copiar" />}
+                </button>
+              </div>
+            ) : (
+              <div className="rounded-[6px] border border-dashed border-[#F2EEE1]/25 bg-white/[0.04] px-4 py-3.5 text-[13px] text-[#b3ab98]">
+                <T en="Your code will be ready in a few hours." es="Tu código estará listo en unas horas." />
+              </div>
+            )}
+          </div>
+
+          {lines.length > 0 && (
+            <ul className="mt-4 space-y-1 text-[13px] text-[#F2EEE1]">
+              {lines.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
           )}
+
+          <p className="mt-4 text-[11px] leading-[1.5] text-[#b3ab98]">
+            <T
+              en="Only valid on your friend's first purchase, with a subscription or one-time."
+              es="Solo vale para la primera compra de tu amigo, con suscripción o en compra única."
+            />
+            {data.termsUrl && (
+              <>
+                {" "}
+                <a href={data.termsUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                  <T en="Terms" es="Condiciones" />
+                </a>
+              </>
+            )}
+          </p>
         </div>
       </div>
-
-      {lines.length > 0 && (
-        <ul className="relative mt-6 space-y-1.5 border-t border-[#F2EEE1]/10 pt-4 text-[13px] text-[#F2EEE1]">
-          {lines.map((l) => (
-            <li key={l}>{l}</li>
-          ))}
-        </ul>
-      )}
-
-      <p className="relative mt-5 text-[11px] leading-[1.5] text-[#b3ab98]">
-        <T
-          en="Only valid on your friend's first purchase, with a subscription or one-time."
-          es="Solo vale para la primera compra de tu amigo, con suscripción o en compra única."
-        />
-        {data.termsUrl && (
-          <>
-            {" "}
-            <a href={data.termsUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
-              <T en="Terms" es="Condiciones" />
-            </a>
-          </>
-        )}
-      </p>
     </section>
   );
 }
