@@ -388,7 +388,11 @@ function CycleTimeline({
   const endLabel = `${shipDate.getDate()} ${monthShort(shipDate, dateLocale)}`;
 
   return (
-    <figure className="m-0 mt-6 lg:mt-[34px]" aria-label={left.aria}>
+    // `lg:mt-3` y no 34 px (Juan 2026-10-13: «deja más aire encima de TU
+    // PRÓXIMO LIT, baja el texto de la parte izquierda»). La columna va pegada
+    // abajo (`lg:justify-end`), así que el margen que se quita aquí es aire que
+    // aparece encima del título, sin cambiar el alto del hero ni los paneles.
+    <figure className="m-0 mt-6 lg:mt-3" aria-label={left.aria}>
       <div aria-hidden className="relative h-[62px] text-[12px] font-bold text-[#2F343D] md:h-16 md:text-[13px]">
         <span className="absolute top-0 left-0 text-[#8C8E87]">{startLabel}</span>
         {showTodayLabel && (
