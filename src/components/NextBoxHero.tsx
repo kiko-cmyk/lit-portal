@@ -103,7 +103,12 @@ export function NextBoxHero({
     <div className="cover-rise mx-6 md:mx-0">
       <Lp2Card as="article" className="md:p-9">
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-12">
-          <div className="flex flex-col lg:justify-end">
+          {/* Aire encima de «TU PRÓXIMO LIT» (Juan 2026-10-13, dos veces): 48 px
+              en escritorio ancho y 24 entre 1024 y 1280, donde la fecha ya baja
+              de línea. La columna va pegada abajo; si con el aire es más alta
+              que los paneles (224), el hero crece y los paneles se alinean
+              abajo con la línea de tiempo. */}
+          <div className="flex flex-col lg:justify-end lg:pt-6 xl:pt-12">
             <CardTitle as="h1" thin={t({ en: "Your next", es: "Tu próximo" })} bold="LIT" />
             <div className="mt-2.5 flex flex-wrap items-end gap-x-[18px] gap-y-2.5 lg:mt-3.5">
               <p className="m-0 whitespace-nowrap font-display text-[72px] font-semibold uppercase leading-[0.88] tracking-[0.005em] md:text-[88px]">
@@ -122,7 +127,7 @@ export function NextBoxHero({
             </div>
           </div>
 
-          <div className="mt-5 lg:mt-0">
+          <div className="mt-5 lg:mt-0 lg:self-end">
             <FlavorShelf items={items} />
           </div>
         </div>
