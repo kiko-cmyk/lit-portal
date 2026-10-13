@@ -45,7 +45,7 @@ export function Lp2Sheet({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        className={`zone-lp2 relative max-h-[92vh] w-full overflow-y-auto rounded-t-[28px] bg-[#EFEEE5] px-5 pt-10 pb-7 text-[#2F343D] shadow-[0_-24px_60px_-24px_rgba(26,28,34,0.5)] sm:rounded-[32px] sm:px-8 sm:pt-11 sm:pb-8 ${
+        className={`zone-lp2 relative max-h-[92vh] w-full overflow-y-auto rounded-t-[28px] bg-[#EFEEE5] px-5 pt-10 pb-[max(1.75rem,env(safe-area-inset-bottom,0px))] text-[#2F343D] shadow-[0_-24px_60px_-24px_rgba(26,28,34,0.5)] sm:rounded-[32px] sm:px-8 sm:pt-11 sm:pb-8 ${
           size === "lg" ? "sm:max-w-lg" : "sm:max-w-md"
         } ${className}`}
         onClick={(e) => e.stopPropagation()}

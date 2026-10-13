@@ -200,7 +200,7 @@ export function CancelTakeover({
       <SheetClose
         dark
         onClose={step === "done" && done ? exitAfterCancel : onClose}
-        className="absolute right-5 top-5"
+        className="absolute right-5 top-[calc(1.25rem+var(--safe-top))]"
       />
 
       <div className="mx-auto max-w-md px-6 pt-20 pb-12 sm:max-w-lg md:max-w-2xl md:pt-28">

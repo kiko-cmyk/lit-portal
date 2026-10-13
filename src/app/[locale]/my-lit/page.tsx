@@ -464,7 +464,7 @@ export default function HubPage() {
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
           2026-05-19). z-40 sits above the BottomNav z-40 sibling, fine on
           mobile because they don't overlap (top vs bottom). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
         <Logo />
         {/* min-w-0 lets the group shrink below its content on narrow phones
             (≤390px with pill + toggle + chip + TierPill); the chip name and
@@ -497,10 +497,10 @@ export default function HubPage() {
         </div>
       </header>
 
-      {/* `pb-[133px]` en móvil = la barra de abajo (85 px) + 48: bajo la banda
-          queda el mismo hueco que entre los referidos y la banda (Juan
-          2026-10-13). En escritorio, `md:pb-12` (48). */}
-      <main className="flex flex-1 flex-col gap-4 pt-[88px] pb-[133px] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
+      {/* Abajo, en móvil: la barra de abajo (65 px + su relleno `--nav-pb`) +
+          48, el mismo hueco bajo la banda que entre los referidos y la banda
+          (Juan 2026-10-13). En escritorio, `md:pb-12` (48). */}
+      <main className="flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(113px+var(--nav-pb))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPaused ? (
           <ReactivateCard
