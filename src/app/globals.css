@@ -124,6 +124,29 @@ button:disabled,
   --background: var(--color-brisky-cream);
   --foreground: var(--color-lit-grey);
 }
+/* Rediseño lp2 de Suscripción y Cuenta (Juan 2026-10-13): el crema de la landing
+   «No es cansancio», más claro que el beige PRE, para que las tarjetas
+   (#F8F9F2) floten sin bordes gruesos. Solo lo usan esas dos pantallas. */
+.zone-lp2 {
+  --background: #EFEEE5;
+  --foreground: #2F343D;
+}
+/* Grano de los paneles de sabor, la misma receta que «Tres sabores» de la landing.
+   Va por DEBAJO de la caja (z-index -1 dentro de su propio contexto). */
+.lp2-grain {
+  isolation: isolate;
+}
+.lp2-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px;
+  opacity: 0.12;
+  mix-blend-mode: multiply;
+}
 .zone-retro {
   --background: var(--color-cream);
   --foreground: var(--color-lit-grey);

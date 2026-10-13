@@ -162,13 +162,15 @@ export function TopNav() {
     useSubscriptionSwitch();
   return (
     <nav
-      className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-brisky-cream)]/90 backdrop-blur-md md:block"
+      className="fixed top-0 left-0 right-0 z-40 hidden border-b border-[color:var(--color-lit-grey)]/10 bg-[color:var(--background)]/90 backdrop-blur-md md:block"
       aria-label="Primary"
     >
       {/* Header tema web PRE: logo a la IZQUIERDA del todo; a la DERECHA
           CAMBIAR (a la izquierda del resto) + la cápsula de nav (viñeta ○/●
           por item, activo en pastilla amarilla). */}
-      <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-8 py-4">
+      {/* Fondo y ancho siguen a la página: el crema de la zona (`--background`)
+          y los 1184 px del rediseño lp2 de Suscripción y Cuenta (2026-10-13). */}
+      <div className="mx-auto flex w-full max-w-[1184px] items-center justify-between px-8 py-4">
         {/* Izquierda del todo — logo */}
         <Logo />
         {/* Derecha — CAMBIAR + cápsula de nav */}

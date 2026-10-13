@@ -9,9 +9,10 @@ import { CustomerChip } from "@/components/CustomerChip";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
-import { Marquee } from "@/components/Marquee";
+import { BrandBand, CardTitle, Lp2Card } from "@/components/Lp2";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import {
+  DateChange,
   QAIcons,
   QuickActionButton,
 } from "@/components/QuickActionButton";
@@ -31,11 +32,13 @@ const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").t
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 const ProfileSurveyOverlay = dynamic(() => import("@/components/ProfileSurveyOverlay").then((m) => m.ProfileSurveyOverlay));
 import { api, ApiClientError } from "@/lib/api-client";
-import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
 import { SUBSCRIBE_URL } from "@/lib/storefront-links";
 import { FREQUENCIES } from "@/lib/plan-options";
+import { flavorVisual } from "@/lib/flavor-visuals";
+import { frequencyLabel } from "@/lib/frequency-label";
 import type {
   CustomerProfile,
   Frequency,
@@ -429,6 +432,18 @@ export default function HubPage() {
 
   const collectionEarned = Math.min(4, Math.floor(timeline.length));
 
+  // «20 ene» de la próxima y de la siguiente: las tarjetas de «Gestiona tu plan»
+  // enseñan con ellas qué cambia al adelantar o al saltar.
+  const shortDate = (d: Date) =>
+    `${d.getDate()} ${d.toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { month: "short" }).replace(".", "")}`;
+  const nextLabel = nextShipDate ? shortDate(nextShipDate) : null;
+  const followingLabel = data.upcomingShipments[0]?.date
+    ? shortDate(new Date(data.upcomingShipments[0].date))
+    : null;
+  const boxesLabel = `${sub.boxCount} ${
+    sub.boxCount === 1 ? t({ en: "box", es: "caja" }) : t({ en: "boxes", es: "cajas" })
+  }`;
+
   // Days left of the 90-day drops hold (post-cancel only; null when there is
   // no hold). Display-only, re-derived on every render/refetch — sub-render
   // precision is irrelevant here, hence the tolerated impurity.
@@ -442,13 +457,13 @@ export default function HubPage() {
     : null;
 
   return (
-    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
           2026-05-19). z-40 sits above the BottomNav z-40 sibling, fine on
           mobile because they don't overlap (top vs bottom). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
         <Logo />
         {/* min-w-0 lets the group shrink below its content on narrow phones
             (≤390px with pill + toggle + chip + TierPill); the chip name and
@@ -468,6 +483,11 @@ export default function HubPage() {
               {t({ en: "Switch", es: "Cambiar" })}
             </button>
           )}
+          {/* Idioma SOLO en la cabecera (Juan 2026-10-13): en móvil vivía en una
+              sección de Cuenta porque esta barra iba justa; con el rediseño la
+              barra solo lleva idioma y nombre (más «Cambiar» y el TierPill
+              cuando tocan), y el chip del nombre se recorta si no cabe. */}
+          <LangToggle />
           {customer && <CustomerChip name={customer.name} />}
           <TierPill
             visible={drops.tierEarned}
@@ -476,7 +496,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex flex-1 flex-col gap-4 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-[1184px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPaused ? (
           <ReactivateCard
@@ -505,63 +525,115 @@ export default function HubPage() {
               onUndoSkip={justSkipped ? handleUndoSkip : undefined}
               boxCount={sub.boxCount}
               frequency={sub.frequency}
+              chargeTotalCents={sub.chargeTotalCents}
             />
 
-            <SectionDivider
-              title={t({
-                en: "Manage my subscription",
-                es: "Gestionar mi suscripción",
-              })}
-            />
-            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
-              <QuickActionButton
-                icon={QAIcons.ChargeNow}
-                label={t({ en: "Bring forward", es: "Adelantar pedido" })}
-                sub={t({ en: "Order now", es: "Hacer pedido ahora" })}
-                onClick={() => setShowChargeNow(true)}
-                disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.ChangePlan}
-                label={t({ en: "Change plan", es: "Cambiar plan" })}
-                sub={t({
-                  en: "Change boxes or frequency",
-                  es: "Cambiar cajas o frecuencia",
-                })}
-                onClick={() => setShowPlan(true)}
-                disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.Skip}
-                label={t({ en: "Skip next", es: "Saltar próximo" })}
-                sub={t({
-                  en: "Skip next order",
-                  es: "Saltar próximo pedido",
-                })}
-                onClick={() => setShowSkip(true)}
-                disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.Flavor}
-                label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
-                sub={
-                  // Pluralised by box count (Juan 2026-07-28). Deliberately does NOT name
-                  // the flavours: that copy goes stale the day a third flavour ships.
-                  sub.boxCount > 1
-                    ? t({ en: "Choose the flavor of your boxes", es: "Elige el sabor de tus cajas" })
-                    : t({ en: "Choose the flavor of your box", es: "Elige el sabor de tu caja" })
-                }
-                onClick={() => setShowFlavor(true)}
-                disabled={sub.withinCutoff}
-              />
-            </section>
+            <div className="mx-6 md:mx-0">
+              <Lp2Card>
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                  <CardTitle
+                    thin={t({ en: "Manage", es: "Gestiona" })}
+                    bold={t({ en: "your plan", es: "tu plan" })}
+                  />
+                  <p className="m-0 hidden text-[14.5px] text-[#5E6168] md:block">
+                    <T
+                      en="Bring forward, skip or change your LIT whenever you need."
+                      es="Adelanta, salta o cambia tu LIT cuando lo necesites."
+                    />
+                  </p>
+                </div>
+                {/* Cada tarjeta dice abajo qué cambia (Juan 2026-10-13: «las cards
+                    muy sosas»). Las fechas salen de la suscripción: la próxima y
+                    la siguiente de la cola de Seal, que es la que queda al saltar. */}
+                <section className="mt-4 grid grid-cols-2 gap-2.5 md:mt-[22px] md:gap-3 lg:grid-cols-4">
+                  <QuickActionButton
+                    icon={QAIcons.ChargeNow}
+                    label={t({ en: "Bring forward", es: "Adelantar envío" })}
+                    sub={
+                      nextLabel
+                        ? t({
+                            en: `Get it now, no need to wait for ${nextLabel}`,
+                            es: `Recíbelo ya, sin esperar al ${nextLabel}`,
+                          })
+                        : t({ en: "Order now", es: "Haz tu pedido ahora" })
+                    }
+                    state={nextLabel ? <DateChange from={nextLabel} to={t({ en: "Today", es: "Hoy" })} /> : undefined}
+                    onClick={() => setShowChargeNow(true)}
+                    disabled={sub.withinCutoff}
+                  />
+                  <QuickActionButton
+                    icon={QAIcons.ChangePlan}
+                    label={t({ en: "Change plan", es: "Cambiar plan" })}
+                    sub={t({
+                      en: "Boxes or how often it arrives",
+                      es: "Cajas o cada cuánto te llega",
+                    })}
+                    state={
+                      <>
+                        <span className="md:hidden">
+                          {boxesLabel} · {frequencyLabel(sub.frequency, lang, { format: "short" })}
+                        </span>
+                        <span className="hidden md:inline">
+                          {boxesLabel} · {frequencyLabel(sub.frequency, lang, { format: "long" })}
+                        </span>
+                      </>
+                    }
+                    onClick={() => setShowPlan(true)}
+                    disabled={sub.withinCutoff}
+                  />
+                  <QuickActionButton
+                    icon={QAIcons.Skip}
+                    label={t({ en: "Skip next", es: "Saltar próximo" })}
+                    sub={t({
+                      en: "Free, only the next delivery",
+                      es: "Sin coste, solo el próximo envío",
+                    })}
+                    state={
+                      nextLabel && followingLabel ? (
+                        <DateChange from={nextLabel} to={followingLabel} />
+                      ) : undefined
+                    }
+                    onClick={() => setShowSkip(true)}
+                    disabled={sub.withinCutoff}
+                  />
+                  <QuickActionButton
+                    icon={QAIcons.Flavor}
+                    label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
+                    sub={
+                      // Pluralised by box count (Juan 2026-07-28). Deliberately does NOT name
+                      // the flavours: that copy goes stale the day a third flavour ships.
+                      sub.boxCount > 1
+                        ? t({ en: "Choose the flavor of your boxes", es: "Elige el sabor de tus cajas" })
+                        : t({ en: "Choose the flavor of your box", es: "Elige el sabor de tu caja" })
+                    }
+                    state={
+                      sub.composition?.length ? (
+                        <>
+                          {sub.composition.map((c, i) => (
+                            <span key={c.flavor} className={`inline-flex items-center gap-1 ${i > 0 ? "ml-1 md:ml-2" : ""}`}>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={flavorVisual(c.flavor).box}
+                                alt=""
+                                className="h-auto w-[22px] md:w-[30px]"
+                              />
+                              {c.boxes}×
+                            </span>
+                          ))}
+                        </>
+                      ) : undefined
+                    }
+                    onClick={() => setShowFlavor(true)}
+                    disabled={sub.withinCutoff}
+                  />
+                </section>
+              </Lp2Card>
+            </div>
 
-            <SectionDivider
-              title={t({ en: "Upcoming", es: "Próximos pedidos" })}
-            />
             <DeliveryCalendar
               nextShipDate={nextShipDate}
               upcoming={data.upcomingShipments}
+              frequency={sub.frequency}
             />
 
             {/* Referidos, fase 0 (2026-10-10). Solo en esta rama (suscripción
@@ -575,7 +647,7 @@ export default function HubPage() {
                 consultan en Cuenta, que tiene su propia lista. */}
             <ReferralCard placement="hub" />
 
-            <Marquee />
+            <BrandBand />
 
             {/* La Colección está oculta mientras la función no exista
                 (COLLECTION_ENABLED en lib/portal-link.ts). Este era el único enlace
