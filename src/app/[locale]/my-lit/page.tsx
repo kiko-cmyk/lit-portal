@@ -497,7 +497,10 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex flex-1 flex-col gap-4 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
+      {/* `pb-[133px]` en móvil = la barra de abajo (85 px) + 48: bajo la banda
+          queda el mismo hueco que entre los referidos y la banda (Juan
+          2026-10-13). En escritorio, `md:pb-12` (48). */}
+      <main className="flex flex-1 flex-col gap-4 pt-[88px] pb-[133px] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPaused ? (
           <ReactivateCard

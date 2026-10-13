@@ -731,8 +731,10 @@ export default function AccountPage() {
             que nos escriban para cancelar). Las dos alternativas abren los
             mismos overlays que «Tu plan», con el mismo bloqueo de la ventana
             de cierre. */}
+        {/* `mt-8 md:mt-6` + el hueco de la columna = 48 px, lo mismo que hay
+            entre los referidos y la banda (Juan 2026-10-13). */}
         {subActive && !subPaused && (
-          <div className="mt-7 md:mt-10">
+          <div className="mt-8 md:mt-6">
             <DangerZone
               onCancel={() => setCancelOpen(true)}
               onSkip={() => setSkipOpen(true)}
@@ -998,6 +1000,10 @@ function PlanCard({
   const price =
     subscription.chargeTotalCents > 0 ? formatEuro(subscription.chargeTotalCents, lang) : null;
   const cell = "border-[#2F343D]/12";
+  const manyFlavors = (subscription.composition?.length ?? 0) >= 3;
+  // Con 4 sabores, en un móvil de 360 cada columna mide 62 px: la caja y el
+  // nombre bajan un punto para caber (en escritorio, igual que con 3).
+  const fourFlavors = (subscription.composition?.length ?? 0) >= 4;
 
   return (
     <Lp2Card as="article" className="flex h-full flex-col">
@@ -1010,18 +1016,40 @@ function PlanCard({
         </span>
       </div>
 
+      {/* Los sabores en UNA fila (Juan 2026-10-13). Con 1 o 2, la caja a la
+          izquierda y el texto al lado; con 3 o más, una columna por sabor con la
+          caja arriba y el texto debajo, que es lo que deja caber hasta 4 en un
+          móvil de 360 y en la tarjeta estrecha de escritorio (dos columnas desde
+          1024 px). */}
       {subscription.composition?.length ? (
-        <div className="mt-[18px] grid grid-cols-2 gap-3 border-y border-[#2F343D]/12 py-3.5 md:mt-[22px] md:gap-4">
+        <div
+          className={`mt-[18px] grid border-y border-[#2F343D]/12 py-3.5 md:mt-[22px] md:gap-4 ${
+            manyFlavors ? (subscription.composition.length >= 4 ? "gap-2" : "gap-3") : "grid-cols-2 gap-3"
+          }`}
+          style={
+            manyFlavors
+              ? { gridTemplateColumns: `repeat(${subscription.composition.length}, minmax(0, 1fr))` }
+              : undefined
+          }
+        >
           {subscription.composition.map((c) => {
             const v = flavorVisual(c.flavor);
             const name = Object.prototype.hasOwnProperty.call(FLAVORS, c.flavor)
               ? shortLabel(c.flavor as FlavorKey)
               : unknownFlavorName(c.flavor);
             return (
-              <div key={c.flavor} className="flex items-center gap-2.5 md:gap-3.5">
-                <span aria-hidden className="relative h-[58px] w-[66px] flex-none md:h-[68px] md:w-[80px]">
+              <div
+                key={c.flavor}
+                className={manyFlavors ? "flex min-w-0 flex-col items-start gap-2" : "flex items-center gap-2.5 md:gap-3.5"}
+              >
+                <span
+                  aria-hidden
+                  className={`relative flex-none md:h-[68px] md:w-[80px] ${fourFlavors ? "h-[50px] w-[56px]" : "h-[58px] w-[66px]"}`}
+                >
                   <span
-                    className="absolute bottom-0 left-1 h-[52px] w-[52px] rounded-full md:left-1.5 md:h-[60px] md:w-[60px]"
+                    className={`absolute bottom-0 left-1 rounded-full md:left-1.5 md:h-[60px] md:w-[60px] ${
+                      fourFlavors ? "h-[44px] w-[44px]" : "h-[52px] w-[52px]"
+                    }`}
                     style={{ background: v.disc }}
                   />
                   {v.box && (
@@ -1029,7 +1057,7 @@ function PlanCard({
                     <img
                       src={v.box}
                       alt=""
-                      className="absolute bottom-0.5 left-0 h-auto w-[62px] max-w-none md:w-[74px]"
+                      className={`absolute bottom-0.5 left-0 h-auto max-w-none md:w-[74px] ${fourFlavors ? "w-[53px]" : "w-[62px]"}`}
                       style={{ filter: "drop-shadow(0 8px 8px rgba(26,28,34,0.22))" }}
                     />
                   )}
@@ -1038,7 +1066,11 @@ function PlanCard({
                   <span className="block font-display text-[24px] font-semibold leading-none md:text-[28px]">
                     {c.boxes}×
                   </span>
-                  <span className="mt-[5px] block text-[9.5px] font-bold uppercase leading-[1.3] tracking-[0.14em] md:mt-1.5 md:text-[10px]">
+                  <span
+                    className={`mt-[5px] block font-bold uppercase leading-[1.3] md:mt-1.5 md:text-[10px] md:tracking-[0.14em] ${
+                      fourFlavors ? "text-[9px] tracking-[0.08em]" : "text-[9.5px] tracking-[0.14em]"
+                    }`}
+                  >
                     Salty <br className="md:hidden" />
                     {name}
                   </span>

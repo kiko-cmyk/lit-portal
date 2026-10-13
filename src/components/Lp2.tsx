@@ -121,10 +121,12 @@ export function BrandBand({ compact = false }: { compact?: boolean }) {
   return (
     <section
       aria-hidden
-      // Los márgenes SE SUMAN al hueco de la columna (16/24 px): 36+16 = 52 en
-      // móvil y 64+24 = 88 en escritorio, como en el lienzo aprobado.
+      // Los márgenes SE SUMAN al hueco de la columna (16/24 px): 32+16 y 24+24,
+      // 48 px en los dos casos, lo mismo que queda DEBAJO de la banda (hasta el
+      // final de Suscripción y hasta la baja en Cuenta). Juan 2026-10-13:
+      // «mismo espacio arriba que abajo».
       className={`ml-[calc(50%-50vw)] w-screen overflow-hidden border-y border-[#2F343D]/12 py-6 md:py-8 ${
-        compact ? "mt-4" : "mt-9 md:mt-16"
+        compact ? "mt-4" : "mt-8 md:mt-6"
       }`}
     >
       <div className={`${row} font-semibold text-[#2F343D]`}>
