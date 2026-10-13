@@ -11,7 +11,6 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { Marquee } from "@/components/Marquee";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
-import { OrderHistory } from "@/components/OrderHistory";
 import {
   QAIcons,
   QuickActionButton,
@@ -557,13 +556,6 @@ export default function HubPage() {
               />
             </section>
 
-            {/* Referidos, fase 0 (2026-10-10). Solo en esta rama (suscripción
-                activa): el programa es para quien está suscrito. También va en
-                Cuenta (2026-10-13). La tarjeta pide sus propios datos y no se pinta
-                si el programa no está abierto para este cliente (flag REFERRALS,
-                B2B) o si algo falla. */}
-            <ReferralCard placement="hub" />
-
             <SectionDivider
               title={t({ en: "Upcoming", es: "Próximos pedidos" })}
             />
@@ -572,15 +564,16 @@ export default function HubPage() {
               upcoming={data.upcomingShipments}
             />
 
-            <SectionDivider
-              title={t({ en: "My orders", es: "Mis pedidos" })}
-            />
-            {/* 20 y no 10: desde que la lista se plega a 4 (OrderHistory), lo
-                que se pide de más no se pinta, solo espera detrás del
-                desplegable. Con 10 un suscriptor de un año veía "ver 6 más" y
-                se quedaba sin los otros seis sin que nada lo dijera. El API
-                topa en 50. */}
-            <OrderHistory limit={20} />
+            {/* Referidos, fase 0 (2026-10-10). Solo en esta rama (suscripción
+                activa): el programa es para quien está suscrito. Va debajo de
+                «Próximos pedidos» (Juan 2026-10-13), y también en Cuenta. La
+                tarjeta pide sus propios datos y no se pinta si el programa no
+                está abierto para este cliente (flag REFERRALS, B2B) o si algo
+                falla.
+
+                «Mis pedidos» ya no está aquí (Juan 2026-10-13): los pedidos se
+                consultan en Cuenta, que tiene su propia lista. */}
+            <ReferralCard placement="hub" />
 
             <Marquee />
 
