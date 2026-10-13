@@ -365,7 +365,7 @@ export default function AccountPage() {
       {/* pb-32 reserves room for the fixed tab bar; without one, that is just a
           hole at the end of the page. */}
       <main
-        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-6 md:pt-[100px] md:pb-12`}
+        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
       >
         {/* Rediseño lp2 (Juan 2026-10-13, aprobado en el lienzo PRE). Orden:
             saludo con cifras → encuesta (si toca) → «Tu plan» y «Tus datos» a
@@ -373,12 +373,20 @@ export default function AccountPage() {
             Todas las tarjetas se separan con el hueco de esta columna (16 px en
             móvil, 24 en escritorio), así que ninguna lleva margen propio. */}
 
-        {/* Saludo en una línea y a dos pesos («HOLA, JUAN»), con «miembro
-            desde» y las cajas entregadas como cifras al lado (Juan: «ponlo de
-            otro modo más elegante» que las pastillas). Para un mayorista la
-            cifra cuenta pedidos, no cajas de un plan. */}
+        {/* Saludo a dos pesos («HOLA, JUAN»), con «miembro desde» y las cajas
+            entregadas como cifras al lado (Juan: «ponlo de otro modo más
+            elegante» que las pastillas). Para un mayorista la cifra cuenta
+            pedidos, no cajas de un plan.
+
+            Al tamaño de la fecha del hero del Hub, 72 px en móvil y 88 en
+            escritorio (Juan 2026-10-13). En móvil va en dos líneas («HOLA,» /
+            «JUAN»), y un nombre largo baja de tamaño para caber en la suya en
+            vez de salirse de la pantalla (`--hola-size`). */}
         <div className="mx-6 mt-1 flex flex-col gap-5 md:mx-0 md:mt-2 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-x-10 md:gap-y-6">
-          <h1 className="m-0 font-display text-[54px] uppercase leading-[0.9] tracking-[0.005em] text-[#2F343D] md:text-[104px] md:leading-[0.88]">
+          <h1
+            className="m-0 font-display text-[length:var(--hola-size)] uppercase leading-[0.95] tracking-[0.005em] text-[#2F343D] md:text-[88px] md:leading-[0.9]"
+            style={{ "--hola-size": `min(72px, calc((100vw - 48px) / ${(clashNameEm(firstName) * 1.03).toFixed(2)}))` } as React.CSSProperties}
+          >
             <span className="font-light">{t({ en: "Hi,", es: "Hola," })}</span>
             {firstName && (
               <>
@@ -887,6 +895,26 @@ export default function AccountPage() {
       )}
     </div>
   );
+}
+
+/**
+ * Ancho aproximado de un nombre en Clash Display Semibold, en «em». Medido con
+ * la fuente: la I 0,23, la M 0,93, la W 1,09, la A 0,79 y ninguna otra pasa de
+ * 0,78 (se cuentan a 0,74). Con él, en móvil, un nombre largo baja de tamaño en
+ * el saludo lo justo para caber en su línea, en vez de salirse de la pantalla.
+ * Nunca menos que «HOLA,» (2,9), que va en la línea de arriba al mismo tamaño.
+ */
+function clashNameEm(name: string): number {
+  let em = 0;
+  for (const c of name.toUpperCase()) {
+    em +=
+      c === "I" || c === "Í" ? 0.23
+      : c === "M" ? 0.93
+      : c === "W" ? 1.1
+      : c === "A" || c === "Á" ? 0.8
+      : 0.74;
+  }
+  return Math.max(em, 2.9);
 }
 
 function Section({
