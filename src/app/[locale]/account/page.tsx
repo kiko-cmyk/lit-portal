@@ -9,6 +9,7 @@ import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { BrandBand, CardTitle, Figure, Lp2Card } from "@/components/Lp2";
+import { Lp2Loader } from "@/components/Lp2Loader";
 import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
 import { ReferralCard } from "@/components/ReferralCard";
 import { SubscribeBanner } from "@/components/SubscribeBanner";
@@ -207,22 +208,16 @@ export default function AccountPage() {
   if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
   if (error) {
     return (
-      <main className="zone-lp2 flex flex-1 items-center justify-center p-8 text-center">
-        <p className="text-xs">
-          <T en="Something went wrong." es="Algo no fue bien." /> ({error})
-        </p>
+      <main className="zone-lp2 flex flex-1 flex-col items-center justify-center bg-[#EFEEE5] p-8 text-center text-[#2F343D]">
+        <h1 className="m-0 font-display text-[28px] font-semibold uppercase leading-[0.98] tracking-[0.005em] md:text-[38px]">
+          <T en="Something went wrong." es="Algo no fue bien." />
+        </h1>
+        <p className="mt-3 mb-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8C8E87]">{error}</p>
       </main>
     );
   }
-  if (!customer) {
-    return (
-      <main className="zone-lp2 flex flex-1 items-center justify-center">
-        <p className="text-xs uppercase tracking-[0.2em] opacity-50">
-          <T en="Loading…" es="Cargando…" />
-        </p>
-      </main>
-    );
-  }
+  // La espera común del portal (lp2, 2026-10-13), la misma que la de la entrada.
+  if (!customer) return <Lp2Loader />;
 
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
   // «HOLA, JUAN»: solo el nombre de pila. Si no hay nombre, queda «Hola,».
@@ -524,7 +519,7 @@ export default function AccountPage() {
             <Lp2Card as="article" className="flex h-full flex-col">
               <CardTitle thin={t({ en: "Your", es: "Tus" })} bold={t({ en: "details", es: "datos" })} />
               {emailChangeConfirmed && (
-                <div className="mt-4 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
+                <div className="mt-4 lp2-notice md:mx-0">
                   <T
                     en="Email updated successfully."
                     es="Email actualizado correctamente."
@@ -601,7 +596,7 @@ export default function AccountPage() {
                       }}
                     />
                     {addressSaved && (
-                      <div className="my-3 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
+                      <div className="my-3 lp2-notice md:mx-0">
                         <T
                           en={
                             addressSaved === true

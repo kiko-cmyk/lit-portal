@@ -10,6 +10,7 @@ import { DeliveryCalendar } from "@/components/DeliveryCalendar";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Logo } from "@/components/Logo";
 import { BrandBand, CardTitle, Lp2Card } from "@/components/Lp2";
+import { Lp2Loader } from "@/components/Lp2Loader";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
 import {
   DateChange,
@@ -864,21 +865,16 @@ function EmptyState() {
 
 function ErrorState({ code }: { code: string }) {
   return (
-    <main className="zone-cream flex flex-1 flex-col items-center justify-center p-8 text-center">
-      <h1 className="text-2xl mb-3">
+    <main className="zone-lp2 flex flex-1 flex-col items-center justify-center bg-[#EFEEE5] p-8 text-center text-[#2F343D]">
+      <h1 className="m-0 font-display text-[28px] font-semibold uppercase leading-[0.98] tracking-[0.005em] md:text-[38px]">
         <T en="Something went wrong." es="Algo no fue bien." />
       </h1>
-      <p className="text-xs opacity-50">{code}</p>
+      <p className="mt-3 mb-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8C8E87]">{code}</p>
     </main>
   );
 }
 
+// La espera común del portal (lp2, 2026-10-13), la misma que la de la entrada.
 function LoadingState() {
-  return (
-    <main className="zone-cream flex flex-1 items-center justify-center">
-      <p className="text-xs uppercase tracking-[0.2em] opacity-50">
-        <T en="Loading…" es="Cargando…" />
-      </p>
-    </main>
-  );
+  return <Lp2Loader />;
 }

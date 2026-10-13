@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
+import { Lp2Sheet, SheetDoneMark, SheetTitle } from "@/components/Lp2Sheet";
+import { formatEuro } from "@/lib/format-price";
 import { T, useLang } from "@/lib/i18n";
 import { compositionLabel, type FlavorComposition, resplitOnBoxChange } from "@/lib/mix";
 import {
@@ -11,7 +13,7 @@ import {
   flavorKeyForVariant,
 } from "@/lib/seal-plans";
 import type { PricingResponse, Subscription } from "@/lib/types";
-import { isMixSavable, MixBuilder } from "./MixBuilder";
+import { FlavorThumb, isMixSavable, MixBuilder } from "./MixBuilder";
 
 /** Seed for a fresh mix: one box to the first flavor, the rest to the second, so the
  *  builder opens on a valid 2-flavor split the customer can nudge. */
@@ -252,33 +254,16 @@ export function FlavorOverlay({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
-      onClick={busy ? undefined : onClose}
-    >
-      <div
-        className="zone-cream relative mx-auto w-full max-w-lg rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={busy}
-          aria-label="Close"
-          className="absolute right-4 top-4 text-2xl opacity-60 disabled:opacity-30"
-        >
-          ×
-        </button>
+    <Lp2Sheet onClose={onClose} busy={busy} size="lg">
 
         {done ? (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <SheetDoneMark />
+            <div className="lp2-eyebrow mt-5">
               <T en="Flavor updated" es="Sabor actualizado" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none">
-              <T en="All set" es="Listo" />
-            </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <SheetTitle className="mt-2" text={t({ en: "All set", es: "Listo" })} />
+            <p className="lp2-text mt-3">
               <T
                 en={`Your next boxes: ${resultLabel}.`}
                 es={`Tus próximas cajas: ${resultLabel}.`}
@@ -287,20 +272,18 @@ export function FlavorOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-sm bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="lp2-cta lp2-cta--still mt-7"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>
           </>
         ) : (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">
+            <div className="lp2-eyebrow">
               <T en="Change subscription" es="Cambiar suscripción" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              <T en="My flavor" es="Mi sabor" />
-            </h1>
-            <p className="mt-3 text-sm opacity-70">
+            <SheetTitle thin={t({ en: "Your", es: "Tu" })} bold={t({ en: "flavor", es: "sabor" })} />
+            <p className="lp2-text mt-3">
               {canMix ? (
                 <T
                   en={`Choose what goes in your ${boxCount} boxes. Your plan, frequency, price and ship date stay the same.`}
@@ -318,15 +301,17 @@ export function FlavorOverlay({
                 The generic line above already promises it, but these customers are the
                 ones for whom it is the whole question. */}
             {keepsLegacyPrice && (
-              <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-5 py-4">
-                <span aria-hidden className="mt-px text-base leading-none">
-                  🔒
-                </span>
-                <p className="text-xs leading-relaxed text-[color:var(--color-lit-grey)]">
+              <div className="lp2-notice mt-4 flex items-start gap-3 px-5 py-4">
+                {/* Candado en SVG: en el portal no van emojis. */}
+                <svg aria-hidden className="mt-0.5 h-4 w-4 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="5" y="11" width="14" height="10" rx="2" />
+                  <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                </svg>
+                <p className="m-0">
                   <strong className="font-bold">
                     <T
-                      en={`You keep your price: ${legacyPrice} € per shipment.`}
-                      es={`Mantienes tu precio: ${legacyPrice} € por envío.`}
+                      en={`You keep your price: ${formatEuro(subscription.chargeTotalCents, "en")} per shipment.`}
+                      es={`Mantienes tu precio: ${legacyPrice}€ por envío.`}
                     />
                   </strong>{" "}
                   <T
@@ -339,8 +324,8 @@ export function FlavorOverlay({
 
             {/* One box: mixing is impossible, so offer the way out instead of a dead end. */}
             {boxCount === 1 && ALL_FLAVORS.length >= 2 && onRequestPlanChange && (
-              <div className="mt-5 rounded-2xl border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4">
-                <p className="text-xs opacity-70">
+              <div className="lp2-card mt-5 px-5 py-4">
+                <p className="text-[12.5px] leading-[1.5] text-[#5E6168]">
                   <T
                     en="With 1 box per shipment you get one flavor. Add a second box to mix them."
                     es="Con 1 caja por envío recibes un solo sabor. Añade una segunda caja para mezclarlos."
@@ -349,7 +334,7 @@ export function FlavorOverlay({
                 <button
                   type="button"
                   onClick={onRequestPlanChange}
-                  className="mt-2 text-[11px] font-bold uppercase tracking-[0.18em] underline"
+                  className="mt-2.5 cursor-pointer text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#2F343D] underline underline-offset-4"
                 >
                   <T en="Change my plan" es="Cambiar mi plan" />
                 </button>
@@ -359,17 +344,17 @@ export function FlavorOverlay({
             {/* Mode switch. Not rendered when mixing isn't possible, so the flag's
                 off-state is pixel-identical to what production shows today. */}
             {canMix && (
-              <div className="mt-6 flex rounded-sm bg-[color:var(--color-lit-grey)]/8 p-1">
+              <div className="mt-6 flex rounded-full border border-[#2F343D]/12 bg-white/70 p-1">
                 {(["single", "mix"] as const).map((m) => (
                   <button
                     key={m}
                     type="button"
                     onClick={() => setMode(m)}
                     aria-pressed={mode === m}
-                    className={`flex-1 rounded-sm py-2.5 text-[10px] font-black uppercase tracking-[0.18em] transition ${
+                    className={`flex-1 cursor-pointer rounded-full py-2.5 text-[10.5px] font-bold uppercase tracking-[0.16em] transition ${
                       mode === m
-                        ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                        : "text-[color:var(--color-lit-grey)]/60"
+                        ? "bg-[#2F343D] text-[color:var(--color-bold-yellow)]"
+                        : "text-[#5E6168] hover:text-[#2F343D]"
                     }`}
                   >
                     {m === "single" ? (
@@ -395,27 +380,29 @@ export function FlavorOverlay({
                       type="button"
                       onClick={() => setSelected(f.key)}
                       aria-pressed={isSelected}
-                      className={`flex w-full items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
-                        isSelected
-                          ? "border-[color:var(--color-lit-grey)] bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                          : "border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] hover:border-[color:var(--color-lit-grey)]/40"
-                      }`}
+                      className={`lp2-choice py-2.5 pl-3.5 ${isSelected ? "is-on" : ""}`}
                     >
-                      <span className="font-display text-lg font-black uppercase leading-tight">
-                        {f.label}
-                      </span>
-                      {isCurrent && (
-                        <span
-                          className={`rounded-sm px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] ${
-                            isSelected
-                              ? "bg-[color:var(--color-bold-yellow)]/25 text-[color:var(--color-bold-yellow)]"
-                              : "bg-[color:var(--color-lit-grey)]/10 text-[color:var(--color-warm-gray)]"
-                          }`}
-                          style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
-                        >
-                          <T en="Current" es="Actual" />
+                      <span className="flex min-w-0 items-center gap-3">
+                        <FlavorThumb flavor={f.key} />
+                        <span className="font-display text-[17px] font-semibold uppercase leading-tight">
+                          {f.label}
                         </span>
-                      )}
+                      </span>
+                      <span className="flex flex-none items-center gap-2.5">
+                        {isCurrent && (
+                          <span className="lp2-pill bg-[#2F343D]/8 text-[#5E6168]">
+                            <T en="Current" es="Actual" />
+                          </span>
+                        )}
+                        <span
+                          aria-hidden
+                          className={`h-4 w-4 flex-none rounded-full ${
+                            isSelected
+                              ? "bg-[color:var(--color-bold-yellow)] shadow-[0_0_0_2px_#2F343D]"
+                              : "border-[1.5px] border-[#2F343D]/25"
+                          }`}
+                        />
+                      </span>
                     </button>
                   );
                 })}
@@ -425,7 +412,7 @@ export function FlavorOverlay({
             {/* The obvious question a customer has about mixing: does it cost more?
                 Con 4+ cajas, además, recordar el pack 3+1 (escalera web 2026-08-22). */}
             {canMix && (
-              <p className="mt-4 text-center text-[11px] opacity-55">
+              <p className="mt-4 mb-0 text-center text-[12px] text-[#8C8E87]">
                 {boxCount === 4 ? (
                   <T
                     en="PACK 3+1: you pay for 3 boxes and 1 is free, whatever mix you choose."
@@ -446,16 +433,14 @@ export function FlavorOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-sm bg-red-50 px-4 py-3 text-xs text-red-700">
-                {error}
-              </div>
+              <div className="lp2-notice lp2-notice--error mt-4">{error}</div>
             )}
 
             <button
               type="button"
               onClick={handleConfirm}
               disabled={!hasChange || !valid || busy}
-              className="mt-6 w-full rounded-sm bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="lp2-cta mt-6"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
@@ -468,13 +453,12 @@ export function FlavorOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+              className="lp2-link mt-4"
             >
               <T en="Cancel" es="Cancelar" />
             </button>
           </>
         )}
-      </div>
-    </div>
+    </Lp2Sheet>
   );
 }

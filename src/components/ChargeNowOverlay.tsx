@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api-client";
+import { Lp2Sheet, SheetArrow, SheetDoneMark, SheetTitle } from "@/components/Lp2Sheet";
 import { T, useLang } from "@/lib/i18n";
 import type { ChargeNowResponse, Subscription } from "@/lib/types";
 
@@ -84,117 +85,67 @@ export function ChargeNowOverlay({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
-      onClick={busy ? undefined : onClose}
-    >
-      <div
-        className="zone-cream relative mx-auto w-full max-w-md rounded-t-[24px] bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-[28px]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={busy}
-          aria-label="Close"
-          className="absolute right-4 top-4 text-2xl text-[color:var(--color-warm-gray)] opacity-70 disabled:opacity-30"
-        >
-          ×
-        </button>
+    <Lp2Sheet onClose={onClose} busy={busy}>
+      {!done ? (
+        <>
+          <p className="lp2-eyebrow">
+            <T en="Bring forward" es="Adelantar envío" />
+          </p>
+          <SheetTitle thin={t({ en: "Get it", es: "¿Recibirlo" })} bold={t({ en: "now?", es: "ya?" })} />
+          <p className="lp2-text mt-3">
+            <T
+              en="We'll charge your next order now and it'll arrive within 48-72h. Your calendar will reset from today based on your plan."
+              es="Cobraremos tu próximo pedido ahora y te llegará en las próximas 48-72h. Tu calendario se reajustará desde hoy en función de tu plan contratado."
+            />
+          </p>
 
-        {!done ? (
-          <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
-              <T en="Bring order forward" es="Adelantar pedido" />
-            </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              <T en="Get it now" es="¿Recibirlo ya" />?
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
-              <T
-                en="We'll charge your next order now and it'll arrive within 48-72h. Your calendar will reset from today based on your plan."
-                es="Cobraremos tu próximo pedido ahora y te llegará en las próximas 48-72h. Tu calendario se reajustará desde hoy en función de tu plan contratado."
-              />
-            </p>
-
-            {currentShip && (
-              <div className="mt-6 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:rounded-[22px]">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
-                  <T en="Scheduled order date" es="Fecha de pedido programada" />
-                </div>
-                <div className="mt-1 flex items-center gap-3">
-                  <span className="font-display text-xl font-black uppercase line-through text-[#9a9284]">
-                    {currentShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
-                      day: "numeric",
-                      month: "long",
-                    })}
-                  </span>
-                  <span aria-hidden className="text-lg text-[color:var(--color-warm-gray)]">
-                    →
-                  </span>
-                  <span className="font-display text-2xl font-black uppercase text-[color:var(--color-lit-grey)]">
-                    <T en="Today" es="Hoy" />
-                  </span>
-                </div>
+          {currentShip && (
+            <div className="lp2-card mt-6">
+              <span className="lp2-label">
+                <T en="Scheduled order date" es="Fecha de pedido programada" />
+              </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="lp2-figure text-[22px] text-[#8C8E87] line-through decoration-2">
+                  {currentShip.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), {
+                    day: "numeric",
+                    month: "long",
+                  })}
+                </span>
+                <SheetArrow className="h-5 w-5 text-[#8C8E87]" />
+                <span className="lp2-figure text-[30px]">
+                  <T en="Today" es="Hoy" />
+                </span>
               </div>
-            )}
-
-            {error && (
-              <div
-                className={
-                  locked
-                    ? "mt-4 rounded-[14px] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs text-[color:var(--color-lit-grey)]"
-                    : "mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]"
-                }
-              >
-                {error}
-              </div>
-            )}
-
-            <button
-              type="button"
-              disabled={busy || locked}
-              onClick={handleCharge}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
-            >
-              {busy ? (
-                <T en="Processing…" es="Procesando…" />
-              ) : (
-                <T en="Yes, order now" es="Sí, pedir ahora" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] underline"
-            >
-              <T en="Never mind" es="Mejor no" />
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
-              <T en="Done" es="Listo" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              <T en="On its way" es="En camino" />!
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
-              <T
-                en="We're processing your order. Your new delivery calendar will recalculate in a few moments."
-                es="Vamos a procesar tu pedido. Tu nuevo calendario de envíos se recalculará en unos instantes."
-              />
-            </p>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
-            >
-              <T en="Back to LIT" es="Volver a LIT" />
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+          )}
+
+          {error && <div className={`lp2-notice mt-4 ${locked ? "" : "lp2-notice--error"}`}>{error}</div>}
+
+          <button type="button" disabled={busy || locked} onClick={handleCharge} className="lp2-cta mt-7">
+            {busy ? <T en="Processing…" es="Procesando…" /> : <T en="Yes, order now" es="Sí, pedir ahora" />}
+          </button>
+          <button type="button" onClick={onClose} className="lp2-link mt-4">
+            <T en="Never mind" es="Mejor no" />
+          </button>
+        </>
+      ) : (
+        <>
+          <SheetDoneMark />
+          <p className="lp2-eyebrow mt-5">
+            <T en="Done" es="Listo" />
+          </p>
+          <SheetTitle thin={t({ en: "Order", es: "Pedido" })} bold={t({ en: "on its way", es: "en camino" })} />
+          <p className="lp2-text mt-3">
+            <T
+              en="We're processing your order. Your new delivery calendar will recalculate in a few moments."
+              es="Vamos a procesar tu pedido. Tu nuevo calendario de envíos se recalculará en unos instantes."
+            />
+          </p>
+          <button type="button" onClick={onClose} className="lp2-cta lp2-cta--still mt-7">
+            <T en="Back to LIT" es="Volver a LIT" />
+          </button>
+        </>
+      )}
+    </Lp2Sheet>
   );
 }
