@@ -83,7 +83,9 @@ export function BottomNav() {
       // even on short pages like the no-subscription state. Estilo PRE: icono
       // por pestaña, activo en círculo amarillo (mismo lenguaje que la pastilla
       // activa del header desktop).
-      className={`fixed bottom-0 left-0 right-0 z-40 grid ${VISIBLE_ITEMS.length === 2 ? "grid-cols-2" : "grid-cols-3"} border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]/95 px-3.5 pt-1.5 pb-5 backdrop-blur-md md:hidden`}
+      // Opaca y hasta el borde de abajo, zona de la barra de inicio incluida
+      // (`--nav-pb`): Juan 2026-10-13, «que nada se vea detrás».
+      className={`fixed bottom-0 left-0 right-0 z-40 grid ${VISIBLE_ITEMS.length === 2 ? "grid-cols-2" : "grid-cols-3"} border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3.5 pt-1.5 pb-[var(--nav-pb)] md:hidden`}
       aria-label="Primary"
     >
       {VISIBLE_ITEMS.map((it) => {

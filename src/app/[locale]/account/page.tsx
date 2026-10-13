@@ -328,7 +328,7 @@ export default function AccountPage() {
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
           2026-05-19). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
         <Logo />
         {/* min-w-0 lets the group shrink on narrow phones (≤390px with pill +
             toggle + chip + TierPill); chip name and TierPill truncate under
@@ -362,10 +362,11 @@ export default function AccountPage() {
         </div>
       </header>
 
-      {/* pb-32 reserves room for the fixed tab bar; without one, that is just a
-          hole at the end of the page. */}
+      {/* The bottom padding reserves room for the fixed tab bar (65 px plus its
+          `--nav-pb`, which grows with the iPhone home-indicator inset); without
+          one, that is just a hole at the end of the page. */}
       <main
-        className={`flex flex-1 flex-col gap-4 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
+        className={`flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] ${accountOnly ? "pb-[calc(3rem+env(safe-area-inset-bottom,0px))]" : "pb-[calc(108px+var(--nav-pb))]"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
       >
         {/* Rediseño lp2 (Juan 2026-10-13, aprobado en el lienzo PRE). Orden:
             saludo con cifras → encuesta (si toca) → «Tu plan» y «Tus datos» a
@@ -1004,6 +1005,12 @@ function PlanCard({
   // Con 4 sabores, en un móvil de 360 cada columna mide 62 px: la caja y el
   // nombre bajan un punto para caber (en escritorio, igual que con 3).
   const fourFlavors = (subscription.composition?.length ?? 0) >= 4;
+  // «2×» y el nombre en la MISMA línea bajo la caja (Juan 2026-10-13), donde
+  // cabe: con 3 sabores desde md y con 4 desde xl (entre lg y xl la tarjeta va
+  // en media columna y cada sabor mide ~90 px). En móvil no caben y van uno
+  // encima del otro.
+  const countRow = !manyFlavors ? "" : fourFlavors ? "xl:flex xl:items-baseline xl:gap-2" : "md:flex md:items-baseline md:gap-2";
+  const labelTop = !manyFlavors ? "md:mt-1.5" : fourFlavors ? "md:mt-1.5 xl:mt-0" : "md:mt-0";
 
   return (
     <Lp2Card as="article" className="flex h-full flex-col">
@@ -1062,12 +1069,12 @@ function PlanCard({
                     />
                   )}
                 </span>
-                <span className="min-w-0">
-                  <span className="block font-display text-[24px] font-semibold leading-none md:text-[28px]">
+                <span className={`min-w-0 ${countRow}`}>
+                  <span className="block flex-none font-display text-[24px] font-semibold leading-none md:text-[28px]">
                     {c.boxes}×
                   </span>
                   <span
-                    className={`mt-[5px] block font-bold uppercase leading-[1.3] md:mt-1.5 md:text-[10px] md:tracking-[0.14em] ${
+                    className={`mt-[5px] block font-bold uppercase leading-[1.3] md:text-[10px] md:tracking-[0.14em] ${labelTop} ${
                       fourFlavors ? "text-[9px] tracking-[0.08em]" : "text-[9.5px] tracking-[0.14em]"
                     }`}
                   >

@@ -60,6 +60,15 @@
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* Zonas seguras del iPhone (viewport-fit=cover en layout.tsx). --safe-top es
+   el hueco del borde de arriba (0 fuera del iPhone); --nav-pb, el relleno de
+   abajo de la barra de navegación: 20 px, o la zona de la barra de inicio si
+   es mayor. Las páginas con esa barra reservan su alto con --nav-pb. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --nav-pb: max(1.25rem, env(safe-area-inset-bottom, 0px));
+}
+
 :root {
   /* Default text + bg for the portal — overridden per page color zone */
   --background: var(--color-brisky-cream);

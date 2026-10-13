@@ -207,7 +207,7 @@ export default function CollectionPage() {
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
           2026-05-19). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
+      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-cream)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
         <Link
           href={portalHref(lang, "home")}
           className="text-[13px] font-medium text-[color:var(--color-lit-grey)] hover:opacity-60"
@@ -232,7 +232,7 @@ export default function CollectionPage() {
         </div>
       </header>
 
-      <main className="flex-1 pt-[88px] pb-24 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[calc(88px+var(--safe-top))] pb-[calc(76px+var(--nav-pb))] md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         <section className="px-6 pt-2 pb-5 md:px-0">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-warm-gray)]">

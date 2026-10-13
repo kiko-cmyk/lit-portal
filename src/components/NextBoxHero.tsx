@@ -235,12 +235,15 @@ function FlavorShelf({ items }: { items: ShelfItem[] }) {
           n >= 4 ? (
             <Panel key={it.key || it.name} item={it} height={143} box={120} top={14} radius={20} caption="side" />
           ) : (
+            // 224 px de alto y no 300 (Juan 2026-10-13: «los cuadros de los
+            // sabores menos altos»). Las cajas bajan lo justo para no pisar la
+            // cifra de abajo; con 3 se quedan igual y solo sube la caja.
             <Panel
               key={it.key || it.name}
               item={it}
-              height={300}
-              box={n === 1 ? 230 : n === 2 ? 196 : 140}
-              top={n === 1 ? 34 : n === 2 ? 38 : 62}
+              height={224}
+              box={n === 1 ? 176 : n === 2 ? 160 : 140}
+              top={n === 1 ? 20 : n === 2 ? 20 : 22}
               radius={22}
               caption="corner"
             />
