@@ -25,9 +25,9 @@ Cualquier alerta de dinero lleva el id de la recompensa en su código de Slack.
 | `src/app/api/webhooks/seal/route.ts` | Consume premios tras un cobro (nunca aplica) |
 | `src/app/api/subscription/plan/route.ts` | Retira el premio (y cualquier `LITREF` suelto) antes de un alta y baja de líneas. Si no puede, 409 `referral_reward_busy` sin tocar nada |
 | `src/app/api/cron/referral-sweep/route.ts` | Cron: aplica, consume y retira premios, cualifica pendientes y emite códigos. Cada 4 h desde el crontab del VPS; Vercel (Hobby, solo crons diarios) lo lanza además a las 06:50 UTC como red |
-| `src/app/api/referral/code/route.ts` | La tarjeta de Mi LIT (solo lee) |
+| `src/app/api/referral/code/route.ts` | Los datos de la tarjeta (solo lee) |
 | `src/app/api/referral/track/route.ts` | «Ha compartido» (solo el canal, para el KPI) |
-| `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN» en Mi LIT |
+| `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN Y LLÉVATE 10 €» en Suscripción y en Cuenta, solo con la suscripción activa |
 | `scripts/referral-*.ts` | Preflight, descuento padre, backfill de códigos, operación a mano |
 | `scripts/test-referral-*.ts` | Tests (dentro de `npm test`) |
 
@@ -133,7 +133,7 @@ Ningún evento lleva datos del amigo.
 | Propiedad de perfil `referral_code` | al activarse el código | el código |
 | `referral_friend_joined` | a quien invita, cuando un amigo cualifica | `reward_amount`, `reward_amount_label`, `friends_joined`, `referral_code` |
 | `referral_reward_applied` | a quien invita, cuando el cron aplica los 10 € | `reward_amount`, `reward_amount_label`, `charge_date`, `charge_date_label` |
-| `referral_shared` | al copiar o compartir en Mi LIT | `channel` (`copy` \| `whatsapp` \| `native`) |
+| `referral_shared` | al copiar el código en la tarjeta | `channel` (`copy`) |
 
 **Qué montar:**
 - **Flow transaccional «Referidos · Alguien se ha unido»** (disparador `referral_friend_joined`, con reentrada permitida).
@@ -145,16 +145,16 @@ Ningún evento lleva datos del amigo.
 
 Reglas: tuteo, sin guiones largos y sin emojis. En los emails, «tu próximo LIT» y «entrega», no «suscripción» ni «pedido».
 
-**Tarjeta de Mi LIT**
+**Tarjeta** (Suscripción y Cuenta; rediseño del 13-oct: fondo negro con foto como el resto de banners, los 10 € en el titular, solo el código con su botón de copiar)
 
 | | ES | EN |
 |---|---|---|
 | Antetítulo | 10 € para cada uno | €10 each |
-| Título | TRAE A ALGUIEN. | BRING SOMEONE IN. |
-| Texto | Pásale tu código a quien quieras. Tiene 10 € en su primera caja, y tú 10 € menos en tu próximo envío. | Give your code to anyone you like. They get €10 off their first box, and you get €10 off your next delivery. |
-| Letra pequeña | Para quien aún no ha probado LIT. Vale en suscripción y en compra única. | For people new to LIT. Works on subscriptions and one-time orders. |
+| Título | TRAE A ALGUIEN / Y LLÉVATE 10 € («10 €» en amarillo) | BRING SOMEONE IN / AND GET €10 |
+| Texto | Envía tu código a quien tú quieras. Tendrá 10 € de descuento en su primer pedido, y tú 10 € menos en tu próximo envío. | Send your code to anyone you like. They get €10 off their first order, and you get €10 off your next delivery. |
+| Letra pequeña | Solo vale para la primera compra de tu amigo, con suscripción o en compra única. Condiciones | Only valid on your friend's first purchase, with a subscription or one-time. Terms |
 
-**WhatsApp (texto prellenado):** «Llevo un tiempo con LIT y lo noto. Si lo quieres probar, usa mi código {CÓDIGO} en litsalt.com y tienes 10 € de descuento en tu primera caja.»
+**Sin botones de compartir** (13-oct): ni WhatsApp ni «otras formas de compartir». El cliente copia el código y se lo pasa a quien quiera, como quiera. El texto prellenado de WhatsApp sigue en `buildShareText` por si vuelve en la fase 1.
 
 **Email «Alguien se ha unido con tu código»** (transaccional)
 - **Asunto:** Alguien se ha unido con tu código

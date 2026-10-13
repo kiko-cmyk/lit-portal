@@ -558,10 +558,11 @@ export default function HubPage() {
             </section>
 
             {/* Referidos, fase 0 (2026-10-10). Solo en esta rama (suscripción
-                activa): el programa es para quien está suscrito. La tarjeta pide
-                sus propios datos y no se pinta si el programa no está abierto para
-                este cliente (flag REFERRALS, B2B) o si algo falla. */}
-            <ReferralCard />
+                activa): el programa es para quien está suscrito. También va en
+                Cuenta (2026-10-13). La tarjeta pide sus propios datos y no se pinta
+                si el programa no está abierto para este cliente (flag REFERRALS,
+                B2B) o si algo falla. */}
+            <ReferralCard placement="hub" />
 
             <SectionDivider
               title={t({ en: "Upcoming", es: "Próximos pedidos" })}
