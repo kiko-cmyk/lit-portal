@@ -1,5 +1,6 @@
 "use client";
 
+import { flavorVisual } from "@/lib/flavor-visuals";
 import { T, useLang } from "@/lib/i18n";
 import {
   type FlavorComposition,
@@ -87,11 +88,7 @@ export function MixBuilder({
   return (
     <div className="mt-6">
       <div className="flex items-baseline justify-between">
-        <div
-          className="font-semibold uppercase tracking-[0.18em] opacity-60"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-          aria-live="polite"
-        >
+        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8C8E87]" aria-live="polite">
           {left === 0 ? (
             <T
               en={`${assigned} of ${boxCount} boxes assigned`}
@@ -114,7 +111,7 @@ export function MixBuilder({
             type="button"
             onClick={splitEvenly}
             disabled={disabled}
-            className="text-[10px] uppercase tracking-[0.18em] underline opacity-50 disabled:opacity-30"
+            className="cursor-pointer text-[10px] font-bold uppercase tracking-[0.16em] text-[#5E6168] underline underline-offset-4 disabled:opacity-30"
           >
             <T en="Split evenly" es="Repartir igual" />
           </button>
@@ -128,31 +125,36 @@ export function MixBuilder({
           return (
             <div
               key={f.key}
-              className={`flex items-center justify-between rounded-2xl border px-5 py-3.5 transition ${
+              className={`flex items-center justify-between gap-3 rounded-[16px] border px-3.5 py-2.5 transition ${
                 active
-                  ? "border-[color:var(--color-lit-grey)]/30 bg-[color:var(--color-sharp-white)]"
-                  : "border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)]/50"
+                  ? "border-[#2F343D] bg-white shadow-[0_10px_22px_-16px_rgba(40,34,20,0.45)]"
+                  : "border-[#2F343D]/12 bg-white/60"
               }`}
             >
-              <span
-                className={`font-display text-lg font-black uppercase leading-tight ${
-                  active ? "" : "opacity-40"
-                }`}
-              >
-                {shortLabel(f.key)}
+              <span className="flex min-w-0 items-center gap-3">
+                <FlavorThumb flavor={f.key} dim={!active} />
+                {/* 14px por debajo de 380px de ancho: a 17 «WATERMELON» se
+                    montaba sobre el botón de restar en un móvil de 360. */}
+                <span
+                  className={`font-display text-[14px] font-semibold uppercase leading-tight min-[380px]:text-[17px] ${
+                    active ? "text-[#2F343D]" : "text-[#8C8E87]"
+                  }`}
+                >
+                  {shortLabel(f.key)}
+                </span>
               </span>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 min-[380px]:gap-3">
                 <button
                   type="button"
                   onClick={() => dec(f.key)}
                   disabled={disabled || n === 0}
                   aria-label={t({ en: `One less ${shortLabel(f.key)}`, es: `Una menos de ${shortLabel(f.key)}` })}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--color-lit-grey)]/25 text-lg leading-none disabled:opacity-25"
+                  className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-[#2F343D]/20 bg-white text-[18px] leading-none text-[#2F343D] transition-colors hover:border-[#2F343D]/50 disabled:cursor-not-allowed disabled:opacity-25"
                 >
                   −
                 </button>
                 <span
-                  className="w-6 text-center font-display text-xl font-black"
+                  className="w-6 text-center font-display text-[22px] font-semibold"
                   aria-live="polite"
                 >
                   {n}
@@ -162,7 +164,7 @@ export function MixBuilder({
                   onClick={() => inc(f.key)}
                   disabled={disabled}
                   aria-label={t({ en: `One more ${shortLabel(f.key)}`, es: `Una más de ${shortLabel(f.key)}` })}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--color-lit-grey)]/25 text-lg leading-none disabled:opacity-25"
+                  className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-[#2F343D]/20 bg-white text-[18px] leading-none text-[#2F343D] transition-colors hover:border-[#2F343D]/50 disabled:cursor-not-allowed disabled:opacity-25"
                 >
                   +
                 </button>
@@ -179,4 +181,26 @@ export function MixBuilder({
  *  flavors are in play (a single flavor is the plain flavor change, not a mix). */
 export function isMixSavable(value: FlavorComposition[], boxCount: number): boolean {
   return mixBoxCount(value) === boxCount && value.filter((c) => c.boxes > 0).length >= 2;
+}
+
+/**
+ * La caja del sabor en miniatura sobre su círculo de color, como en «Tu plan»
+ * (rediseño lp2). La usan el mezclador y la lista de sabores del popup.
+ */
+export function FlavorThumb({ flavor, dim = false }: { flavor: string; dim?: boolean }) {
+  const v = flavorVisual(flavor);
+  return (
+    <span aria-hidden className={`relative h-[46px] w-[52px] flex-none transition-opacity ${dim ? "opacity-50" : ""}`}>
+      <span className="absolute bottom-0 left-1 h-10 w-10 rounded-full" style={{ background: v.disc }} />
+      {v.box && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={v.box}
+          alt=""
+          className="absolute bottom-0.5 left-0 h-auto w-[50px] max-w-none"
+          style={{ filter: "drop-shadow(0 6px 6px rgba(26,28,34,0.2))" }}
+        />
+      )}
+    </span>
+  );
 }
