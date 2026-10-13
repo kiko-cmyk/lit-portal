@@ -151,8 +151,8 @@ Reglas: tuteo, sin guiones largos y sin emojis. En los emails, «tu próximo LIT
 |---|---|---|
 | Antetítulo | 10 € para cada uno | €10 each |
 | Título | TRAE A ALGUIEN / Y LLÉVATE 10 € («10 €» en amarillo) | BRING SOMEONE IN / AND GET €10 |
-| Texto | Envía tu código a quien tú quieras. Tendrá 10 € de descuento en su primer pedido, y tú 10 € menos en tu próximo envío. | Send your code to anyone you like. They get €10 off their first order, and you get €10 off your next delivery. |
-| Letra pequeña | Solo vale para la primera compra de tu amigo, con suscripción o en compra única. Condiciones | Only valid on your friend's first purchase, with a subscription or one-time. Terms |
+| Texto | Comparte tu código con quien quieras. Tu amigo ahorra 10 € en su primer pedido y tú, 10 € en tu próximo envío. | Share your code with anyone you like. Your friend saves €10 on their first order, and you get €10 off your next delivery. |
+| Letra pequeña | Válido en la primera compra de tu amigo, con suscripción o en compra única. Ver condiciones | Valid on your friend's first purchase, with a subscription or one-time. See terms |
 
 **Sin botones de compartir** (13-oct): ni WhatsApp ni «otras formas de compartir». El cliente copia el código y se lo pasa a quien quiera, como quiera. El texto prellenado de WhatsApp sigue en `buildShareText` por si vuelve en la fase 1.
 

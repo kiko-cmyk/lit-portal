@@ -189,8 +189,8 @@ export function ReferralCard({ placement }: ReferralCardProps) {
         <div className="mt-4 min-w-0 md:mt-0">
           <p className="text-[14px] leading-[1.55] text-[#cfc8b6] md:text-[15px]">
             <T
-              en="Send your code to anyone you like. They get €10 off their first order, and you get €10 off your next delivery."
-              es="Envía tu código a quien tú quieras. Tendrá 10 € de descuento en su primer pedido, y tú 10 € menos en tu próximo envío."
+              en="Share your code with anyone you like. Your friend saves €10 on their first order, and you get €10 off your next delivery."
+              es="Comparte tu código con quien quieras. Tu amigo ahorra 10 € en su primer pedido y tú, 10 € en tu próximo envío."
             />
           </p>
 
@@ -229,14 +229,14 @@ export function ReferralCard({ placement }: ReferralCardProps) {
 
           <p className="mt-4 text-[11px] leading-[1.5] text-[#b3ab98]">
             <T
-              en="Only valid on your friend's first purchase, with a subscription or one-time."
-              es="Solo vale para la primera compra de tu amigo, con suscripción o en compra única."
+              en="Valid on your friend's first purchase, with a subscription or one-time."
+              es="Válido en la primera compra de tu amigo, con suscripción o en compra única."
             />
             {data.termsUrl && (
               <>
                 {" "}
                 <a href={data.termsUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
-                  <T en="Terms" es="Condiciones" />
+                  <T en="See terms" es="Ver condiciones" />
                 </a>
               </>
             )}
