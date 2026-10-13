@@ -1,6 +1,6 @@
 # Referidos «Trae a alguien», fase 0
 
-**El programa en una frase:** cada suscriptor activo tiene un código personal (`MARIA27`). Su amigo lo escribe en el checkout y tiene 10 € en su primer pedido de cajas, con suscripción o en compra única. Quien invita tiene 10 € menos en su siguiente cobro.
+**El programa en una frase:** cada suscriptor activo tiene un código personal (`MARIA7KQ2`: su nombre, una cifra y tres caracteres al azar). Su amigo lo escribe en el checkout y tiene 10 € en su primer pedido de cajas, con suscripción o en compra única. Quien invita tiene 10 € menos en su siguiente cobro.
 
 **Lo que manda en el diseño:** en Seal, un código aplicado a una suscripción se repite en cada cobro hasta que se quita, y aplicar dos veces duplica el descuento. Por eso el premio de quien invita sigue estas reglas:
 
@@ -119,7 +119,7 @@ Ver `docs/ROLLBACK.md`, sección (e). Del lado del amigo, lo inmediato es poner 
 ## Riesgos que se aceptan en la fase 0
 
 - **Un cliente que ya ha comprado puede usar un código de amigo una vez,** porque Shopify no reconoce a los invitados sin sesión. Quien le invitó no gana nada, porque la cualificación lo rechaza. Coste máximo: 10 € por cliente, una sola vez en su vida para todo el programa. Esto último depende de que «un uso por cliente» valga para el descuento padre entero; se comprueba en el E2E (paso 2).
-- **Los códigos `NOMBRE` + 2 cifras se pueden adivinar.** Es el mismo caso de arriba. Si un código acaba en una web de cupones, la regla de velocidad lo para en revisión y se regenera.
+- **Un código puede filtrarse** (una web de cupones, un grupo grande). Adivinar uno ya no es posible: desde el 13-oct son nombre + cifra + 3 caracteres, 238.328 combinaciones por nombre (con el formato viejo, nombre + 2 cifras, eran 90 y se encontraban probando). Si uno se filtra, la regla de velocidad lo para en revisión y se cambia: `npx tsx scripts/referral-regenerate-codes.ts --customer=<id> --apply` y después `referral-backfill-codes.ts --issue --only=<id>`.
 - **Un `LITREF` filtrado valdría una vez en el checkout.** Es aleatorio y solo se ve en Seal o en el pedido de quien invita, y se borra en Shopify en cuanto se consume.
 - **Con `REFERRAL_REWARDS=off` la cola ni se lee.** Revocar o caducar una recompensa en cola espera a que se abra el flag. No mueve dinero: en cola no hay nada puesto en Seal.
 - **Un cliente puede encontrarse el cerrojo tomado** si cambia su plan justo cuando el cron le está poniendo los 10 € (unos segundos, solo en las 48 h antes de su cobro). Ve «Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.»

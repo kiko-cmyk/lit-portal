@@ -68,18 +68,31 @@ check("demasiado largo → null", normalizeFirstName("Maximilianoooo") === null)
 check("nombres reservados → null", normalizeFirstName("Lit") === null && normalizeFirstName("Amigo") === null);
 
 const fixed = (n: number) => () => n;
-check("nombre + 2 cifras", generateReferralCode("María", { randomInt: fixed(17) }) === "MARIA27");
-check("nombre + 3 cifras", generateReferralCode("María", { digits: 3, randomInt: fixed(174) }) === "MARIA274");
-check("sin nombre → AMIGO + 4 cifras", generateReferralCode("", { randomInt: fixed(234) }) === "AMIGO1234");
-check("las cifras nunca empiezan por 0", generateReferralCode("Ana", { randomInt: fixed(0) }) === "ANA10");
+check("nombre + cifra + 3 caracteres", generateReferralCode("María", { randomInt: fixed(0) }) === "MARIA2AAA");
+check("sin nombre → AMIGO + cifra + 4", generateReferralCode("", { randomInt: fixed(0) }) === "AMIGO2AAAA");
+{
+  // Secuencia: la cifra (índice 5 → «7») y luego K, Q, 2 del alfabeto sin ambiguos.
+  const seq = [5, 9, 13, 23];
+  let i = 0;
+  check("JUAN7KQ2: la cifra va delante y separa el nombre", generateReferralCode("Juan", { randomInt: () => seq[i++] }) === "JUAN7KQ2");
+}
 
 let allOk = true;
 for (let i = 0; i < 2000; i++) {
   const c = generateReferralCode(i % 3 ? "Lucía" : null);
-  if (!/^(LUCIA[1-9]\d|AMIGO[1-9]\d{3})$/.test(c)) allOk = false;
+  if (!/^(LUCIA[2-9][A-HJKMNP-Z2-9]{3}|AMIGO[2-9][A-HJKMNP-Z2-9]{4})$/.test(c)) allOk = false;
   if (c.startsWith("LIT-") || c.startsWith("LITREF-") || c.includes("-")) allOk = false;
+  if (/[01ILO]/.test(c.replace(/^(LUCIA|AMIGO)/, ""))) allOk = false;
 }
-check("2000 códigos aleatorios: formato correcto, sin guion, nunca LIT- ni LITREF-", allOk);
+check("2000 códigos aleatorios: formato correcto, sin guion, sin 0/O ni 1/I/L, nunca LIT- ni LITREF-", allOk);
+{
+  // Lo que importa del formato nuevo: no se puede adivinar uno probando.
+  const perName = 8 * 31 ** 3;
+  check(`hay ${perName.toLocaleString("es-ES")} combinaciones por nombre (con 2 cifras eran 90)`, perName === 238_328);
+  const seen = new Set<string>();
+  for (let i = 0; i < 5000; i++) seen.add(generateReferralCode("María"));
+  check("5000 códigos de la misma persona salen casi todos distintos", seen.size > 4900);
+}
 
 let rewardOk = true;
 for (let i = 0; i < 500; i++) {

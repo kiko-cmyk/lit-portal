@@ -184,24 +184,41 @@ export function normalizeFirstName(raw: string | null | undefined): string | nul
   return letters;
 }
 
+/** Sin los caracteres que se confunden al leerlos o dictarlos: ni 0/O ni 1/I/L. */
+const CODE_DIGITS = "23456789";
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
 /**
- * Código personal: nombre de pila + 2 cifras, sin guion (`MARIA27`), porque se
- * dicta por teléfono y se teclea en el móvil. Con `digits: 3` (`MARIA274`) para
- * cuando las de 2 chocan, y `AMIGO` + 4 cifras cuando no hay nombre utilizable.
- * Las cifras nunca empiezan por 0, para que se lean igual que se escriben.
+ * Código personal: nombre de pila + 4 caracteres al azar que empiezan por una
+ * cifra, sin guion (`MARIA7KQ2`).
  *
- * La unicidad no la garantiza esto sino Shopify (un código repetido falla en la
- * bulk) y el UNIQUE de `referral_codes`; quien llama reintenta con otras cifras.
+ * ── Por qué así (Juan, 2026-10-13) ──
+ *
+ * La primera versión era nombre + 2 cifras (`JUAN65`): fácil de dictar, pero con
+ * solo 90 combinaciones por nombre. Probando MARIA10, MARIA11… en el checkout,
+ * cualquiera encontraba en minutos un código de verdad y se llevaba 10 €, porque
+ * Shopify no distingue a un cliente que ya compró cuando entra como invitado. Con
+ * una cifra y tres caracteres hay 238.328 combinaciones por nombre: acertar uno
+ * probando deja de ser posible. Y sigue llevando el nombre (el amigo ve de quién
+ * viene) y tecleándose sin esfuerzo. La cifra delante separa el nombre del resto
+ * (`JUAN7KQ2`, no `JUANKQ72`).
+ *
+ * Sin nombre utilizable: `AMIGO` + 5. Todos comparten ese prefijo, así que llevan
+ * un carácter más. La unicidad la garantizan Shopify (un código repetido falla en
+ * la bulk) y el UNIQUE de `referral_codes`; quien llama reintenta.
  */
 export function generateReferralCode(
   firstName: string | null | undefined,
-  opts: { digits?: 2 | 3; randomInt?: RandomInt } = {},
+  opts: { randomInt?: RandomInt } = {},
 ): string {
   const rnd = opts.randomInt ?? cryptoRandomInt;
+  const suffix = (length: number) => {
+    let out = CODE_DIGITS[rnd(CODE_DIGITS.length)];
+    for (let i = 1; i < length; i++) out += CODE_ALPHABET[rnd(CODE_ALPHABET.length)];
+    return out;
+  };
   const name = normalizeFirstName(firstName);
-  if (!name) return `AMIGO${1000 + rnd(9000)}`;
-  if (opts.digits === 3) return `${name}${100 + rnd(900)}`;
-  return `${name}${10 + rnd(90)}`;
+  return name ? `${name}${suffix(4)}` : `AMIGO${suffix(5)}`;
 }
 
 const REWARD_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
