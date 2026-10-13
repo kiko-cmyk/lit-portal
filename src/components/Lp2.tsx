@@ -27,6 +27,8 @@ export function Lp2Card({
 
 /**
  * Título de tarjeta: dos pesos en UNA sola línea («TU PLAN», «MIS PEDIDOS»).
+ * La parte fina en Light (300), no en Extralight: Juan la quiso «un pelín más
+ * gruesa» (2026-10-13), que tan fina no se usa en LIT.
  * Juan pidió la línea única y un tamaño algo menor que el de la landing, que es
  * más elegante dentro de una tarjeta. Si el texto no cabe (títulos largos en
  * móvil), parte por el espacio entre los dos pesos.
@@ -46,7 +48,7 @@ export function CardTitle({
     <Tag
       className={`m-0 font-display text-[28px] uppercase leading-[0.98] tracking-[0.005em] md:text-[38px] ${className}`}
     >
-      <span className="font-extralight">{thin}</span>{" "}
+      <span className="font-light">{thin}</span>{" "}
       {/* La parte en negrita no se parte: si no cabe, baja entera («¿QUIERES
           SALIR / DEL CÍRCULO?» y no «… DEL / CÍRCULO?»). */}
       <span className="whitespace-nowrap font-semibold">{bold}</span>
@@ -89,32 +91,67 @@ export function Figure({
 
 /**
  * Banda de cierre «POUR IT. MIX IT. GET LIT.» con la fila de sabores calada,
- * como la de la landing. Sustituye a la cinta en movimiento en estas dos
- * pantallas. `compact` recorta el hueco de arriba y abajo cuando detrás viene la
- * invitación a suscribirse (mismo criterio que tenía la cinta).
+ * como la «banda cinética» de la landing: de borde a borde y MOVIÉNDOSE (Juan
+ * 2026-10-13: «esto se debe mover, ¿no?»). La fila de arriba va hacia la
+ * izquierda y la calada hacia la derecha.
+ *
+ * En la landing la banda se mueve con el scroll (GSAP, `xPercent` 0 → -24),
+ * pero allí va a media página. Aquí cierra la página: al final casi no queda
+ * recorrido de scroll y apenas se movía, así que va en bucle continuo, como la
+ * cinta que sustituye (clases `.lp2-band-row` en globals.css, quieta con
+ * «reducir movimiento»). Cada fila lleva el texto cuatro veces y se desplaza
+ * media fila por vuelta, para que el empalme no se vea en ninguna pantalla.
+ *
+ * `compact` recorta el hueco de arriba cuando detrás viene la invitación a
+ * suscribirse (mismo criterio que la cinta). Ocupa el ancho de la ventana
+ * aunque viva dentro de la columna de la página (`w-screen` + margen
+ * negativo); la página corta el desborde con `overflow-x-clip`.
  */
 export function BrandBand({ compact = false }: { compact?: boolean }) {
+  const row =
+    "lp2-band-row flex w-max items-center whitespace-nowrap font-display text-[46px] uppercase leading-none tracking-[0.005em] md:text-[84px]";
+  const copies = [0, 1, 2, 3];
+  const dot = (
+    <span
+      aria-hidden
+      className="mx-[0.32em] inline-block h-[0.18em] w-[0.18em] flex-none rounded-full bg-[color:var(--color-bold-yellow)] shadow-[0_0_0_1px_rgba(50,55,67,0.25)]"
+    />
+  );
+
   return (
     <section
       aria-hidden
       // Los márgenes SE SUMAN al hueco de la columna (16/24 px): 36+16 = 52 en
       // móvil y 64+24 = 88 en escritorio, como en el lienzo aprobado.
-      className={`overflow-hidden whitespace-nowrap border-y border-[#2F343D]/12 py-6 md:py-8 ${
+      className={`ml-[calc(50%-50vw)] w-screen overflow-hidden border-y border-[#2F343D]/12 py-6 md:py-8 ${
         compact ? "mt-4" : "mt-9 md:mt-16"
       }`}
     >
-      <div className="pl-5 font-display text-[46px] font-semibold uppercase leading-none tracking-[0.005em] text-[#2F343D] md:pl-12 md:text-[84px]">
-        Pour it. Mix it.{" "}
-        <span className="rounded-[8px] bg-[color:var(--color-bold-yellow)] px-2.5 md:rounded-[14px] md:px-4">
-          Get LIT.
-        </span>{" "}
-        Pour it. Mix it.
+      <div className={`${row} font-semibold text-[#2F343D]`}>
+        {copies.map((i) => (
+          <span key={i} className="flex items-center gap-[0.32em] pr-[0.32em]">
+            <span>Pour it.</span>
+            <span>Mix it.</span>
+            <span className="rounded-[8px] bg-[color:var(--color-bold-yellow)] px-2.5 md:rounded-[14px] md:px-4">
+              Get LIT.
+            </span>
+          </span>
+        ))}
       </div>
       <div
-        className="mt-2.5 pl-5 font-display text-[46px] font-light uppercase leading-none tracking-[0.005em] text-transparent md:mt-3 md:pl-12 md:text-[84px]"
+        className={`${row} lp2-band-row--rev mt-2.5 font-light text-transparent md:mt-3`}
         style={{ WebkitTextStroke: "1px rgba(47,52,61,0.5)" }}
       >
-        Salty Lemon · Salty Watermelon · Salty Peach
+        {copies.map((i) => (
+          <span key={i} className="flex items-center">
+            <span>Salty Lemon</span>
+            {dot}
+            <span>Salty Watermelon</span>
+            {dot}
+            <span>Salty Peach</span>
+            {dot}
+          </span>
+        ))}
       </div>
     </section>
   );

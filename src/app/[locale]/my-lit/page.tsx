@@ -457,7 +457,7 @@ export default function HubPage() {
     : null;
 
   return (
-    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col overflow-x-clip bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
       {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
@@ -496,7 +496,7 @@ export default function HubPage() {
         </div>
       </header>
 
-      <main className="flex flex-1 flex-col gap-4 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-[1184px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
+      <main className="flex flex-1 flex-col gap-4 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-6 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPaused ? (
           <ReactivateCard

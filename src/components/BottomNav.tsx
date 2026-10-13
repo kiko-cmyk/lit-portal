@@ -169,8 +169,9 @@ export function TopNav() {
           CAMBIAR (a la izquierda del resto) + la cápsula de nav (viñeta ○/●
           por item, activo en pastilla amarilla). */}
       {/* Fondo y ancho siguen a la página: el crema de la zona (`--background`)
-          y los 1184 px del rediseño lp2 de Suscripción y Cuenta (2026-10-13). */}
-      <div className="mx-auto flex w-full max-w-[1184px] items-center justify-between px-8 py-4">
+          y los 1440 px con 24 px de margen del rediseño lp2 de Suscripción y
+          Cuenta (Juan 2026-10-13: «el ancho de página que sea más»). */}
+      <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between px-6 py-4">
         {/* Izquierda del todo — logo */}
         <Logo />
         {/* Derecha — CAMBIAR + cápsula de nav */}

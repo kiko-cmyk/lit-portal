@@ -176,14 +176,14 @@ export function ReferralCard({ placement }: ReferralCardProps) {
           >
             {lang === "en" ? (
               <>
-                <span className="block font-extralight">Bring someone in</span>
+                <span className="block font-light">Bring someone in</span>
                 <span className="block font-semibold">
                   and get <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">€10</span>
                 </span>
               </>
             ) : (
               <>
-                <span className="block font-extralight">Trae a alguien</span>
+                <span className="block font-light">Trae a alguien</span>
                 <span className="block font-semibold">
                   y llévate <span className="whitespace-nowrap text-[color:var(--color-bold-yellow)]">10€</span>
                 </span>
