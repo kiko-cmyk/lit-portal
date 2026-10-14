@@ -223,6 +223,15 @@ export function FlavorOverlay({
             es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
           }),
         );
+      } else if (err.code === "change_applying") {
+        // ESTE cambio entró a medias y el cron lo termina en minutos (14-oct-2026): no es
+        // "tu último cambio", es el que acaba de pedir, y repetirlo no hace falta.
+        setError(
+          t({
+            en: "Your new flavors are still being applied. You'll see them on your subscription within a few minutes and you won't be overcharged. No need to save again.",
+            es: "Tus sabores nuevos se están terminando de aplicar. En unos minutos los verás en tu suscripción y no se te cobrará de más. No hace falta que lo vuelvas a guardar.",
+          }),
+        );
       } else if (err.code === "change_in_progress") {
         setError(
           t({

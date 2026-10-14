@@ -1158,6 +1158,19 @@ const patchPlan = async (
       : Promise.resolve(),
   ]);
 
+  /** La intención de conservar la fecha, armada tras un OK de Seal al intervalo (ver el
+   *  bloque de después del Step 1). Best effort, como las del final: nunca tumba el cambio. */
+  const armReanchorAfterIntervalChange = async () => {
+    if (!effectivePreserveYYYYMMDD || isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) return;
+    await afterBudget(
+      () => writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD),
+      SUPABASE_WRITE_RESERVE_MS,
+    ).then(
+      () => log("reanchor-intent-armed-after-interval", { effectivePreserveYYYYMMDD, reanchorMode }),
+      (e) => log("reanchor-intent-write-failed", { msg: String(e), when: "after-interval" }),
+    );
+  };
+
   // ───── Step 1: change delivery_interval FIRST (if needed) ─────
   //
   // Send ONLY delivery_interval. We used to send billing_interval too,
@@ -1199,10 +1212,28 @@ const patchPlan = async (
         );
       }
     }
-    // Pause so Seal can regenerate billing_attempts before the next call.
-    if (itemsChanged) {
-      await new Promise((r) => setTimeout(r, 500));
-    }
+    // LA FECHA SE ANCLA EN CUANTO SEAL ACEPTA EL INTERVALO (14-oct-2026, sub 12635109).
+    //
+    // Seal borra los cobros pendientes en el acto y los regenera en 60-100 s desde "último
+    // cobro + intervalo nuevo". La intención de conservar la fecha solo se escribía al
+    // FINAL de la ruta, así que toda petición que se rendía después de este paso (el remove
+    // sin presupuesto, una escritura con resultado desconocido, un add rechazado, la
+    // invocación muerta) dejaba el intervalo cambiado y el calendario sin ancla. A Juan le
+    // pasó al bajar de 5 a 4 meses: su próximo envío saltó del 20-ene al 20-dic.
+    //
+    // Ni antes ni más tarde: escrita ANTES del cambio, el cron de re-anclaje (cada 5 min,
+    // sin edad mínima) podía leer el calendario viejo, darlo por bueno y borrarla. Ahora los
+    // pendientes ya no existen, y el cron y el webhook esperan a la regeneración. Tampoco
+    // se arma si el intervalo falló: en modo `natural` la fecha es POSTERIOR a la actual y
+    // movería el envío de un cambio que no entró. Las escrituras del final se quedan: son
+    // el mismo upsert y cubren que esta no llegue.
+    //
+    // Va dentro de la pausa de después, así que en un cambio con líneas no cuesta tiempo.
+    await Promise.all([
+      armReanchorAfterIntervalChange(),
+      // Pause so Seal can regenerate billing_attempts before the next call.
+      itemsChanged ? new Promise((r) => setTimeout(r, 500)) : Promise.resolve(),
+    ]);
   }
 
   // ── Retention-discount carry-over guard (audit 2026-07-06) ──
@@ -1713,7 +1744,14 @@ const patchPlan = async (
   // heals the first time its owner touches their plan.
   if (diff.removes.length) {
     try {
-      await seal.removeItems(sealSubscriptionId, diff.removes);
+      // CON LAS LÍNEAS NUEVAS YA DENTRO, ESTE REMOVE NO ES OPCIONAL (14-oct-2026, sub 12635109).
+      // Es lo único que separa al cliente de pagar el plan viejo y el nuevo a la vez. Dentro
+      // del deadline, con el presupuesto ya gastado, la llamada nacía muerta a 0 ms sin salir
+      // hacia Seal: a Juan le dejó el Pack de 4 junto a sus 3 cajas sueltas (170,10 por
+      // envío) hasta que pasó el cron, cinco minutos después. Con menos de REMOVE_RESERVE_MS
+      // se lanza fuera, con el presupuesto propio del cliente de Seal. Mejor una respuesta
+      // tarde que una sub cobrando dos planes.
+      await afterBudget(() => seal.removeItems(sealSubscriptionId, diff.removes), REMOVE_RESERVE_MS);
       log("seal-remove-items-ok", { count: diff.removes.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1732,35 +1770,51 @@ const patchPlan = async (
       // detrás de Seal, "deshacer" puede dejar a la sub sin lo que paga. La red está
       // armada desde antes del primer cambio y el cron sabe terminar este estado hacia el
       // objetivo con un solo remove.
-      await new Promise((r) => setTimeout(r, 800));
+      //
+      // VARIOS REINTENTOS, CON ESPERA CRECIENTE (14-oct-2026). Había uno solo, a los 800 ms,
+      // y el 14-oct falló también, aunque el mismo remove entró sin problema desde el cron
+      // cinco minutos después. Lo que contestó Seal se perdía: `last_error` y el aviso solo
+      // llevaban el error del primer intento ("timed out after 0ms", el que ni salió), así
+      // que ahora llevan también el de cada reintento. Cada vuelta relee antes, por si el
+      // anterior entró aunque contestara mal. Fuera del deadline: dentro, con el presupuesto
+      // gastado, cada uno nacería muerto a 0 ms. Lo que no se quite antes del techo lo
+      // termina el cron, con la red armada desde antes del primer cambio.
       let converged = false;
       let stillPresent = diff.removes;
-      try {
-        const settled = await runWithoutRequestDeadline(() => seal.getSubscriptionById(sealSubscriptionId));
-        if (settled) {
-          const liveIds = new Set(getLines(settled).map((l) => l.itemId));
-          stillPresent = diff.removes.filter((id) => liveIds.has(id));
-          converged = stillPresent.length === 0;
-          if (converged) log("seal-remove-items-landed-anyway");
+      const retryErrors: string[] = [];
+      for (const [i, waitMs] of REMOVE_RETRY_WAITS_MS.entries()) {
+        const attempt = i + 1;
+        if (Date.now() - t0 + waitMs + REMOVE_RETRY_SLOT_MS > REMOVE_RETRY_STOP_MS) {
+          log("seal-remove-items-retry-out-of-time", { attempt, elapsedMs: Date.now() - t0 });
+          break;
         }
-      } catch (readErr) {
-        log("seal-remove-items-reread-failed", {
-          msg: readErr instanceof Error ? readErr.message : String(readErr),
-        });
-      }
-      if (!converged) {
+        await new Promise((r) => setTimeout(r, waitMs));
         try {
-          // Outside the request deadline: if we got here because the budget ran
-          // out, an in-budget retry would be aborted at 0ms and the customer would
-          // be left paying for both line sets. Getting the old lines off is worth
-          // more than returning fast on a response nobody is waiting for.
+          const settled = await runWithoutRequestDeadline(() => seal.getSubscriptionById(sealSubscriptionId));
+          if (settled) {
+            const liveIds = new Set(getLines(settled).map((l) => l.itemId));
+            stillPresent = diff.removes.filter((id) => liveIds.has(id));
+            if (stillPresent.length === 0) {
+              converged = true;
+              log("seal-remove-items-landed-anyway", { attempt });
+              break;
+            }
+          }
+        } catch (readErr) {
+          log("seal-remove-items-reread-failed", {
+            attempt,
+            msg: readErr instanceof Error ? readErr.message : String(readErr),
+          });
+        }
+        try {
           await runWithoutRequestDeadline(() => seal.removeItems(sealSubscriptionId, stillPresent));
           converged = true;
-          log("seal-remove-items-ok-on-retry", { count: stillPresent.length });
+          log("seal-remove-items-ok-on-retry", { attempt, count: stillPresent.length });
+          break;
         } catch (retryErr) {
-          log("seal-remove-items-retry-failed", {
-            msg: retryErr instanceof Error ? retryErr.message : String(retryErr),
-          });
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          retryErrors.push(`#${attempt}: ${retryMsg}`);
+          log("seal-remove-items-retry-failed", { attempt, msg: retryMsg });
         }
       }
       // Si convergió, no se lanza: el bloque de después desarma la red, apunta `applied`,
@@ -1769,21 +1823,30 @@ const patchPlan = async (
         await reattachCarriedDiscounts();
         // Refresh the pre-armed intent with the real reason, for the operator
         // reading `last_error` and for the alert below.
-        const scheduled = await scheduleRepair(`remove_items failed: ${msg}`);
+        const reason =
+          `remove_items failed: ${msg}` +
+          (retryErrors.length ? `; reintentos: ${retryErrors.join(" | ")}` : "; sin tiempo para reintentar");
+        const scheduled = await scheduleRepair(reason);
         await alertSlackErrorAwaited({
           path: "/api/subscription/plan",
           code: "mix_inconsistent_state",
           msg:
-            `sub ${sealSubscriptionId}: could not converge lines. desired=${JSON.stringify(targetPlan.lines)} ` +
+            `sub ${sealSubscriptionId}: could not converge lines (${reason}). desired=${JSON.stringify(targetPlan.lines)} ` +
             `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
             `If a charge fires before the cron converges, REFUND the duplicate line.`,
           customerId: ctx.customerId,
         });
         // 409 por lo mismo que `handOverUnknownOutcome`: un 5xx no llega al cliente.
+        //
+        // `change_applying` y no `change_in_progress` (14-oct-2026). Aquí el add SÍ entró y
+        // el cron va a terminar ESTE cambio, el que el cliente acaba de pedir. El código de
+        // siempre le decía "todavía estamos terminando tu último cambio... vuelve a
+        // intentarlo", y Juan no supo qué había pasado con el suyo. `change_in_progress` se
+        // queda para la guarda del principio, que sí habla de un cambio anterior.
         throw new ApiHttpError(
           409,
-          "change_in_progress",
-          `Your change is still being applied (${msg}; subscription has extra lines; a repair is scheduled)`,
+          "change_applying",
+          `Your change is still being applied (${reason}; subscription has extra lines; a repair is scheduled)`,
         );
       }
     }
@@ -2151,6 +2214,17 @@ const SUPABASE_WRITE_RESERVE_MS = 1_000;
  *  seguimiento. Con menos, cada llamada se corta y o se pierde el descuento o queda puesto
  *  sin seguimiento, que es la fuga del 23-jul. */
 const RETENTION_REATTACH_RESERVE_MS = 3_000;
+/** Margen para el remove que sigue a un add que entró: un PUT de Seal tarda ~1-2 s. Con
+ *  menos presupuesto se lanza fuera del deadline (ver el bloque 2c, 14-oct-2026). */
+const REMOVE_RESERVE_MS = 3_000;
+/** Esperas antes de cada reintento del remove; cada vuelta relee y vuelve a quitar. */
+const REMOVE_RETRY_WAITS_MS = [800, 2_000, 4_000] as const;
+/** Lo que se reserva para una vuelta (relectura + remove) en un día normal de Seal. */
+const REMOVE_RETRY_SLOT_MS = 3_500;
+/** No se empieza una vuelta que acabe más tarde que esto desde el inicio de la petición:
+ *  deja ~4,5 s de `maxDuration` (20 s) para reponer el descuento, rearmar la red, avisar
+ *  y cerrar el ledger. El cerrojo de plan caduca a los 30 s, así que el techo no se sube. */
+const REMOVE_RETRY_STOP_MS = 15_500;
 
 /**
  * Lo que el `catch` de fuera necesita saber para cerrar el apunte de la petición en
