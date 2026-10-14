@@ -421,10 +421,29 @@ for (const [name, src] of Object.entries(surfaces)) {
   );
 }
 check(
-  "GET /api/referral/code no crea nada en Shopify",
+  "GET /api/referral/code no crea descuentos ni recompensas por su cuenta",
   !/createFriendParentDiscount|bulkAddFriendCodes|createRewardDiscount/.test(code(codeRoute)),
-  "El portal solo lee; el alta en Shopify es del cron.",
+  "Solo puede dar de alta el código DE ESE CLIENTE, y por la misma vía que el cron (issuePendingCodes).",
 );
+check(
+  "el código se da de alta AL MOMENTO al entrar, en segundo plano (2026-10-14)",
+  /after\(\(\) =>\s*runAsBackgroundJob\(\(\) =>\s*issuePendingCodes\(\{ max: 1, onlyCustomerIds: \[customerId\]/.test(codeRoute) &&
+    /issueNow = true;/.test(codeRoute),
+  "Juan: «¿cómo que estará listo en unas horas?». Sin esto el código esperaba a la pasada del cron, cada 4 h.",
+);
+check(
+  "un código pendiente se vuelve a lanzar solo si no hay un alta en marcha",
+  /issueNow = Date\.now\(\) - Date\.parse\(String\(row\.updated_at \?\? ""\)\) > 30_000;/.test(codeRoute),
+  "La tarjeta pregunta cada 5 s: sin esta guarda, cada vuelta lanzaría otra alta del mismo código.",
+);
+{
+  const card = read("src/components/ReferralCard.tsx");
+  check(
+    "la tarjeta espera al código y no promete plazos",
+    /Generando tu código…/.test(card) && /tries < 18/.test(card) && !/unas horas/.test(card),
+    "El cliente tiene que ver su código en cuanto entra, no un «estará listo en unas horas».",
+  );
+}
 
 console.log(failed ? `\n${failed} FALLO(S)\n` : "\nTodo bien.\n");
 process.exit(failed ? 1 : 0);

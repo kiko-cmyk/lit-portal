@@ -51,13 +51,45 @@ interface ReferralCardProps {
 export function ReferralCard({ placement }: ReferralCardProps) {
   const [data, setData] = useState<ReferralCodeResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  // Mientras el código recién reservado se da de alta en Shopify (unos segundos,
+  // en segundo plano), la tarjeta vuelve a preguntar y dice «Generando tu código».
+  const [generating, setGenerating] = useState(false);
   const t = useLang();
   const lang = useLangValue();
 
   useEffect(() => {
-    api<ReferralCodeResponse>("/api/referral/code")
-      .then(setData)
-      .catch(() => setData(null));
+    let cancelled = false;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      api<ReferralCodeResponse>("/api/referral/code")
+        .then((d) => {
+          if (cancelled) return;
+          setData(d);
+          // 18 vueltas de 5 s (90 s): el alta tarda 2-10 s, y si la primera falla la
+          // ruta la vuelve a lanzar a los 30 s. Si aun así no llega (Shopify caído),
+          // la tarjeta lo dice sin prometer plazos y el cron la da de alta.
+          if (d.enabled && d.status === "pending" && tries < 18) {
+            tries++;
+            setGenerating(true);
+            timer = setTimeout(load, 5_000);
+          } else {
+            setGenerating(false);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // En la primera carga, sin datos no se pinta; durante la espera se queda
+          // lo que ya había.
+          if (tries === 0) setData(null);
+          setGenerating(false);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, []);
 
   if (!data?.enabled || data.status === "unavailable") return null;
@@ -230,8 +262,15 @@ export function ReferralCard({ placement }: ReferralCardProps) {
                 </button>
               </div>
             ) : (
-              <div className="rounded-[6px] border border-dashed border-[#F2EEE1]/25 bg-white/[0.04] px-4 py-3.5 text-[13px] text-[#b3ab98]">
-                <T en="Your code will be ready in a few hours." es="Tu código estará listo en unas horas." />
+              <div
+                className="rounded-[6px] border border-dashed border-[#F2EEE1]/25 bg-white/[0.04] px-4 py-3.5 text-[13px] text-[#b3ab98]"
+                aria-live="polite"
+              >
+                {generating ? (
+                  <T en="Generating your code…" es="Generando tu código…" />
+                ) : (
+                  <T en="We're generating your code. Reload the page in a moment." es="Estamos generando tu código. Recarga la página en un momento." />
+                )}
               </div>
             )}
           </div>
