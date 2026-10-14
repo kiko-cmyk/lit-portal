@@ -557,6 +557,26 @@ create index if not exists charge_now_attempts_sub_requested_idx
 create index if not exists charge_now_attempts_open_idx
   on charge_now_attempts (requested_at) where status = 'requested';
 
+-- Lo que pasa DESPUÉS de reactivar o reanudar desde el portal (2026-10-14): el
+-- cobro a mañana tras un impago y el aviso con la fecha buena, cuando Seal ya ha
+-- regenerado el calendario. Estados en
+-- database/migrations/2026-10-14_reactivation_followups.sql; diseño en
+-- lib/reactivation.ts.
+create table if not exists reactivation_followups (
+  seal_subscription_id  text        primary key,
+  customer_id           text        not null,
+  kind                  text        not null check (kind in ('portal','unpaid','support','resume')),
+  pull_to               date,
+  extra                 jsonb       not null default '{}'::jsonb,
+  status                text        not null default 'pending'
+    check (status in ('pending','handling','done','failed','expired')),
+  created_at            timestamptz not null default now(),
+  handled_at            timestamptz,
+  note                  text
+);
+create index if not exists reactivation_followups_pending_idx
+  on reactivation_followups (created_at) where status = 'pending';
+
 -- ============================================================
 -- 6. RLS policies
 -- ============================================================
@@ -585,6 +605,7 @@ alter table webhook_log            enable row level security;
 alter table auth_sessions          enable row level security;
 alter table charge_now_locks       enable row level security;
 alter table charge_now_attempts    enable row level security;
+alter table reactivation_followups enable row level security;
 -- NOTE: email_change_requests and rate_buckets are created in their own
 -- migration files (database/migrations/2026-05-22_*.sql) and enable RLS
 -- there. They are NOT created here, so don't add their ALTER statements to

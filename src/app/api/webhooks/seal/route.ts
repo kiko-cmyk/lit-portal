@@ -2,6 +2,7 @@ import { after, NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { alertSlackError, alertSlackNotice } from "@/lib/alert";
 import { handleManualChargeFailureSafe, hasRecentManualFailure } from "@/lib/charge-now-recovery";
+import { applyFollowupSafe } from "@/lib/reactivation";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
@@ -155,6 +156,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (hasRecentManualFailure(sub)) {
           after(() => runAsBackgroundJob(() => handleManualChargeFailureSafe(sub)));
         }
+        // Tras reactivar o reanudar desde el portal, Seal regenera el calendario
+        // 27-170 s después y lo trae este update: es cuando se trae a mañana el
+        // cobro de quien volvió tras un impago y sale el aviso con la fecha buena
+        // (lib/reactivation.ts). Sin apunte pendiente es una lectura y nada más.
+        after(() => runAsBackgroundJob(() => applyFollowupSafe(sub)));
         break;
       case "subscription.cancelled":
       case "subscription.expired":
@@ -216,6 +222,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // referido (2026-10-10): el cron la vuelve a mirar en su pasada siguiente
         // en vez de dentro de días. Solo adelanta la mirada; nunca aplica.
         await consumeReferralRewardsForSub(sub);
+        // Seguimiento de una reactivación o reanudación desde el portal: espera a
+        // que Seal regenere el calendario (lib/reactivation.ts).
+        after(() => runAsBackgroundJob(() => applyFollowupSafe(sub)));
         break;
       case "subscription.shipping_address_updated":
         await syncSubscription(sub);

@@ -58,6 +58,10 @@ import type {
 // cases where Seal takes longer (memory: regenerate can take minutes).
 const POST_PLAN_RESYNC_MS = 60_000;
 const POST_PLAN_RESYNC_INTERVAL_MS = 5_000;
+// Tras reactivar o reanudar, Seal tarda 27-170 s en regenerar el calendario (medido
+// el 14-oct) y después el portal aún trae a mañana el cobro de quien volvió tras un
+// impago. El Hub sigue preguntando mientras el panel diga que hay algo pendiente.
+const POST_REACTIVATE_RESYNC_MS = 240_000;
 
 export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
@@ -214,6 +218,9 @@ export default function HubPage() {
       // Refetch dashboard so the Hub flips out of post-cancel mode.
       const fresh = await api<HubDashboard>("/api/hub/dashboard");
       setData(fresh);
+      // El calendario lo regenera Seal después (y con un impago, el portal lo trae
+      // a mañana): «actualizando tu calendario» hasta que el panel lo dé por hecho.
+      setSyncingUntil(Date.now() + POST_REACTIVATE_RESYNC_MS);
     } catch (e) {
       const code = (e as { code?: string }).code;
       if (code === "reactivation_window_expired" || code === "second_cancel_no_reactivation") {
@@ -275,13 +282,13 @@ export default function HubPage() {
       // Seal regenerates billing_attempts asynchronously after a resume, so the
       // next-ship date can still be missing here. Kick off the same silent
       // re-poll a plan change uses instead of showing a blank hero.
-      if (!fresh.subscription?.nextShipDate) {
-        // Same tolerated impurity as the dropsHeldDays computation below: this
-        // runs inside an event handler, not during render, and the value is a
-        // wall-clock deadline for the poll loop.
-        // eslint-disable-next-line react-hooks/purity
-        setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
-      }
+      // Desde el 14-oct siempre: el aviso de confirmación también espera a ese
+      // calendario, y el panel dice «pendiente» hasta que sale.
+      // Same tolerated impurity as the dropsHeldDays computation below: this
+      // runs inside an event handler, not during render, and the value is a
+      // wall-clock deadline for the poll loop.
+      // eslint-disable-next-line react-hooks/purity
+      setSyncingUntil(Date.now() + POST_REACTIVATE_RESYNC_MS);
     } catch (e) {
       const code = (e as { code?: string }).code;
       console.error("[hub] resume failed", e);
@@ -476,6 +483,7 @@ export default function HubPage() {
           />
         ) : isPostCancel ? (
           <ReactivateCard
+            variant={data.reactivationKind === "unpaid" ? "unpaid" : "cancelled"}
             dropsHeld={drops.balance}
             dropsHeldDays={dropsHeldDays ?? undefined}
             cardsKept={collectionEarned}

@@ -255,7 +255,8 @@ check(
 );
 check(
   "reanudar y reactivar mandan la fecha de la próxima caja",
-  /subscriptionSnapshotProps\(fresh\)/.test(RESUME) && /subscriptionSnapshotProps\(fresh\)/.test(REACTIVATE),
+  /recordFollowup\(/.test(RESUME) && /recordFollowup\(/.test(REACTIVATE) &&
+    /subscriptionSnapshotProps\(sub\)/.test(readFileSync("src/lib/reactivation.ts", "utf8")),
   "Sin la fecha, el email de confirmación no puede decir cuándo llega la próxima caja.",
 );
 

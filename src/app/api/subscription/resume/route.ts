@@ -1,10 +1,9 @@
 import { after } from "next/server";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
-import { klaviyo } from "@/lib/klaviyo";
-import { customerLocale, subscriptionSnapshotProps, waitForNextCharge } from "@/lib/sub-event-props";
+import { expireFollowup, notifyFollowup, recordFollowup } from "@/lib/reactivation";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { seal, type SealSubscription } from "@/lib/seal";
+import { seal, SealApiError, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -93,7 +92,30 @@ export const POST = withCustomer<ResumeResponse>(async (req, ctx) => {
   }
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/resume");
 
-  await seal.resumeSubscription(sub.id);
+  // El aviso de confirmación lleva la foto de la sub (2026-10-14): fecha de la
+  // próxima caja, cajas y sabores. Seal regenera el calendario por su cuenta
+  // DESPUÉS de reanudar, así que el aviso sale cuando el webhook trae el
+  // calendario nuevo (lib/reactivation.ts). Se apunta ANTES de llamar a Seal: si
+  // reanuda pero contesta tarde, el aviso sale igual. Si no se puede apuntar, sale
+  // ya, con la misma clave para que Klaviyo no mande dos.
+  const pausedOn = sub.paused_on || null;
+  const followupAt = new Date().toISOString();
+  const recorded = await recordFollowup({
+    sealSubscriptionId: String(sub.id),
+    customerId: ctx.customerId,
+    kind: "resume",
+    extra: { pausedOn },
+    createdAt: followupAt,
+  });
+
+  try {
+    await seal.resumeSubscription(sub.id);
+  } catch (err) {
+    if (recorded && err instanceof SealApiError && err.status >= 200 && err.status < 500) {
+      await expireFollowup(String(sub.id), "Seal rechazó la reanudación").catch(() => {});
+    }
+    throw err;
+  }
 
   // Optimistic cache flip. Seal fires subscription/resumed (now handled in the
   // webhook) which reconciles this for real; without it the cache would read
@@ -117,28 +139,12 @@ export const POST = withCustomer<ResumeResponse>(async (req, ctx) => {
     console.warn("[resume] cache flip failed (non-fatal):", cacheErr.message);
   }
 
-  // El evento lleva la foto de la sub para el email de confirmación (2026-10-14):
-  // fecha de la próxima caja, cajas y sabores. Seal regenera el calendario unos
-  // segundos DESPUÉS de reanudar, así que se espera en segundo plano a tener la
-  // fecha (máx. ~20 s) en vez de mandar el evento sin ella o con la vieja.
-  const resumedId = sub.id;
-  const pausedOn = sub.paused_on || null;
-  after(() =>
-    runAsBackgroundJob(async () => {
-      const fresh = await waitForNextCharge(resumedId);
-      await klaviyo.trackEvent(
-        "subscription_resumed",
-        email,
-        {
-          ...(fresh ? subscriptionSnapshotProps(fresh) : {}),
-          sealSubscriptionId: String(resumedId),
-          pausedOn,
-          locale: await customerLocale(ctx.customerId),
-        },
-        { externalId: ctx.customerId },
-      );
-    }).catch((err) => console.warn("[resume] klaviyo event failed:", err)),
-  );
+  if (!recorded) {
+    const resumed = sub;
+    after(() =>
+      runAsBackgroundJob(() => notifyFollowup(resumed, "resume", ctx.customerId, { pausedOn }, followupAt)),
+    );
+  }
 
   return { resumed: true, sealSubscriptionId: String(sub.id) };
 });

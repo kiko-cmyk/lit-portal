@@ -23,7 +23,6 @@ import {
   getComposition,
   getNextBillingAttempt,
   normalizeFrequency,
-  seal,
   type SealSubscription,
 } from "@/lib/seal";
 import { formatShipDateEs } from "@/lib/ship-date-label";
@@ -56,36 +55,5 @@ export async function customerLocale(customerId: string | null | undefined): Pro
     return data?.language === "en" ? "en" : "es";
   } catch {
     return "es";
-  }
-}
-
-/**
- * Relee la sub hasta que Seal tenga un próximo cobro en el futuro, o hasta
- * agotar el tiempo. Tras reanudar o reactivar, Seal regenera el calendario por
- * su cuenta unos segundos después de contestar, y un email con la fecha vieja (o
- * sin fecha) es peor que esperar un poco. Devuelve la última lectura buena, o
- * null si Seal no contestó nunca: el aviso sale igual, sin fecha.
- */
-export async function waitForNextCharge(
-  subscriptionId: number,
-  opts: { timeoutMs?: number; intervalMs?: number } = {},
-): Promise<SealSubscription | null> {
-  const timeoutMs = opts.timeoutMs ?? 20_000;
-  const intervalMs = opts.intervalMs ?? 4_000;
-  const deadline = Date.now() + timeoutMs;
-  let last: SealSubscription | null = null;
-  for (;;) {
-    try {
-      const s = await seal.getSubscriptionById(subscriptionId);
-      if (s) {
-        last = s;
-        const next = getNextBillingAttempt(s);
-        if (next?.date && Date.parse(next.date) > Date.now()) return s;
-      }
-    } catch {
-      // Seal ocupado: se reintenta dentro del plazo.
-    }
-    if (Date.now() + intervalMs > deadline) return last;
-    await new Promise((r) => setTimeout(r, intervalMs));
   }
 }
