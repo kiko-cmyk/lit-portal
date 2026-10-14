@@ -86,21 +86,23 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     // /api/subscription/reactivate), surface the most recent cancelled sub;
     // mapStatus turns it into "expired" and the Hub renders the ReactivateCard.
     if (!sub) {
-      if (portalCancelEligible(prefsRes)) {
+      // Bajas por impago o por atención (2026-10-14): también se enseña la
+      // tarjeta de reactivar, y con impago con su propio texto (el último pago no
+      // pasó y la caja se cobra mañana). Se mira ANTES que la regla del portal,
+      // en el mismo orden que /api/subscription/reactivate: si no, alguien con una
+      // baja del portal reciente y luego un impago vería una tarjeta y la ruta
+      // haría otra cosa. Sin .catch: un Seal ocupado es un 503 que se reintenta,
+      // no la pantalla de «compra una suscripción» (revisión adversarial).
+      const external = await findExternalCancel(subsRes);
+      if (external) {
+        sub = external.sub;
+        reactivationKind = external.actor;
+      } else if (portalCancelEligible(prefsRes)) {
         sub =
           subsRes
             .filter((s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for)
             .sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ?? null;
         if (sub) reactivationKind = "portal";
-      } else {
-        // Bajas por impago o por atención (2026-10-14): también se enseña la
-        // tarjeta de reactivar. Con impago, con su propio texto: el último pago no
-        // pasó y la caja se cobra mañana (lib/reactivation.ts).
-        const external = await findExternalCancel(subsRes).catch(() => null);
-        if (external) {
-          sub = external.sub;
-          reactivationKind = external.actor;
-        }
       }
     }
   }

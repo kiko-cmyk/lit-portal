@@ -82,7 +82,9 @@ export async function findExternalCancel(subs: SealSubscription[], now = Date.no
   const candidate = pickExternalCandidate(subs, now);
   if (!candidate) return null;
   // El listado de Seal no trae el log: una lectura por id.
-  const full = await seal.getSubscriptionById(Number(candidate.id));
+  // throwTransient: un 429/5xx de Seal NO puede leerse como «no es externa»;
+  // la ruta caería en la regla del portal (Drops devueltos, sin cobro a mañana).
+  const full = await seal.getSubscriptionById(Number(candidate.id), undefined, { throwTransient: true });
   if (!full || full.status !== "CANCELLED") return null;
   const { actor } = classifyCancel((full as SealSubscription & { log?: Array<{ content?: string; created?: string }> }).log);
   if (actor !== "unpaid" && actor !== "support") return null;
@@ -135,13 +137,20 @@ export function decideFollowup(
   if (!first) return { kind: "wait" };
   if (!row.pull_to) return { kind: "notify", why: "no_pull" };
 
-  // Un cobro bueno, o un Adelantar, desde poco ANTES de apuntar: Seal fecha el
-  // cobro inmediato en el instante de reactivar, antes de que exista la fila.
-  const createdAt = Date.parse(row.created_at);
+  // Cualquier intento de cobro desde poco ANTES de apuntar, haya pasado o NO:
+  // un cobro bueno (Seal al momento, o un Adelantar) ya es la caja; uno fallido
+  // ya está en el ciclo de reintentos de Seal, y traer otro a mañana coincidiría
+  // con su reintento (si el cliente cambia la tarjeta, cobrarían los dos;
+  // revisión adversarial). Se mira cualquiera de sus marcas de tiempo: Seal fecha
+  // el cobro inmediato en el instante de reactivar, antes de que exista la fila, y
+  // un reintento conserva la fecha del intento original.
+  const since = Date.parse(row.created_at) - 10 * 60 * 1000;
   const chargedAfter = attempts.some((a) => {
-    if (a.status !== "completed" && !(a.triggered_manually ?? "").trim()) return false;
-    const t = Date.parse(a.attempted_at || a.completed_at || a.date || "");
-    return Number.isFinite(t) && t > createdAt - 10 * 60 * 1000;
+    if (a.status !== "completed" && a.status !== "error" && !(a.triggered_manually ?? "").trim()) return false;
+    return [a.date, a.attempted_at, a.completed_at].some((x) => {
+      const t = Date.parse(x || "");
+      return Number.isFinite(t) && t > since;
+    });
   });
   if (chargedAfter || opts.chargeNowAfter) return { kind: "notify", why: "charged_after" };
 
@@ -161,6 +170,9 @@ export async function recordFollowup(input: {
   kind: FollowupKind;
   pullTo?: string | null;
   extra?: Record<string, unknown>;
+  /** Lo fija la ruta: también es la clave del aviso, para que el de respaldo y el
+   *  del seguimiento no salgan los dos. */
+  createdAt?: string;
 }): Promise<boolean> {
   try {
     const { error } = await supabaseAdmin()
@@ -173,7 +185,7 @@ export async function recordFollowup(input: {
           pull_to: input.pullTo ?? null,
           extra: input.extra ?? {},
           status: "pending",
-          created_at: new Date().toISOString(),
+          created_at: input.createdAt ?? new Date().toISOString(),
           handled_at: null,
           note: null,
         },
@@ -189,8 +201,8 @@ export async function recordFollowup(input: {
         path: "lib/reactivation",
         code: "reactivation_pull_not_recorded",
         msg:
-          `sub ${input.sealSubscriptionId}: reactivada tras un impago, pero no se pudo apuntar el cobro para ` +
-          `${input.pullTo}. Seal lo pondrá un ciclo más tarde: moverlo a mano. (${msg})`,
+          `sub ${input.sealSubscriptionId}: al reactivar tras un impago no se pudo apuntar el cobro para ` +
+          `${input.pullTo}. Si la reactivación entra, Seal lo pondrá un ciclo más tarde: moverlo a mano. (${msg})`,
         customerId: input.customerId,
       }).catch(() => {});
     }
@@ -221,7 +233,7 @@ export async function notifyFollowup(
       },
       {
         externalId: customerId,
-        ...(uniqueSuffix ? { uniqueId: `${event}-${sub.id}-${uniqueSuffix}` } : {}),
+        ...(uniqueSuffix ? { uniqueId: `${event}-${sub.id}-${new Date(uniqueSuffix).toISOString()}` } : {}),
       },
     );
   } catch (err) {
@@ -230,6 +242,11 @@ export async function notifyFollowup(
       msg: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/** Seal rechazó la reactivación o la reanudación: el apunte ya no sirve. */
+export async function expireFollowup(sealSubscriptionId: string, note: string): Promise<void> {
+  await setFollowup(sealSubscriptionId, "expired", { note }, "pending");
 }
 
 async function setFollowup(
@@ -342,7 +359,7 @@ export async function applyFollowup(
         }
       }
     }
-    await notifyFollowup(sub, row.kind, row.customer_id, row.extra ?? {}, row.created_at);
+    await notifyFollowup(sub, row.kind, row.customer_id, row.extra ?? {}, new Date(row.created_at).toISOString());
     await setFollowup(sealId, outcome === "failed" ? "failed" : "done", { note: outcome }, "handling");
     return outcome;
   } catch (err) {

@@ -4,13 +4,14 @@ import { addDaysUtc } from "@/lib/charge-now-recovery";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import {
+  expireFollowup,
   findExternalCancel,
   notifyFollowup,
   REACTIVATION_HOLD_DAYS,
   recordFollowup,
   type FollowupKind,
 } from "@/lib/reactivation";
-import { seal, type SealSubscription } from "@/lib/seal";
+import { seal, SealApiError, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -55,9 +56,8 @@ export const POST = withCustomer(async (req, ctx) => {
   if (external && (!subSel || String(subSel) === String(external.sub.id))) {
     const sub = external.sub;
     assertSubscriptionBelongsToCustomer(sub, email, "subscription/reactivate");
-    await seal.reactivateSubscription(sub.id);
     const pullTo = external.actor === "unpaid" ? addDaysUtc(new Date().toISOString().slice(0, 10), 1) : null;
-    await followUp(sub, external.actor, ctx.customerId, { dropsRestored: 0 }, pullTo);
+    await reactivateWithFollowup(sub, external.actor, ctx.customerId, { dropsRestored: 0 }, pullTo);
     return { reactivated: true, sealSubscriptionId: String(sub.id), dropsRestored: 0 };
   }
 
@@ -109,20 +109,25 @@ export const POST = withCustomer(async (req, ctx) => {
   if (!sub) throw new ApiHttpError(404, "subscription_not_found", "");
   assertSubscriptionBelongsToCustomer(sub, email, "subscription/reactivate");
 
-  // Reactivate in Seal — Seal asynchronously regenerates billing_attempts
-  await seal.reactivateSubscription(sub.id);
-
-  // Restore Drops balance: read snapshot from cancellations row
+  // Drops a devolver: el snapshot de la baja del portal de ESTA sub (o una fila
+  // antigua sin sub, de antes del multi-sub). Una baja hecha por Seal o por
+  // atención no retiene Drops, y no puede devolver los de otra baja vieja
+  // (revisión adversarial, 2026-10-14).
   const { data: lastCancel } = await sb
     .from("cancellations")
     .select("drops_held_at_cancel, id")
     .eq("customer_id", ctx.customerId)
     .eq("status", "confirmed")
+    .or(`seal_subscription_id.eq.${String(sub.id)},seal_subscription_id.is.null`)
     .order("confirmed_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-
   const heldBalance = lastCancel?.drops_held_at_cancel ?? 0;
+
+  // Reactivate in Seal — Seal asynchronously regenerates billing_attempts
+  await reactivateWithFollowup(sub, "portal", ctx.customerId, { dropsRestored: heldBalance }, null);
+
+  // Restore Drops balance from the snapshot
   if (heldBalance > 0) {
     // Read current balance to compute delta (in case partial activity happened)
     const { data: bal } = await sb
@@ -142,8 +147,6 @@ export const POST = withCustomer(async (req, ctx) => {
     }
   }
 
-  await followUp(sub, "portal", ctx.customerId, { dropsRestored: heldBalance }, null);
-
   return {
     reactivated: true,
     sealSubscriptionId: String(sub.id),
@@ -152,18 +155,39 @@ export const POST = withCustomer(async (req, ctx) => {
 });
 
 /**
- * Apunta el seguimiento (aviso con la fecha buena y, si fue impago, el cobro a
- * mañana). Si no se puede apuntar, el aviso sale ya, con lo que haya.
+ * Reactiva en Seal con el seguimiento apuntado ANTES (aviso con la fecha buena y,
+ * si fue impago, el cobro a mañana), como charge-now: si Seal aplica la
+ * reactivación pero contesta tarde o con un 5xx, el apunte ya existe y el webhook
+ * hace su parte (revisión adversarial, 2026-10-14). Si Seal la rechaza de forma
+ * explícita, el apunte se caduca; si la respuesta es ambigua se queda, y si la
+ * reactivación no llegó a entrar caduca solo a las 72 h. Si no se pudo apuntar,
+ * el aviso sale ya, con la misma clave para que Klaviyo no mande dos.
  */
-async function followUp(
+async function reactivateWithFollowup(
   sub: SealSubscription,
   kind: FollowupKind,
   customerId: string,
   extra: Record<string, unknown>,
   pullTo: string | null,
 ): Promise<void> {
-  const ok = await recordFollowup({ sealSubscriptionId: String(sub.id), customerId, kind, pullTo, extra });
-  if (!ok) {
-    after(() => runAsBackgroundJob(() => notifyFollowup(sub, kind, customerId, extra)));
+  const createdAt = new Date().toISOString();
+  const recorded = await recordFollowup({
+    sealSubscriptionId: String(sub.id),
+    customerId,
+    kind,
+    pullTo,
+    extra,
+    createdAt,
+  });
+  try {
+    await seal.reactivateSubscription(sub.id);
+  } catch (err) {
+    if (recorded && err instanceof SealApiError && err.status >= 200 && err.status < 500) {
+      await expireFollowup(String(sub.id), "Seal rechazó la reactivación").catch(() => {});
+    }
+    throw err;
+  }
+  if (!recorded) {
+    after(() => runAsBackgroundJob(() => notifyFollowup(sub, kind, customerId, extra, createdAt)));
   }
 }

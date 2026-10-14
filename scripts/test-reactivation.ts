@@ -108,6 +108,20 @@ check(
   "Seal cobró al reactivar o el cliente pulsó Adelantar: otro cobro mañana sería el segundo.",
 );
 check(
+  "si Seal intentó cobrar al reactivar y FALLÓ, tampoco se trae nada",
+  decideFollowup(
+    sub({ billing_attempts: [failedAttempt, { id: 16, date: iso(Date.parse(created) - 30 * 1000), status: "error", attempted_at: iso(Date.parse(created) - 25 * 1000) }, farPending] }),
+    unpaidRow,
+    { now: NOW },
+  ).kind === "notify",
+  "Ese intento ya está en el ciclo de reintentos de Seal: traer otro a mañana coincidiría con su reintento y, con tarjeta nueva, cobrarían los dos.",
+);
+check(
+  "los intentos fallidos de ANTES de la baja no frenan el cobro a mañana",
+  decideFollowup(sub({ billing_attempts: [failedAttempt, farPending] }), unpaidRow, { now: NOW }).kind === "pull",
+  "Son los que provocaron la baja (días antes); si contaran, nunca se traería la caja.",
+);
+check(
   "un cobro de Seal fechado justo ANTES de apuntar también cuenta",
   decideFollowup(
     sub({ billing_attempts: [failedAttempt, { id: 15, date: iso(Date.parse(created) - 60 * 1000), status: "completed", completed_at: iso(Date.parse(created) - 30 * 1000) }, farPending] }),
@@ -147,7 +161,7 @@ check(
 );
 check(
   "solo el impago trae el cobro a mañana, y sin devolver Drops",
-  /external\.actor === "unpaid" \? addDaysUtc/.test(REACT) && /followUp\(sub, external\.actor, ctx\.customerId, \{ dropsRestored: 0 \}/.test(REACT),
+  /external\.actor === "unpaid" \? addDaysUtc/.test(REACT) && /reactivateWithFollowup\(sub, external\.actor, ctx\.customerId, \{ dropsRestored: 0 \}, pullTo\)/.test(REACT),
   "Estas bajas no retienen Drops; devolver los de una baja vieja del portal regalaría Drops.",
 );
 check(
@@ -179,6 +193,33 @@ check(
     /portalHref\(lang, "account"\)/.test(CARD) &&
     /variant=\{data\.reactivationKind === "unpaid" \? "unpaid" : "cancelled"\}/.test(HUB),
   "Quien no eligió irse tiene que leer qué pasó, que la caja se cobra mañana y dónde cambiar la tarjeta.",
+);
+check(
+  "un Seal ocupado no convierte una baja externa en una del portal",
+  /getSubscriptionById\(Number\(candidate\.id\), undefined, \{ throwTransient: true \}\)/.test(readFileSync("src/lib/reactivation.ts", "utf8")) &&
+    !/findExternalCancel\(subsRes\)\.catch/.test(DASH),
+  "Un 429 leído como «no es externa» devolvía Drops y no traía el cobro; en el Hub enseñaba la tienda.",
+);
+check(
+  "el Hub mira la baja externa ANTES que la regla del portal, como la ruta",
+  DASH.indexOf("findExternalCancel(subsRes)") < DASH.indexOf("portalCancelEligible(prefsRes)"),
+  "Si el orden difiere, la tarjeta dice una cosa y la ruta hace otra.",
+);
+check(
+  "el apunte se escribe ANTES de reactivar o reanudar en Seal",
+  REACT.indexOf("recordFollowup(") < REACT.indexOf("seal.reactivateSubscription(") &&
+    RESUME.indexOf("recordFollowup(") < RESUME.indexOf("seal.resumeSubscription("),
+  "Si Seal aplica pero contesta tarde, sin apunte no hay cobro a mañana ni aviso.",
+);
+check(
+  "el aviso de respaldo y el del seguimiento comparten clave",
+  /notifyFollowup\(sub, kind, customerId, extra, createdAt\)/.test(REACT) && /followupAt\)\)/.test(RESUME),
+  "Si el apunte se guardó pero la respuesta falló, saldrían dos emails.",
+);
+check(
+  "los Drops solo vuelven por la baja del portal de ESA sub",
+  /seal_subscription_id\.eq\.\$\{String\(sub\.id\)\},seal_subscription_id\.is\.null/.test(REACT),
+  "Una baja hecha por Seal o atención no retiene Drops: no puede devolver los de otra baja vieja.",
 );
 check(
   "la tabla nueva con RLS",
