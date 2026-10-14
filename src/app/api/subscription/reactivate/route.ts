@@ -1,5 +1,8 @@
+import { after } from "next/server";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { klaviyo } from "@/lib/klaviyo";
+import { customerLocale, subscriptionSnapshotProps, waitForNextCharge } from "@/lib/sub-event-props";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -115,12 +118,26 @@ export const POST = withCustomer(async (req, ctx) => {
     }
   }
 
-  klaviyo
-    .trackEvent("subscription_reactivated", email, {
-      sealSubscriptionId: String(sub.id),
-      dropsRestored: heldBalance,
-    })
-    .catch((err) => console.warn("[reactivate] klaviyo event failed:", err));
+  // Con la foto de la sub para el email de confirmación (2026-10-14). Seal
+  // regenera el calendario en asíncrono tras reactivar, así que se espera en
+  // segundo plano a tener la fecha de la próxima caja (máx. ~20 s).
+  const reactivatedId = sub.id;
+  after(() =>
+    runAsBackgroundJob(async () => {
+      const fresh = await waitForNextCharge(reactivatedId);
+      await klaviyo.trackEvent(
+        "subscription_reactivated",
+        email,
+        {
+          ...(fresh ? subscriptionSnapshotProps(fresh) : {}),
+          sealSubscriptionId: String(reactivatedId),
+          dropsRestored: heldBalance,
+          locale: await customerLocale(ctx.customerId),
+        },
+        { externalId: ctx.customerId },
+      );
+    }).catch((err) => console.warn("[reactivate] klaviyo event failed:", err)),
+  );
 
   return {
     reactivated: true,

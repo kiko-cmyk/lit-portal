@@ -1,6 +1,8 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { alertSlackError, alertSlackNotice } from "@/lib/alert";
+import { handleManualChargeFailureSafe, hasRecentManualFailure } from "@/lib/charge-now-recovery";
+import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
 import { klaviyo } from "@/lib/klaviyo";
@@ -145,6 +147,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // renovación con el código, se retira. Solo CONSUME, nunca aplica (aplicar
         // es cosa del cron), y nunca lanza: el cron es el respaldo.
         await consumeReferralRewardsForSub(sub);
+        // Un «Adelantar» que la tarjeta rechazó (2026-10-14). Para un cobro manual
+        // Seal NO manda billing_attempt/failed, pero este update llega 1-3 min
+        // después con el intento fallido dentro. El rescate (reintentar mañana o
+        // devolver la fecha) mueve varios cobros, así que va en segundo plano;
+        // el cron diario subscription-notices es la red si esto no llega a correr.
+        if (hasRecentManualFailure(sub)) {
+          after(() => runAsBackgroundJob(() => handleManualChargeFailureSafe(sub)));
+        }
         break;
       case "subscription.cancelled":
       case "subscription.expired":
@@ -171,6 +181,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Lo que motivó el aviso en julio ("35 se fueron así y no produjeron señal
         // en ninguna parte, ~987 €/mes") sigue siendo verdad de aquel julio, y se
         // resolvió construyendo la cola. El aviso se quedó encendido detrás.
+        //
+        // ✅ DECIDIDO 2026-10-14 (Juan): estas bajas SÍ reciben email, además de la
+        // llamada. No sale de aquí sino del cron diario subscription-notices
+        // (lib/cancel-notice.ts), que espera a que soporte haya podido deshacer
+        // la baja y relee Seal antes de avisar. Lo de abajo queda como historia.
         //
         // 🔶 PENDIENTE DE DECIDIR (Kiko): la tabla `cancellations` NO se escribe
         // desde aquí, así que estas bajas no entran en el win-back automático de
@@ -257,6 +272,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // clicks through immediately sees current state, and keep the trigger
         // last so a Klaviyo problem can't cost us the cache update.
         await syncSubscription(sub);
+        // Por si Seal algún día SÍ manda este topic para un cobro manual: el
+        // rescate del Adelantar ignora los cobros programados (no tienen
+        // triggered_manually), así que aquí no hace nada en el caso normal.
+        if (hasRecentManualFailure(sub)) {
+          after(() => runAsBackgroundJob(() => handleManualChargeFailureSafe(sub)));
+        }
         // Seal calls the attempt `failed_billing_attempt` on this topic (and
         // `processed_billing_attempt` on the succeeded one). Verified against a
         // real payload 2026-07-29: { id, date, status: "error", completed_at,

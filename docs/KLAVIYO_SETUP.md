@@ -78,6 +78,30 @@ Quiet Zone.
 > llegue el primer evento. Para poder montar el flow antes, dispara uno de prueba
 > contra un perfil interno.
 
+### 1.c Adelantar rechazado, bajas fuera del portal y confirmaciones (2026-10-14)
+
+Todos llevan además la foto de la sub con los mismos nombres que el recordatorio
+de renovación: `nextShipDate` (ISO crudo, no formatear), `nextShipDateLabel`
+(«30 de julio»), `boxCount`, `frequency`, `flavor`, `is_mix`, `flavor_mix`, y
+`locale`.
+
+| Event name (metric) | Cuándo se dispara | Properties propias |
+|---|---|---|
+| `charge_now_failed` | Un «Adelantar» que la tarjeta rechaza DESPUÉS de que Seal lo acepte, cuando el calendario ya está arreglado (`lib/charge-now-recovery.ts`). Seal no manda `billing_attempt/failed` para un cobro manual | `outcome` (`retry_tomorrow` \| `date_kept`), `willRetry`, `retryDate`, `retryDateLabel`, `errorCode`, `gatewayMessage`, `attemptDate`, `paymentType`, `cardExpiryMonth`, `cardExpiryYear` |
+| `subscription_cancelled_unpaid` | Cron diario `subscription-notices` (08:45 UTC): Seal canceló por impago hace más de 1 h y sigue cancelada | `cancelledBy`, `cancelledOn`, `cancelledOnLabel`, `lastChargeDate(Label)`, `lastErrorCode`, `gatewayMessage`, `lastAttemptDate`, `amount`, `currency`, `cardExpiryMonth`, `cardExpiryYear` |
+| `subscription_cancelled_support` | Mismo cron: atención la canceló desde el admin de Seal, hace más de 1 h, y sigue cancelada | `cancelledBy`, `cancelledOn`, `cancelledOnLabel`, `lastChargeDate(Label)` |
+| `subscription_resumed` | `POST /api/subscription/resume`, ~5-20 s después (espera a que Seal regenere el calendario) | `pausedOn` |
+| `subscription_reactivated` | `POST /api/subscription/reactivate`, ~5-20 s después | `dropsRestored` |
+
+- `outcome: retry_tomorrow`: rechazo normal; el cobro pasa a mañana y, si vuelve a
+  fallar, entra en el ciclo de Seal y salta `payment_failed`. `date_kept`:
+  antifraude de la pasarela; no se reintenta y el pedido sigue en la fecha que
+  tenía antes de adelantar.
+- Las dos bajas fuera del portal NO reusan `subscription_cancelled`: el portal no
+  deja reactivar esas bajas (solo las hechas desde el propio portal), así que su
+  botón no puede ser «Reactivar» al portal.
+- Ni una baja ni la otra se avisa si el cliente tiene otra sub activa o pausada.
+
 ---
 
 ## 2. Flows que hay que construir (Klaviyo dashboard)

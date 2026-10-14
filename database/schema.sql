@@ -533,6 +533,30 @@ create table if not exists charge_now_locks (
   created_at           timestamptz not null default now()
 );
 
+-- Cada «Adelantar» que lanza el portal, para rescatarlo si la tarjeta lo rechaza
+-- después de que Seal acepte el cobro (2026-10-14). Estados y motivo en
+-- database/migrations/2026-10-14_charge_now_attempts.sql; diseño en
+-- lib/charge-now-recovery.ts.
+create table if not exists charge_now_attempts (
+  id                    bigserial primary key,
+  seal_subscription_id  text        not null,
+  customer_id           text        not null,
+  pre_charge_date       date,
+  requested_at          timestamptz not null default now(),
+  status                text        not null default 'requested'
+    check (status in ('requested','handling','retry_scheduled','date_restored','succeeded',
+                      'superseded','not_active','unhandled','sync_failed','expired')),
+  failed_attempt_id     text unique,
+  error_code            text,
+  retry_date            date,
+  handled_at            timestamptz,
+  note                  text
+);
+create index if not exists charge_now_attempts_sub_requested_idx
+  on charge_now_attempts (seal_subscription_id, requested_at desc);
+create index if not exists charge_now_attempts_open_idx
+  on charge_now_attempts (requested_at) where status = 'requested';
+
 -- ============================================================
 -- 6. RLS policies
 -- ============================================================
@@ -560,6 +584,7 @@ alter table email_logs             enable row level security;
 alter table webhook_log            enable row level security;
 alter table auth_sessions          enable row level security;
 alter table charge_now_locks       enable row level security;
+alter table charge_now_attempts    enable row level security;
 -- NOTE: email_change_requests and rate_buckets are created in their own
 -- migration files (database/migrations/2026-05-22_*.sql) and enable RLS
 -- there. They are NOT created here, so don't add their ALTER statements to
