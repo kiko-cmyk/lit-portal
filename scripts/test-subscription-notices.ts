@@ -209,7 +209,7 @@ check(
 );
 check(
   "un timeout o un 5xx de Seal NO devuelve la fecha",
-  /const explicitRejection = err instanceof SealApiError && err\.status >= 200 && err\.status < 500;/.test(CHARGE) &&
+  /alreadyScheduled \|\| \(err instanceof SealApiError && err\.status >= 200 && err\.status < 500\)/.test(CHARGE) &&
     /let syncOwned = explicitRejection;/.test(CHARGE),
   "Seal puede haber cobrado y contestado tarde: devolver la fecha de antes le cobraría dos veces.",
 );

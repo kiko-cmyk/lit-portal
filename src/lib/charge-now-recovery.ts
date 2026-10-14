@@ -42,7 +42,7 @@
 
 import { alertSlackErrorAwaited } from "@/lib/alert";
 import { klaviyo } from "@/lib/klaviyo";
-import { mapStatus, seal, type SealSubscription } from "@/lib/seal";
+import { getNextBillingAttempt, mapStatus, seal, type SealSubscription } from "@/lib/seal";
 import { formatShipDateEs } from "@/lib/ship-date-label";
 import { customerLocale, subscriptionSnapshotProps } from "@/lib/sub-event-props";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -79,7 +79,12 @@ const CLOCK_SKEW_MS = 5 * 1000;
 
 /** Un Adelantar sigue «en curso» este tiempo: charge-now no deja lanzar otro. */
 export const OPEN_INTENT_MS = 15 * 60 * 1000;
-/** Una fila en `handling` más vieja que esto es un rescate que murió a medias. */
+/**
+ * Una fila en `handling` más vieja que esto es un rescate que murió a medias.
+ * Vale porque el webhook y el cron tienen maxDuration 60 s: pasado este tiempo no
+ * queda ningún proceso vivo con la fila. Si algún día maxDuration sube de 120 s
+ * (lo que dura el lock de charge_now_locks), hay que revisar los dos plazos.
+ */
 const STALE_HANDLING_MS = 15 * 60 * 1000;
 
 const H = 60 * 60 * 1000;
@@ -582,7 +587,27 @@ export async function sweepChargeNowAttempts(
         // Seal no llegó a crear el cobro (no le llegó la llamada, o «ya hay un
         // cobro en curso»). Pasadas 2 h no hay nada que esperar.
         if (age > 2 * H) {
-          if (!opts.dryRun) await finishIntent(row.id, "expired", { note: "Seal no tiene ese cobro manual" });
+          // Pero si Seal SÍ reancló el calendario sin crear el cobro (un 5xx a
+          // mitad de la llamada), el siguiente cobro ha saltado un ciclo y nadie
+          // lo devuelve. No se restaura solo: el cliente puede haber cambiado de
+          // plan entretanto. Aviso para mirarlo a mano (revisión adversarial).
+          const first = getNextBillingAttempt(s)?.date?.slice(0, 10) ?? null;
+          const pushed = !!(row.pre_charge_date && first && first > row.pre_charge_date.slice(0, 10));
+          if (!opts.dryRun) {
+            await finishIntent(row.id, "expired", {
+              note: pushed ? `sin cobro en Seal y calendario movido a ${first}` : "Seal no tiene ese cobro manual",
+            });
+            if (pushed) {
+              await alertSlackErrorAwaited({
+                path: "lib/charge-now-recovery",
+                code: "charge_now_pushed_without_charge",
+                msg:
+                  `sub ${row.seal_subscription_id}: el Adelantar no llegó a cobrarse, pero el siguiente ` +
+                  `cobro pasó de ${row.pre_charge_date} a ${first}. Revisar a mano: puede haberse quedado sin envío.`,
+                customerId: row.customer_id,
+              });
+            }
+          }
           tally.expired++;
         }
         continue;

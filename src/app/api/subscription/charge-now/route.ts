@@ -163,7 +163,10 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     // la fila sigue «requested» y deciden el webhook de Seal o el cron con lo que
     // diga Seal (revisión adversarial, 14-oct). Antes del 14-oct este catch
     // devolvía la fecha con CUALQUIER error.
-    const explicitRejection = err instanceof SealApiError && err.status >= 200 && err.status < 500;
+    // «Ya hay un cobro en curso» también es un rechazo explícito aunque llegue
+    // como 503: Seal lo identifica por el mensaje y no ha cobrado nada nuevo.
+    const explicitRejection =
+      alreadyScheduled || (err instanceof SealApiError && err.status >= 200 && err.status < 500);
     let syncOwned = explicitRejection;
     if (explicitRejection && intentId !== null) {
       // Se marca la fila antes de mover nada, para que el rescate asíncrono no
