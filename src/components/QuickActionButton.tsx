@@ -14,6 +14,8 @@ interface QuickActionButtonProps {
    * dice qué va a pasar antes de pulsarla, que es lo que la hacía «sosa».
    */
   state?: ReactNode;
+  /** La fila de abajo nunca se parte en dos (los sabores de «Cambiar sabor»). */
+  stateOneLine?: boolean;
   /** Optional eyebrow (kept for backward compat — Hub no longer uses it). */
   eyebrow?: string;
   /** Forced muted-grey with SOON badge, non-clickable. */
@@ -33,6 +35,7 @@ export function QuickActionButton({
   label,
   sub,
   state,
+  stateOneLine = false,
   comingSoon,
   onClick,
   disabled,
@@ -87,7 +90,11 @@ export function QuickActionButton({
       {sub && <span className="text-[12px] leading-[1.4] text-[#5E6168] md:text-[13px] md:leading-[1.45]">{sub}</span>}
 
       {state && (
-        <span className="mt-auto flex w-full flex-wrap items-center gap-[5px] border-t border-dashed border-[#2F343D]/16 pt-2.5 font-display text-[11px] font-semibold uppercase tracking-[0.02em] md:gap-[7px] md:pt-3 md:text-[13px]">
+        <span
+          className={`mt-auto flex w-full items-center border-t border-dashed border-[#2F343D]/16 pt-2.5 font-display text-[11px] font-semibold uppercase tracking-[0.02em] md:gap-[7px] md:pt-3 md:text-[13px] ${
+            stateOneLine ? "flex-nowrap gap-[3px] md:flex-wrap" : "flex-wrap gap-[5px]"
+          }`}
+        >
           {state}
         </span>
       )}

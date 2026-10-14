@@ -3,12 +3,11 @@
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BottomNav, TopNav } from "@/components/BottomNav";
+import { TopNav } from "@/components/BottomNav";
+import { MobileHeader } from "@/components/MobileHeader";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
-import { CustomerChip } from "@/components/CustomerChip";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
 import { LoginScreen } from "@/components/LoginScreen";
-import { Logo } from "@/components/Logo";
 import { BrandBand, CardTitle, Lp2Card } from "@/components/Lp2";
 import { Lp2Loader } from "@/components/Lp2Loader";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
@@ -20,7 +19,6 @@ import {
 import { ReactivateCard } from "@/components/ReactivateCard";
 import { ReferralCard } from "@/components/ReferralCard";
 import { SectionDivider } from "@/components/SectionDivider";
-import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { TierPill } from "@/components/TierPill";
 
 // Overlays are modal-only (rendered behind a click), so we code-split them out
@@ -33,7 +31,7 @@ const ChargeNowOverlay = dynamic(() => import("@/components/ChargeNowOverlay").t
 const CancelTakeover = dynamic(() => import("@/components/CancelTakeover").then((m) => m.CancelTakeover));
 const ProfileSurveyOverlay = dynamic(() => import("@/components/ProfileSurveyOverlay").then((m) => m.ProfileSurveyOverlay));
 import { api, ApiClientError } from "@/lib/api-client";
-import { LangToggle, T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
+import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
 import { SUBSCRIBE_URL } from "@/lib/storefront-links";
@@ -86,7 +84,6 @@ export default function HubPage() {
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const t = useLang();
   const lang = useLangValue();
-  const { canSwitch, openChooser } = useSubscriptionSwitch();
   usePageTitle({ en: "Subscription", es: "Suscripción" }); // browser tab title
 
   // Deep-link desde el email de recordatorio de renovación
@@ -461,46 +458,14 @@ export default function HubPage() {
     <div className="zone-lp2 mesh-bg flex min-h-screen flex-col overflow-x-clip bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
-          2026-05-19). z-40 sits above the BottomNav z-40 sibling, fine on
-          mobile because they don't overlap (top vs bottom). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
-        <Logo />
-        {/* min-w-0 lets the group shrink below its content on narrow phones
-            (≤390px with pill + toggle + chip + TierPill); the chip name and
-            the TierPill truncate under pressure instead of overflowing the
-            viewport (audit 2026-07-08). */}
-        <div className="flex min-w-0 items-center gap-2.5">
-          {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
-              tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
-              2026-07-06). */}
-          {canSwitch && (
-            <button
-              type="button"
-              onClick={openChooser}
-              className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
-              style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
-            >
-              {t({ en: "Switch", es: "Cambiar" })}
-            </button>
-          )}
-          {/* Idioma SOLO en la cabecera (Juan 2026-10-13): en móvil vivía en una
-              sección de Cuenta porque esta barra iba justa; con el rediseño la
-              barra solo lleva idioma y nombre (más «Cambiar» y el TierPill
-              cuando tocan), y el chip del nombre se recorta si no cabe. */}
-          <LangToggle />
-          {customer && <CustomerChip name={customer.name} />}
-          <TierPill
-            visible={drops.tierEarned}
-            tierEarnedAt={drops.tierEarnedAt ?? null}
-          />
-        </div>
-      </header>
+      {/* Cabecera móvil (Juan 2026-10-14): menú, logo e iniciales, como la de
+          litsalt.com. Fija: nunca se esconde al hacer scroll (Juan 2026-05-19). */}
+      <MobileHeader name={customer?.name} extra={<TierPill visible={drops.tierEarned} tierEarnedAt={drops.tierEarnedAt ?? null} />} />
 
-      {/* Abajo, en móvil: la barra de abajo (65 px + su relleno `--nav-pb`) +
-          48, el mismo hueco bajo la banda que entre los referidos y la banda
-          (Juan 2026-10-13). En escritorio, `md:pb-12` (48). */}
-      <main className="flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(113px+var(--nav-pb))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
+      {/* Abajo, 48 px bajo la banda, el mismo hueco que entre los referidos y
+          la banda (Juan 2026-10-13), más la zona de la barra de inicio del
+          iPhone. Ya no hay barra fija abajo (Juan 2026-10-14). */}
+      <main className="flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
         {isPaused ? (
           <ReactivateCard
@@ -610,16 +575,22 @@ export default function HubPage() {
                         ? t({ en: "Choose the flavor of your boxes", es: "Elige el sabor de tus cajas" })
                         : t({ en: "Choose the flavor of your box", es: "Elige el sabor de tu caja" })
                     }
+                    // Los sabores en UNA fila también en móvil (Juan 2026-10-14):
+                    // en media tarjeta caben 3 con la caja a 18 px y menos aire.
+                    stateOneLine
                     state={
                       sub.composition?.length ? (
                         <>
                           {sub.composition.map((c, i) => (
-                            <span key={c.flavor} className={`inline-flex items-center gap-1 ${i > 0 ? "ml-1 md:ml-2" : ""}`}>
+                            <span
+                              key={c.flavor}
+                              className={`inline-flex flex-none items-center gap-0.5 md:gap-1 ${i > 0 ? "ml-[3px] md:ml-2" : ""}`}
+                            >
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img
                                 src={flavorVisual(c.flavor).box}
                                 alt=""
-                                className="h-auto w-[22px] md:w-[30px]"
+                                className="h-auto w-[18px] md:w-[30px]"
                               />
                               {c.boxes}×
                             </span>
@@ -669,7 +640,6 @@ export default function HubPage() {
         )}
       </main>
 
-      <BottomNav />
 
       {/* Overlays live outside the isPaused/isPostCancel branch, so they can open
           on top of the resume card. One route reaches them without a click: the

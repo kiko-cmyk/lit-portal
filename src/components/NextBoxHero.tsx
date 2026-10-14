@@ -101,7 +101,9 @@ export function NextBoxHero({
 
   return (
     <div className="cover-rise mx-6 md:mx-0">
-      <Lp2Card as="article" className="md:p-9">
+      {/* `pt-[34px]` en móvil y no los 22 de las tarjetas: más aire encima de
+          «TU PRÓXIMO LIT» (Juan 2026-10-14). */}
+      <Lp2Card as="article" className="pt-[34px] md:p-9">
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-12">
           {/* Aire encima de «TU PRÓXIMO LIT» (Juan 2026-10-13, dos veces): 48 px
               en escritorio ancho y 24 entre 1024 y 1280, donde la fecha ya baja

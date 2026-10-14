@@ -2,12 +2,11 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { BottomNav, TopNav } from "@/components/BottomNav";
+import { TopNav } from "@/components/BottomNav";
+import { MobileHeader } from "@/components/MobileHeader";
 import { orderStatusStyle, translateOrderStatus } from "@/lib/order-status";
-import { CustomerChip } from "@/components/CustomerChip";
 import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
-import { Logo } from "@/components/Logo";
 import { BrandBand, CardTitle, Figure, Lp2Card } from "@/components/Lp2";
 import { Lp2Loader } from "@/components/Lp2Loader";
 import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
@@ -15,14 +14,13 @@ import { ReferralCard } from "@/components/ReferralCard";
 import { SubscribeBanner } from "@/components/SubscribeBanner";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
-import { SignOutPill, SwitchAccountRow } from "@/components/SwitchAccount";
+import { SwitchAccountRow } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
 import { flavorVisual, unknownFlavorName } from "@/lib/flavor-visuals";
 import { formatEuro } from "@/lib/format-price";
 import { frequencyBetweenLabel, frequencyParts } from "@/lib/frequency-label";
 import {
-  LangToggle,
   T,
   useLang,
   useLangValue,
@@ -93,7 +91,7 @@ export default function AccountPage() {
   const [billingOpen, setBillingOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
-  const { canSwitch, openChooser, accountOnly } = useSubscriptionSwitch();
+  const { accountOnly } = useSubscriptionSwitch();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
 
   useEffect(() => {
@@ -326,47 +324,15 @@ export default function AccountPage() {
     <div className="zone-lp2 mesh-bg flex min-h-screen flex-col overflow-x-clip bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
-          2026-05-19). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--background)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
-        <Logo />
-        {/* min-w-0 lets the group shrink on narrow phones (≤390px with pill +
-            toggle + chip + TierPill); chip name and TierPill truncate under
-            pressure instead of overflowing (audit 2026-07-08). */}
-        <div className="flex min-w-0 items-center gap-2.5">
-          {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
-              tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
-              2026-07-06). */}
-          {canSwitch && (
-            <button
-              type="button"
-              onClick={openChooser}
-              className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
-              style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
-            >
-              {t({ en: "Switch", es: "Cambiar" })}
-            </button>
-          )}
-          {/* Idioma SOLO en la cabecera (Juan 2026-10-13). Hasta hoy, en móvil
-              vivía en una sección «Idioma» de esta página porque la barra iba
-              justa; con el rediseño la barra solo lleva idioma y nombre (más
-              «Cambiar» y el TierPill cuando tocan) y el chip se recorta. */}
-          {!accountOnly && <LangToggle />}
-          {customer && <CustomerChip name={customer.name} />}
-          <TierPill
-            visible={tier?.earned ?? false}
-            tierEarnedAt={tier?.earnedAt ?? null}
-          />
-          {/* Wholesale: the bottom tab bar is gone, so the way out lives here. */}
-          {accountOnly && <SignOutPill />}
-        </div>
-      </header>
+      {/* Cabecera móvil (Juan 2026-10-14): menú, logo e iniciales, como la de
+          litsalt.com. Fija: nunca se esconde al hacer scroll (Juan 2026-05-19). */}
+      <MobileHeader name={customer?.name} extra={<TierPill visible={tier?.earned ?? false} tierEarnedAt={tier?.earnedAt ?? null} />} />
 
-      {/* The bottom padding reserves room for the fixed tab bar (65 px plus its
-          `--nav-pb`, which grows with the iPhone home-indicator inset); without
-          one, that is just a hole at the end of the page. */}
+      {/* Abajo, 48 px más la zona de la barra de inicio del iPhone: el mismo
+          hueco que deja la banda arriba y abajo. Desde el 2026-10-14 no hay
+          barra fija abajo que reservar (sus pestañas van en el menú). */}
       <main
-        className={`flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] ${accountOnly ? "pb-[calc(3rem+env(safe-area-inset-bottom,0px))]" : "pb-[calc(108px+var(--nav-pb))]"} md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
+        className={`flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
       >
         {/* Rediseño lp2 (Juan 2026-10-13, aprobado en el lienzo PRE). Orden:
             saludo con cifras → encuesta (si toca) → «Tu plan» y «Tus datos» a
@@ -379,14 +345,16 @@ export default function AccountPage() {
             elegante» que las pastillas). Para un mayorista la cifra cuenta
             pedidos, no cajas de un plan.
 
-            Al tamaño de la fecha del hero del Hub, 72 px en móvil y 88 en
-            escritorio (Juan 2026-10-13). En móvil va en dos líneas («HOLA,» /
-            «JUAN»), y un nombre largo baja de tamaño para caber en la suya en
-            vez de salirse de la pantalla (`--hola-size`). */}
-        <div className="mx-6 mt-1 flex flex-col gap-5 md:mx-0 md:mt-2 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-x-10 md:gap-y-6">
+            En escritorio, al tamaño de la fecha del hero del Hub (88 px, Juan
+            2026-10-13). En móvil, más pequeño (Juan 2026-10-14): 52 px como
+            mucho, en UNA línea con un nombre corto («HOLA, JUAN» mide 311 px);
+            un nombre largo baja a la segunda y se encoge para caber en la suya
+            en vez de salirse de la pantalla (`--hola-size`). Encima, un poco
+            más de aire que antes (20 px en móvil, 24 en escritorio). */}
+        <div className="mx-6 mt-5 flex flex-col gap-5 md:mx-0 md:mt-6 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-x-10 md:gap-y-6">
           <h1
             className="m-0 font-display text-[length:var(--hola-size)] uppercase leading-[0.95] tracking-[0.005em] text-[#2F343D] md:text-[88px] md:leading-[0.9]"
-            style={{ "--hola-size": `min(72px, calc((100vw - 48px) / ${(clashNameEm(firstName) * 1.03).toFixed(2)}))` } as React.CSSProperties}
+            style={{ "--hola-size": `min(52px, calc((100vw - 48px) / ${(clashNameEm(firstName) * 1.03).toFixed(2)}))` } as React.CSSProperties}
           >
             <span className="font-light">{t({ en: "Hi,", es: "Hola," })}</span>
             {firstName && (
@@ -526,7 +494,11 @@ export default function AccountPage() {
           )}
           <div className="mx-6 md:mx-0">
             <Lp2Card as="article" className="flex h-full flex-col">
-              <CardTitle thin={t({ en: "Your", es: "Tus" })} bold={t({ en: "details", es: "datos" })} />
+              <CardTitle
+                thin={t({ en: "Personal", es: "personales" })}
+                bold={t({ en: "details", es: "Datos" })}
+                boldFirst={lang === "es"}
+              />
               {emailChangeConfirmed && (
                 <div className="mt-4 lp2-notice md:mx-0">
                   <T
@@ -746,7 +718,6 @@ export default function AccountPage() {
         )}
       </main>
 
-      <BottomNav />
 
       {cancelOpen && (
         <CancelTakeover
@@ -1014,8 +985,14 @@ function PlanCard({
 
   return (
     <Lp2Card as="article" className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3">
-        <CardTitle thin={t({ en: "Your", es: "Tu" })} bold={t({ en: "plan", es: "plan" })} />
+      {/* `flex-wrap`: con «PLAN DE SUSCRIPCIÓN» el título ocupa casi toda la
+          línea en móvil, y «ACTIVO» baja debajo en vez de partir el título. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
+        <CardTitle
+          thin={t({ en: "Subscription", es: "de suscripción" })}
+          bold={t({ en: "plan", es: "Plan" })}
+          boldFirst={lang === "es"}
+        />
         {/* «Activo», en masculino: habla del plan (Juan 2026-10-13). */}
         <span className="flex flex-none items-center gap-1.5 rounded-full bg-[color:var(--color-bold-yellow)]/60 px-[11px] py-1.5 text-[9.5px] font-bold uppercase tracking-[0.16em] md:px-3 md:py-[7px] md:text-[10px]">
           <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[#2F343D]" />
@@ -1618,7 +1595,11 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
     <div className="mx-6 md:mx-0">
       <Lp2Card>
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <CardTitle thin={t({ en: "My", es: "Mis" })} bold={t({ en: "orders", es: "pedidos" })} />
+          <CardTitle
+            thin={t({ en: "history", es: "Historial de" })}
+            bold={t({ en: "Order", es: "pedidos" })}
+            boldFirst={lang === "en"}
+          />
           {toggle && <div className="hidden md:block">{toggle}</div>}
         </div>
         {!orders && (

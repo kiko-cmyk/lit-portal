@@ -1,14 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { BottomNav, TopNav } from "@/components/BottomNav";
+import { TopNav } from "@/components/BottomNav";
+import { MobileHeader } from "@/components/MobileHeader";
 import { LoginScreen } from "@/components/LoginScreen";
-import { SubSwitchPill } from "@/components/SubSwitchPill";
 import { TierPill } from "@/components/TierPill";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
-import { portalHref } from "@/lib/portal-link";
 import type { TierResponse, TimelineEntry } from "@/lib/types";
 
 /**
@@ -205,34 +203,11 @@ export default function CollectionPage() {
     >
       <TopNav />
 
-      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
-          2026-05-19). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-cream)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
-        <Link
-          href={portalHref(lang, "home")}
-          className="text-[13px] font-medium text-[color:var(--color-lit-grey)] hover:opacity-60"
-        >
-          ← <T en="Subscription" es="Suscripción" />
-        </Link>
-        {/* min-w-0: same overflow guard as the Hub/Account headers — with the
-            multi-sub pill + toggle + TierPill the row must shrink, not spill
-            past the viewport on ≤390px (audit 2026-07-08). */}
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 rounded-sm bg-[color:var(--color-lit-grey)] px-3 py-[5px] text-[9px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
-            <T en="Collection" es="Colección" />
-          </span>
-          {/* Multi-sub switch, a la IZQUIERDA del toggle como en Hub/Cuenta
-              (audit 2026-07-08: el pill faltaba en Colección y en el detalle
-              de pedido, dejando al multi-sub móvil sin forma de cambiar). */}
-          <SubSwitchPill />
-          <TierPill
-            visible={tier?.earned ?? false}
-            tierEarnedAt={tier?.earnedAt ?? null}
-          />
-        </div>
-      </header>
+      {/* Cabecera móvil (Juan 2026-10-14): menú, logo e iniciales, como la de
+          litsalt.com. Fija: nunca se esconde al hacer scroll (Juan 2026-05-19). */}
+      <MobileHeader extra={<TierPill visible={tier?.earned ?? false} tierEarnedAt={tier?.earnedAt ?? null} />} />
 
-      <main className="flex-1 pt-[calc(88px+var(--safe-top))] pb-[calc(76px+var(--nav-pb))] md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      <main className="flex-1 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
         <section className="px-6 pt-2 pb-5 md:px-0">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-warm-gray)]">
@@ -524,7 +499,6 @@ export default function CollectionPage() {
         </section>
       </main>
 
-      <BottomNav />
 
       {detailIdx !== null && (
         <CardDetailModal

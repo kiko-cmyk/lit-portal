@@ -37,29 +37,13 @@ export function ProfileSurveyBanner({ onStart }: ProfileSurveyBannerProps) {
   const t = useLang();
   return (
     <div className="mx-6 md:mx-0">
-      <Lp2Card className="md:flex md:items-center md:gap-7 md:py-6 md:pr-[30px] md:pl-6">
-        <div className="flex items-center gap-3.5 md:contents">
-          <span
-            aria-hidden
-            className="flex h-[52px] w-[52px] flex-none items-center justify-center rounded-full bg-[color:var(--color-bold-yellow)] md:ml-1.5 md:h-16 md:w-16"
-          >
-            <svg className="h-[22px] w-[22px] md:h-[26px] md:w-[26px]" viewBox="0 0 24 24" fill="none" stroke="#2F343D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 4H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
-              <rect x="9" y="2.5" width="6" height="3" rx="1" />
-              <path d="M9 13l2 2 4-4" />
-            </svg>
-          </span>
-          <CardTitle
-            thin={t({ en: "Tell us", es: "Cuéntanos" })}
-            bold={t({ en: "about you", es: "sobre ti" })}
-            className="md:hidden"
-          />
-        </div>
+      <Lp2Card className="md:flex md:items-center md:gap-7 md:py-6 md:px-[30px]">
+        {/* Sin icono (Juan 2026-10-14): el título solo, como el resto de
+            tarjetas. */}
         <div className="min-w-0 md:flex-1">
           <CardTitle
             thin={t({ en: "Tell us", es: "Cuéntanos" })}
             bold={t({ en: "about you", es: "sobre ti" })}
-            className="hidden md:block"
           />
           {/* El «para qué» en la voz del cliente. Sin esto el banner pide diez
               respuestas sin decir para qué sirven, que es la forma más rápida

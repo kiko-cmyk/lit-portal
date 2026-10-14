@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { T, useLang, useLangValue } from "@/lib/i18n";
-import { FRIENDS_PHOTO_DATA_URI } from "@/lib/friends-photo";
 import type { ReferralCodeResponse } from "@/lib/types";
+
+/** La foto del banner, en el CDN de Shopify. */
+const FRIENDS_PHOTO = "https://cdn.shopify.com/s/files/1/0896/3319/4288/files/3-2_2.jpg?v=1789544120";
 
 interface ReferralCardProps {
   /**
@@ -25,8 +27,9 @@ interface ReferralCardProps {
  * ── Diseño (Juan, 2026-10-13) ──
  *
  *  - Fondo: el mismo negro con foto velada que el resto de banners del portal
- *    (ProfileSurveyBanner, SubscribeBanner), pero con SU foto: amigos pasándolo
- *    bien (`friends-photo.ts`), no la misma imagen en todos los banners.
+ *    (ProfileSurveyBanner, SubscribeBanner), pero con SU foto: dos amigos con
+ *    LIT en un picnic (Juan 2026-10-14, del CDN de Shopify), no la misma imagen
+ *    en todos los banners.
  *  - Los 10€ a la vista: van en el TITULAR y en amarillo, no solo en el
  *    antetítulo pequeño.
  *  - Equilibrada: el titular a la izquierda; el texto, el código y la letra
@@ -120,18 +123,23 @@ export function ReferralCard({ placement }: ReferralCardProps) {
         isolation: "isolate",
       }}
     >
-      {/* Su foto: tres amigos corriendo juntos (foto9 del banco de marca). Con
-          algo de color y de contraste: en blanco y negro puro, como el resto de
-          banners, la foto (desenfocada por el movimiento) se quedaba en manchas
-          y no se reconocía a nadie. */}
-      <span
+      {/* Su foto (Juan 2026-10-14): dos amigos con LIT en un picnic, del CDN
+          de Shopify (está en el img-src de la CSP). `srcSet` con el ancho que
+          sirve el CDN, para que el móvil no baje los 480 KB del original: unos
+          160 KB a 800 px. Encuadre en las caras, que están arriba a la derecha.
+          Con algo de color y contraste, como la anterior: en blanco y negro
+          puro no se reconocía a nadie. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
         aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 bg-cover"
-        style={{
-          backgroundImage: `url(${FRIENDS_PHOTO_DATA_URI})`,
-          backgroundPosition: "center 30%",
-          filter: "saturate(0.6) contrast(1.15) brightness(1.1)",
-        }}
+        alt=""
+        src={`${FRIENDS_PHOTO}&width=1200`}
+        srcSet={[800, 1200, 1500].map((w) => `${FRIENDS_PHOTO}&width=${w} ${w}w`).join(", ")}
+        sizes="(min-width: 768px) 1200px, 100vw"
+        loading="lazy"
+        decoding="async"
+        className="pointer-events-none absolute inset-0 -z-10 h-full w-full object-cover object-[68%_22%] md:object-[center_24%]"
+        style={{ filter: "saturate(0.6) contrast(1.15) brightness(1.1)" }}
       />
       {/* El velo. En móvil el texto ocupa toda la tarjeta, de arriba abajo; en
           escritorio hay texto a los DOS lados, así que cierra en los extremos y

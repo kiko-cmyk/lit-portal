@@ -60,13 +60,13 @@
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* Zonas seguras del iPhone (viewport-fit=cover en layout.tsx). --safe-top es
-   el hueco del borde de arriba (0 fuera del iPhone); --nav-pb, el relleno de
-   abajo de la barra de navegación: 20 px, o la zona de la barra de inicio si
-   es mayor. Las páginas con esa barra reservan su alto con --nav-pb. */
+/* Zonas seguras del iPhone (viewport-fit=cover en layout.tsx): el hueco del
+   borde de arriba y el de la barra de inicio de abajo (0 fuera del iPhone). La
+   cabecera móvil se aparta con --safe-top y el final de cada página, con
+   --safe-bottom (desde el 2026-10-14 ya no hay barra fija abajo). */
 :root {
   --safe-top: env(safe-area-inset-top, 0px);
-  --nav-pb: max(1.25rem, env(safe-area-inset-bottom, 0px));
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 :root {
@@ -607,6 +607,23 @@ button:disabled,
   animation-duration: 120s;
 }
 
+/* Menú móvil del portal (MobileHeader): el panel baja un poco y aparece, y el
+   velo de detrás se funde; como el menú de litsalt.com. */
+@keyframes lp2-menu-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes lp2-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.lp2-menu-in {
+  animation: lp2-menu-in 0.22s ease-out;
+}
+.lp2-fade-in {
+  animation: lp2-fade-in 0.22s ease-out;
+}
+
 /* Cargador del portal (Lp2Loader): tres puntos con los colores de los sabores
    que se encienden por turnos. Con «reducir movimiento» se quedan quietos y
    encendidos. */
@@ -671,7 +688,9 @@ button:disabled,
   .cover-rise,
   .char-rise,
   .lp2-band-row,
-  .lp2-loader-dot {
+  .lp2-loader-dot,
+  .lp2-menu-in,
+  .lp2-fade-in {
     animation: none;
   }
   .reveal {

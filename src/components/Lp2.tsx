@@ -36,22 +36,41 @@ export function Lp2Card({
 export function CardTitle({
   thin,
   bold,
+  boldFirst = false,
   as: Tag = "h2",
   className = "",
 }: {
   thin: string;
   bold: string;
+  /**
+   * La negrita delante («PLAN de suscripción», «DATOS personales»: Juan
+   * 2026-10-14). Por idioma: en inglés el orden natural cambia («Subscription
+   * PLAN»), así que lo decide quien llama.
+   */
+  boldFirst?: boolean;
   as?: "h1" | "h2" | "h3";
   className?: string;
 }) {
+  // La parte en negrita no se parte: si no cabe, baja entera («¿QUIERES SALIR /
+  // DEL CÍRCULO?» y no «… DEL / CÍRCULO?»).
+  const strong = <span className="whitespace-nowrap font-semibold">{bold}</span>;
+  const light = <span className="font-light">{thin}</span>;
   return (
+    // En móvil, como mucho 28 px y si no, el 6,6 % del ancho: así los títulos
+    // largos de Cuenta («HISTORIAL DE PEDIDOS», 312 px a 28) caben en UNA línea
+    // también en un móvil de 360 (Juan 2026-10-13: «los titles en 1 fila»).
     <Tag
-      className={`m-0 font-display text-[28px] uppercase leading-[0.98] tracking-[0.005em] md:text-[38px] ${className}`}
+      className={`m-0 font-display text-[min(28px,6.6vw)] uppercase leading-[0.98] tracking-[0.005em] md:text-[38px] ${className}`}
     >
-      <span className="font-light">{thin}</span>{" "}
-      {/* La parte en negrita no se parte: si no cabe, baja entera («¿QUIERES
-          SALIR / DEL CÍRCULO?» y no «… DEL / CÍRCULO?»). */}
-      <span className="whitespace-nowrap font-semibold">{bold}</span>
+      {boldFirst ? (
+        <>
+          {strong} {light}
+        </>
+      ) : (
+        <>
+          {light} {strong}
+        </>
+      )}
     </Tag>
   );
 }
