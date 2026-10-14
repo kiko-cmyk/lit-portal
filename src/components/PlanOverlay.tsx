@@ -237,6 +237,18 @@ export function PlanOverlay({
             es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
           }),
         );
+      } else if (err.code === "change_applying") {
+        // ESTE cambio entró a medias y el cron lo termina en minutos (14-oct-2026): se le dice
+        // qué plan va a ver y que no lo repita. Con el mensaje de `change_in_progress` ("tu
+        // último cambio… vuelve a intentarlo") Juan no supo qué había pasado con el suyo.
+        setUncertain(true);
+        const freq = FREQUENCIES.find((f) => f.value === frequency);
+        setError(
+          t({
+            en: `Your new plan, ${boxCount} ${boxCount === 1 ? "box" : "boxes"} ${freq?.en.toLowerCase() ?? ""}, is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to save it again.`,
+            es: `Tu plan nuevo, ${boxCount} ${boxCount === 1 ? "caja" : "cajas"} ${freq?.es.toLowerCase() ?? ""}, se está terminando de aplicar. En unos minutos lo verás en tu suscripción y no se te cobrará de más. No hace falta que lo vuelvas a guardar.`,
+          }),
+        );
       } else if (err.code === "change_in_progress") {
         setUncertain(true);
         setError(

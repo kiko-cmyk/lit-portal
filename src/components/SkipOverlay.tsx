@@ -263,6 +263,11 @@ export function SkipOverlay({
                   en: "We're finishing another update to your subscription. Wait a moment and try again.",
                   es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
                 })
+            : code === "change_applying"
+              ? t({
+                  en: "Your change is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to do it again.",
+                  es: "Tu cambio se está terminando de aplicar. En unos minutos lo verás en tu suscripción y no se te cobrará de más. No hace falta que lo repitas.",
+                })
             : code === "change_in_progress"
               ? t({
                   en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",

@@ -501,6 +501,12 @@ function Solucion({
         en: "We're finishing another update to your subscription. Wait a moment and try again.",
         es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
       });
+    // ESTE cambio entró a medias y el cron lo termina en minutos (14-oct-2026).
+    if (code === "change_applying")
+      return t({
+        en: "Your change is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to do it again.",
+        es: "Tu cambio se está terminando de aplicar. En unos minutos lo verás en tu suscripción y no se te cobrará de más. No hace falta que lo repitas.",
+      });
     // Escritura a medias o sin cerrar (2-oct-2026): la ruta no deja tarificar encima y el
     // cron la cierra en minutos. Reintentar en el acto solo devuelve el 409.
     if (code === "change_in_progress")
