@@ -16,6 +16,7 @@ import {
   issueDiscoveryDiscount,
   type IssuedDiscount,
 } from "@/lib/discovery-discount";
+import { consumeCampaignCouponsSafe, isCampaignCouponCode } from "@/lib/coupon-parent";
 import { applyDiscoveryRenewalCreditForOrder } from "@/lib/discovery-renewal-credit";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { processOrderPaidFollowUp, recordOrderPaid } from "@/lib/referral-reward";
@@ -310,6 +311,22 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
       msg: `No se pudo registrar el referido del pedido ${payload.name ?? payload.id} (códigos: ${codes || "ninguno"}): ${err instanceof Error ? err.message : String(err)}. Revisar a mano.`,
       customerId: payload.customer?.id ? String(payload.customer.id) : undefined,
     });
+  }
+
+  // 4. Cupones de campaña (perfilado y Discovery Set): un solo uso.
+  //
+  // Desde el 2026-10-14 viven DENTRO de su descuento padre (`lib/coupon-parent`),
+  // donde Shopify solo deja un límite de usos para el padre entero. El «un solo
+  // uso» de cada código lo pone esto: el código usado se borra del padre en
+  // cuanto entra el pedido pagado. En `after()` y sin propagar nunca, por lo
+  // mismo que los pasos de arriba; si falla, avisa, y el cron
+  // `survey-discount-cleanup` lo borra igualmente por su uso.
+  const campaignCodes = (payload.discount_codes ?? [])
+    .map((d) => d.code ?? "")
+    .filter((c) => isCampaignCouponCode(c));
+  if (campaignCodes.length) {
+    const label = payload.name ?? String(payload.id ?? "?");
+    after(() => runAsBackgroundJob(() => consumeCampaignCouponsSafe(campaignCodes, label)));
   }
 }
 

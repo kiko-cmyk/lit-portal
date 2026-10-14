@@ -7,26 +7,18 @@
  * email "Perfilado A" (suscriptores) no promete nada, así que a ellos no se les
  * emite (ver `issueSurveyDiscount` y su llamada en la ruta de submit).
  *
- * ── El aviso que nos ahorra un mes de depuración (Kiko) ──
+ * Desde el 2026-10-14 cada código va DENTRO del descuento padre «Cupón
+ * perfilado · 5€», no como un descuento suelto por cliente (Juan: la lista del
+ * admin tenía 98 líneas solo de esto). La configuración (importe, colección,
+ * suscripción y compra única, primer cobro, una vez por cliente, código suelto
+ * sin segmento de clientes) vive en el padre; la caducidad y el «un solo uso»,
+ * en el portal. Todo en `lib/coupon-parent.ts`.
  *
- * `customerSelection: { all: true }`, NUNCA un segmento de clientes. Restringir
- * por cliente es lo que dejó los cupones de GoAffPro con CERO redenciones
- * durante meses sin un solo error en ningún log: Shopify rechaza el código de
- * quien paga sin estar logueado, y entre compradores antiguos ese grupo es
- * enorme. El código va suelto y la unicidad la garantizamos NOSOTROS: se emite
- * una vez por cliente y se guarda en `profile_survey_answers`.
- *
- * Por eso además `usageLimit: 1` y `appliesOncePerCustomer: true` son cinturón
- * y tirantes sobre un código que ya es de un solo uso por construcción.
- *
- * DEUDA CONOCIDA: `customerSelection` está deprecado y Shopify pide `context`.
- * No se migra aquí a propósito. Hoy funciona, y ese campo es EXACTAMENTE el que
- * dejó los cupones de GoAffPro sin canjear durante meses: cambiarlo de paso, en
- * el mismo commit que arregla otra cosa, es cómo se repite esa historia. Cuando
- * toque, se migra solo y se verifica con un checkout real sin sesión.
+ * La unicidad la garantizamos NOSOTROS: se emite una vez por cliente y se
+ * guarda en `profile_survey_answers`.
  */
 
-import { shopifyAdmin } from "@/lib/shopify-admin";
+import { addCouponCode, SURVEY_COUPON_PARENT_GID } from "@/lib/coupon-parent";
 
 /** 5 € fijos. En euros porque la mutación toma un decimal, no céntimos. */
 const DISCOUNT_AMOUNT_EUR = "5.0";
@@ -42,18 +34,6 @@ export const DISCOUNT_VALUE_EUR = Number(DISCOUNT_AMOUNT_EUR);
 
 /** Días de validez desde la emisión. El email promete 30. */
 export const DISCOUNT_DAYS = 30;
-
-/**
- * Colección "Cupones - solo cajas LIT (tecnica, no publicar)".
- *
- * Automática por título (contiene "Daily Hydration" o "Hydration Pack"), así
- * que hoy son las 10 cajas: 3 sabores × suscripción y compra única, más los dos
- * packs de 4. Deja fuera Discovery Set, botella, calcetines, hoodie y los tres
- * de wholesale. Cuando Raw pase de DRAFT a ACTIVE entra solo, sin tocar esto.
- *
- * Verificado contra Shopify el 2026-09-22: 10 productos, los esperados.
- */
-const COUPON_COLLECTION_GID = "gid://shopify/Collection/726625812829";
 
 export interface IssuedDiscount {
   code: string;
@@ -77,10 +57,18 @@ export function generateCode(): string {
 }
 
 /**
- * Crea el descuento en Shopify y devuelve el código.
+ * Da de alta el código DENTRO del descuento padre «Cupón perfilado · 5€» y lo
+ * devuelve (Juan 2026-10-14: todos los cupones de una campaña en un solo
+ * descuento, como los de referidos; ver `lib/coupon-parent.ts`).
  *
- * Lanza si Shopify falla o devuelve userErrors: la ruta de submit lo captura y
- * guarda las respuestas igual con `discount_code: null`. Preferimos perder un
+ * El importe, la colección, «suscripción y compra única», «solo el primer
+ * cobro» y «una vez por cliente» los pone el padre. Los 30 días y el «un solo
+ * uso» los lleva el portal: la fecha se guarda en `discount_expires_at` y el
+ * cron borra el código del padre cuando pasa; `orders/paid` lo borra en cuanto
+ * se usa.
+ *
+ * Lanza si Shopify falla o no confirma el código: la ruta de submit lo captura
+ * y guarda las respuestas igual con `discount_code: null`. Preferimos perder un
  * cupón (recuperable a mano) antes que perder el perfilado o dejar al cliente
  * repitiendo la encuesta.
  */
@@ -100,62 +88,11 @@ export async function issueSurveyDiscount(
   const now = new Date();
   const endsAt = new Date(now.getTime() + DISCOUNT_DAYS * 24 * 60 * 60 * 1000);
 
-  const data = await shopifyAdmin.graphql<{
-    discountCodeBasicCreate: {
-      codeDiscountNode: { id: string } | null;
-      userErrors: Array<{ field: string[] | null; message: string; code: string | null }>;
-    };
-  }>(
-    `mutation createSurveyDiscount($basicCodeDiscount: DiscountCodeBasicInput!) {
-      discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
-        codeDiscountNode { id }
-        userErrors { field message code }
-      }
-    }`,
-    {
-      basicCodeDiscount: {
-        // El título es lo que ve el equipo en el admin. Lleva el customerId
-        // para poder reconciliar a mano un cupón con quien lo generó.
-        title: `Perfilado ${code} (${customerId})`,
-        code,
-        startsAt: now.toISOString(),
-        endsAt: endsAt.toISOString(),
-        // Ver el docstring del módulo: NUNCA un segmento.
-        customerSelection: { all: true },
-        customerGets: {
-          value: { discountAmount: { amount: DISCOUNT_AMOUNT_EUR, appliesOnEachItem: false } },
-          items: { collections: { add: [COUPON_COLLECTION_GID] } },
-          // AMBOS, y hay que decirlo explícitamente (Juan 2026-09-22).
-          //
-          // `appliesOnSubscription` es FALSE por defecto en Shopify, así que el
-          // primer cupón emitido rebotaba con "no es válido para los artículos
-          // de tu carrito" en cuanto la caja llevaba plan de suscripción. Y es
-          // justo el caso que la campaña persigue: el email va a compradores
-          // one-shot para que se pasen a suscripción.
-          appliesOnOneTimePurchase: true,
-          appliesOnSubscription: true,
-        },
-        // Solo el PRIMER cobro de la suscripción. Sin esto, 5 € menos en cada
-        // entrega para siempre: a 45 días son unos 40 €/año por cliente, y con
-        // 4.068 emails eso deja de ser un cupón de captación.
-        recurringCycleLimit: 1,
-        // Sin mínimo de compra: la colección ya lo resuelve, porque lo más
-        // barato que contiene son 28,35 €.
-        appliesOncePerCustomer: true,
-        usageLimit: 1,
-      },
-    },
-  );
-
-  const res = data.discountCodeBasicCreate;
-  if (res.userErrors?.length) {
-    throw new Error(
-      `discountCodeBasicCreate: ${res.userErrors.map((e) => `${e.code ?? ""} ${e.message}`).join("; ")}`,
-    );
-  }
-  if (!res.codeDiscountNode) {
-    throw new Error("discountCodeBasicCreate devolvió codeDiscountNode null sin userErrors");
-  }
+  // `customerId` ya no va en Shopify (antes iba en el título de cada descuento
+  // suelto): la reconciliación de un código con su cliente está en
+  // `profile_survey_answers`.
+  void customerId;
+  await addCouponCode(SURVEY_COUPON_PARENT_GID, code);
 
   return {
     code,
