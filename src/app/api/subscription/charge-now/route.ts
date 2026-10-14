@@ -1,5 +1,6 @@
 import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { claimChargeNowIntent, recordChargeNowIntent } from "@/lib/charge-now-recovery";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -126,15 +127,36 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
   // Kiko 24-ago-2026). (2026-08-24)
   const preChargeDate = getNextBillingAttempt(sub)?.date?.slice(0, 10) ?? null;
 
+  // Apunte ANTES de llamar a Seal (2026-10-14). Casi todos los rechazos llegan
+  // segundos DESPUÉS de que Seal acepte el cobro, cuando esta petición ya ha
+  // contestado: entonces es el webhook de Seal quien rescata el calendario, y usa
+  // esta fila para saber que el cobro era nuestro y qué fecha tenía el cliente
+  // (lib/charge-now-recovery.ts). Best effort: sin fila, el Adelantar sigue igual.
+  const intentId = await recordChargeNowIntent({
+    sealSubscriptionId: String(sub.id),
+    customerId: ctx.customerId,
+    preChargeDate,
+  });
+
   // Charge now + reset the schedule so the cadence re-anchors on today.
   try {
     await seal.chargeNow(sub.id, { resetSchedule: true });
   } catch (err) {
+    // Rechazo SÍNCRONO: lo arregla este catch, como antes. Se marca la fila
+    // primero para que el rescate asíncrono no mueva el mismo calendario a la vez;
+    // si el webhook ya la había reclamado, decide él y aquí no se toca.
+    const alreadyScheduled = isChargeAlreadyScheduledError(err);
+    let syncOwned = true;
+    if (intentId !== null) {
+      syncOwned = await claimChargeNowIntent(intentId, alreadyScheduled ? "superseded" : "sync_failed").catch(
+        () => true,
+      );
+    }
     // El cobro no ha entrado, pero el calendario YA está reanclado. Devolverlo a su
     // sitio antes de propagar el error: pullCadenceBackTo solo mueve hacia atrás y
     // nunca a una fecha pasada, así que el peor caso es que no haga nada. Best effort,
     // el error original manda.
-    if (preChargeDate && !isChargeAlreadyScheduledError(err)) {
+    if (preChargeDate && !alreadyScheduled && syncOwned) {
       try {
         const moved = await seal.pullCadenceBackTo(sub.id, preChargeDate);
         console.log("[charge-now] schedule restored after failed charge", {

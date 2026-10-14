@@ -1,5 +1,8 @@
+import { after } from "next/server";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { klaviyo } from "@/lib/klaviyo";
+import { customerLocale, subscriptionSnapshotProps, waitForNextCharge } from "@/lib/sub-event-props";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -114,12 +117,28 @@ export const POST = withCustomer<ResumeResponse>(async (req, ctx) => {
     console.warn("[resume] cache flip failed (non-fatal):", cacheErr.message);
   }
 
-  klaviyo
-    .trackEvent("subscription_resumed", email, {
-      sealSubscriptionId: String(sub.id),
-      pausedOn: sub.paused_on || null,
-    })
-    .catch((err) => console.warn("[resume] klaviyo event failed:", err));
+  // El evento lleva la foto de la sub para el email de confirmación (2026-10-14):
+  // fecha de la próxima caja, cajas y sabores. Seal regenera el calendario unos
+  // segundos DESPUÉS de reanudar, así que se espera en segundo plano a tener la
+  // fecha (máx. ~20 s) en vez de mandar el evento sin ella o con la vieja.
+  const resumedId = sub.id;
+  const pausedOn = sub.paused_on || null;
+  after(() =>
+    runAsBackgroundJob(async () => {
+      const fresh = await waitForNextCharge(resumedId);
+      await klaviyo.trackEvent(
+        "subscription_resumed",
+        email,
+        {
+          ...(fresh ? subscriptionSnapshotProps(fresh) : {}),
+          sealSubscriptionId: String(resumedId),
+          pausedOn,
+          locale: await customerLocale(ctx.customerId),
+        },
+        { externalId: ctx.customerId },
+      );
+    }).catch((err) => console.warn("[resume] klaviyo event failed:", err)),
+  );
 
   return { resumed: true, sealSubscriptionId: String(sub.id) };
 });

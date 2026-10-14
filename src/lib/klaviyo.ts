@@ -85,7 +85,20 @@ export type KlaviyoEvent =
   | "referral_reward_applied"
   // referral_shared: copió su código o lo compartió desde Mi LIT. Solo el canal
   // (copy | whatsapp | native), para medir qué parte de la base comparte.
-  | "referral_shared";
+  | "referral_shared"
+  // Un «Adelantar» que la tarjeta rechazó después de que Seal lo aceptara
+  // (2026-10-14, lib/charge-now-recovery.ts). Sale cuando el calendario ya está
+  // arreglado: `outcome` dice si se reintenta mañana (`retry_tomorrow`) o si el
+  // pedido se queda en su fecha porque lo bloqueó el antifraude (`date_kept`).
+  // Seal no manda billing_attempt/failed para un cobro manual, así que sin esto
+  // el único aviso era el email de Seal.
+  | "charge_now_failed"
+  // Bajas que NO pasan por el portal (2026-10-14, lib/cancel-notice.ts), al día
+  // siguiente y solo si siguen canceladas. Eventos propios y no
+  // `subscription_cancelled`: el portal no deja reactivar estas bajas, y el
+  // email de ese flow lleva «Reactivar mis pedidos» al portal.
+  | "subscription_cancelled_unpaid"
+  | "subscription_cancelled_support";
 
 // Transient-failure retry budget. Klaviyo throttles /events/ (429) and can 5xx
 // under load; without a retry a single hiccup on a high-volume day (e.g. the
