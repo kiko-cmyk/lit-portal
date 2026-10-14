@@ -37,6 +37,7 @@ import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
 import { SUBSCRIBE_URL } from "@/lib/storefront-links";
 import { FREQUENCIES } from "@/lib/plan-options";
 import { flavorVisual } from "@/lib/flavor-visuals";
+import { formatEuro } from "@/lib/format-price";
 import { frequencyLabel } from "@/lib/frequency-label";
 import type {
   CustomerProfile,
@@ -62,6 +63,10 @@ const POST_PLAN_RESYNC_INTERVAL_MS = 5_000;
 // el 14-oct) y después el portal aún trae a mañana el cobro de quien volvió tras un
 // impago. El Hub sigue preguntando mientras el panel diga que hay algo pendiente.
 const POST_REACTIVATE_RESYNC_MS = 240_000;
+// Con un cambio de líneas que se está terminando de aplicar (14-oct-2026) el Hub sigue
+// mirando hasta que termine: el `after()` de la ruta suele cerrarlo en menos de un minuto
+// y el cron, como mucho, en unos minutos.
+const PENDING_CHANGE_RESYNC_MS = 10 * 60_000;
 
 export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
@@ -161,6 +166,10 @@ export default function HubPage() {
         ) {
           setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
         }
+        // Un cambio que se está terminando de aplicar: se sigue mirando hasta que acabe.
+        if (fresh.subscription?.pendingChange && !fresh.subscription.pendingChange.stalled) {
+          setSyncingUntil(Date.now() + PENDING_CHANGE_RESYNC_MS);
+        }
       })
       .catch((e: ApiClientError) => setError(e.code));
     api<TimelineEntry[]>("/api/timeline?limit=4")
@@ -183,7 +192,8 @@ export default function HubPage() {
         const fresh = await api<HubDashboard>("/api/hub/dashboard");
         if (cancelled) return;
         setData(fresh);
-        if (fresh.reanchorPending !== true) {
+        // Se para cuando no queda ni re-anclaje ni cambio de líneas por terminar.
+        if (fresh.reanchorPending !== true && !fresh.subscription?.pendingChange) {
           setSyncingUntil(null);
           return;
         }
@@ -474,6 +484,7 @@ export default function HubPage() {
           iPhone. Ya no hay barra fija abajo (Juan 2026-10-14). */}
       <main className="flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
+        {sub.pendingChange && <ChangeApplyingBanner sub={sub} />}
         {isPaused ? (
           <ReactivateCard
             variant="paused"
@@ -536,7 +547,7 @@ export default function HubPage() {
                     }
                     state={nextLabel ? <DateChange from={nextLabel} to={t({ en: "Today", es: "Hoy" })} /> : undefined}
                     onClick={() => setShowChargeNow(true)}
-                    disabled={sub.withinCutoff}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
                   />
                   <QuickActionButton
                     icon={QAIcons.ChangePlan}
@@ -556,7 +567,7 @@ export default function HubPage() {
                       </>
                     }
                     onClick={() => setShowPlan(true)}
-                    disabled={sub.withinCutoff}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
                   />
                   <QuickActionButton
                     icon={QAIcons.Skip}
@@ -571,7 +582,7 @@ export default function HubPage() {
                       ) : undefined
                     }
                     onClick={() => setShowSkip(true)}
-                    disabled={sub.withinCutoff}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
                   />
                   <QuickActionButton
                     icon={QAIcons.Flavor}
@@ -607,7 +618,7 @@ export default function HubPage() {
                       ) : undefined
                     }
                     onClick={() => setShowFlavor(true)}
-                    disabled={sub.withinCutoff}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
                   />
                 </section>
               </Lp2Card>
@@ -783,6 +794,60 @@ export default function HubPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Un cambio de plan que se está terminando de aplicar (14-oct-2026). Lo de la tarjeta ya es
+ * lo PEDIDO (el dashboard lo enmascara); esto dice por qué no se puede tocar nada todavía y
+ * que no se cobrará de más. Si se ha quedado a medias por algo que tiene que mirar una
+ * persona (`stalled`), se dice eso, sin prometer plazos.
+ */
+function ChangeApplyingBanner({ sub }: { sub: Subscription }) {
+  const lang = useLangValue();
+  const stalled = sub.pendingChange?.stalled === true;
+  const boxes = sub.boxCount;
+  const freqEs = frequencyLabel(sub.frequency, "es").toLowerCase();
+  const freqEn = frequencyLabel(sub.frequency, "en").toLowerCase();
+  const price = formatEuro(sub.chargeTotalCents, lang);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mx-6 mt-2 flex items-start gap-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:mx-0"
+    >
+      <span
+        className="mt-[3px] inline-block h-3 w-3 flex-shrink-0 rounded-full bg-[color:var(--color-bold-yellow)]"
+        style={stalled ? undefined : { animation: "pulse-slot 1.4s ease-in-out infinite" }}
+      />
+      <div className="text-[12px] leading-[1.45] text-[color:var(--color-lit-grey)]">
+        {stalled ? (
+          lang === "es" ? (
+            <>
+              <strong className="font-extrabold">Estamos revisando tu último cambio.</strong> Se ha quedado a
+              medias y lo estamos mirando nosotros. No te cobraremos de más y te escribimos en cuanto esté.
+            </>
+          ) : (
+            <>
+              <strong className="font-extrabold">We’re reviewing your last change.</strong> It didn’t finish
+              applying and we’re on it. You won’t be overcharged, and we’ll write to you once it’s sorted.
+            </>
+          )
+        ) : lang === "es" ? (
+          <>
+            <strong className="font-extrabold">Estamos terminando de aplicar tu cambio.</strong> Tu plan nuevo,{" "}
+            {boxes} {boxes === 1 ? "caja" : "cajas"} {freqEs} por {price}, estará listo en unos minutos. No hace
+            falta que hagas nada y no te cobraremos de más.
+          </>
+        ) : (
+          <>
+            <strong className="font-extrabold">We’re finishing your change.</strong> Your new plan,{" "}
+            {boxes} {boxes === 1 ? "box" : "boxes"} {freqEn} for {price}, will be ready in a few minutes. You don’t
+            need to do anything and you won’t be overcharged.
+          </>
+        )}
+      </div>
     </div>
   );
 }

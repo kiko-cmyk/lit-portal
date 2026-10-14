@@ -556,7 +556,10 @@ function DoneStep({
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [applied, setApplied] = useState<Subscription | null>(null);
-  const [failed, setFailed] = useState(false);
+  // Qué pasó al fallar (14-oct-2026). Antes cualquier error decía "no hemos podido
+  // cambiarlo", que es falso cuando el resultado es desconocido (pudo entrar) y dejaba el
+  // botón para mandarlo otra vez encima.
+  const [failed, setFailed] = useState<false | "unknown" | "busy" | "failed">(false);
   const [dismissed, setDismissed] = useState(false);
 
   const offer = result.cadenceOffer;
@@ -606,8 +609,16 @@ function DoneStep({
       });
       setApplied(updated);
       onSubscriptionUpdated?.(updated);
-    } catch {
-      setFailed(true);
+    } catch (e) {
+      const code = (e as { code?: string; status?: number }).code;
+      const status = (e as { status?: number }).status;
+      setFailed(
+        code === "gateway_timeout" || status === 504 || code === "change_unconfirmed" || code === "change_applying"
+          ? "unknown"
+          : code === "seal_busy" || code === "plan_change_in_progress" || code === "change_in_progress"
+            ? "busy"
+            : "failed",
+      );
     } finally {
       setBusy(false);
     }
@@ -783,16 +794,28 @@ function DoneStep({
           </p>
           {failed && (
             <p className="mt-3 text-[13px] text-[#2F343D]">
-              <T
-                en="We couldn't change it just now. It's waiting for you in My plan."
-                es="No hemos podido cambiarlo ahora. Lo tienes en Mi plan cuando quieras."
-              />
+              {failed === "unknown" ? (
+                <T
+                  en="We couldn't confirm the change. Check your plan in a few minutes; if it didn't change, you can do it from My plan."
+                  es="No hemos podido confirmar el cambio. Mira tu plan en unos minutos; si no ha cambiado, lo tienes en Mi plan."
+                />
+              ) : failed === "busy" ? (
+                <T
+                  en="We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed."
+                  es="Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada."
+                />
+              ) : (
+                <T
+                  en="We couldn't change it just now. It's waiting for you in My plan."
+                  es="No hemos podido cambiarlo ahora. Lo tienes en Mi plan cuando quieras."
+                />
+              )}
             </p>
           )}
           {/* Formato corto («2 meses»): con el largo salía «Espaciar a Cada 2
               meses» y, al aceptar, «Ahora recibes cada Cada 2 meses». */}
           <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-3">
-            <PrimaryButton className="w-auto px-7" onClick={accept} disabled={busy || !subscription}>
+            <PrimaryButton className="w-auto px-7" onClick={accept} disabled={busy || !subscription || failed === "unknown"}>
               {busy ? (
                 <T en="Changing…" es="Cambiando…" />
               ) : (

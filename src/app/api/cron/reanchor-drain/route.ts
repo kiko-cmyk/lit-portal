@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackNoticeAwaited } from "@/lib/alert";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { reanchorConverged } from "@/lib/frequency-core";
+import { tryWithPlanLock } from "@/lib/plan-lock";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -86,6 +88,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           ageMin: Math.round((Date.now() - new Date(intent.created_at).getTime()) / 60000),
         },
       );
+      // A una persona (14-oct-2026): hasta hoy solo quedaba en consola, y la consecuencia
+      // es un cobro antes de la fecha que se le prometió al cliente.
+      await alertSlackNoticeAwaited({
+        title: "Re-anclaje caducado sin converger",
+        icon: ":warning:",
+        channel: "incidents",
+        fields: {
+          suscripcion: String(subId),
+          cliente: String(intent.customer_id),
+          "fecha prometida": preserve,
+          "que revisar": "Seal puede cobrar antes de esa fecha. Comprobar el proximo cobro y reprogramarlo a mano.",
+        },
+      });
       continue;
     }
 
@@ -157,24 +172,44 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     // Already on/after preserve → cadence shifted, converged → done.
+    // Salvo la igualdad exacta con una intención recién armada (puede ser el calendario
+    // viejo en una lectura atrasada): se deja para la pasada siguiente. Ver
+    // `reanchorConverged`.
     if (firstDay >= preserve) {
+      if (!reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+        deferred++;
+        continue;
+      }
       await sb
         .from("subscription_reanchor_intents")
         .delete()
         .eq("customer_id", intent.customer_id)
-        .eq("seal_subscription_id", intent.seal_subscription_id);
+        .eq("seal_subscription_id", intent.seal_subscription_id)
+        .eq("created_at", intent.created_at);
       done++;
       continue;
     }
 
     try {
-      const moved = await seal.reanchorCadence(subId, preserve);
-      skippedTotal += moved;
+      // Con el cerrojo de la sub (14-oct-2026), como el webhook y el dashboard: dos
+      // re-anclajes a la vez desplazaban dos veces los cobros siguientes.
+      const res = await tryWithPlanLock(String(intent.customer_id), subId, "reanchor-drain", () =>
+        seal.reanchorCadence(subId, preserve),
+      );
+      if (!res.ran) {
+        deferred++;
+        continue;
+      }
+      skippedTotal += res.value;
+      // No se borra aquí: se relee en la pasada siguiente y se cierra con
+      // `reanchorConverged`, igual que el webhook, sobre lo que Seal enseñe de verdad.
+      // Borrar a ciegas tras mover era cómo un movimiento a medias se daba por bueno.
       await sb
         .from("subscription_reanchor_intents")
-        .delete()
+        .update({ updated_at: new Date().toISOString() })
         .eq("customer_id", intent.customer_id)
-        .eq("seal_subscription_id", intent.seal_subscription_id);
+        .eq("seal_subscription_id", intent.seal_subscription_id)
+        .eq("created_at", intent.created_at);
       done++;
     } catch (e) {
       const attempts = (intent.attempts ?? 0) + 1;
@@ -190,6 +225,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           subId,
           preserve,
           msg: e instanceof Error ? e.message : String(e),
+        });
+        await alertSlackNoticeAwaited({
+          title: "Re-anclaje abandonado tras varios intentos",
+          icon: ":warning:",
+          channel: "incidents",
+          fields: {
+            suscripcion: String(subId),
+            cliente: String(intent.customer_id),
+            "fecha prometida": preserve,
+            error: e instanceof Error ? e.message : String(e),
+            "que revisar": "Seal puede cobrar antes de esa fecha. Comprobar el proximo cobro y reprogramarlo a mano.",
+          },
         });
       } else {
         await bumpAttempt(sb, intent.customer_id, intent.seal_subscription_id, intent.attempts);

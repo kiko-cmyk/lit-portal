@@ -89,6 +89,13 @@ export interface TargetLine {
   sku: string;
   /** Multi-flavor contribution of a PACK4 line. Absent on single-flavor lines. */
   composition?: FlavorComposition[];
+  /**
+   * Lo que Seal exige para AÑADIR esta línea y que solo da Shopify (14-oct-2026). La ruta de
+   * plan lo guarda en la intención de reparación para que quien la termine (su `after()` o
+   * `mix-repair-drain`) pueda volver a añadir una línea que Seal perdió en silencio, en vez
+   * de deshacer el cambio del cliente. Ausente en intenciones viejas: entonces no se añade.
+   */
+  sealAdd?: { title: string; sku?: string; taxable: boolean; requiresShipping: boolean };
 }
 
 export type SubscriptionShape = "packed" | "split";

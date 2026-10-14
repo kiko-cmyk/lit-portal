@@ -136,6 +136,14 @@ export interface Subscription {
     // never saw). No component ever rendered it, but it travelled to the
     // client in every /api/subscription response. Removed 2026-07-28.
   };
+  /**
+   * Un cambio de líneas que se está terminando de aplicar (14-oct-2026). Presente solo
+   * mientras `subscription_line_repairs` lo tiene pendiente: entonces las cajas, el importe
+   * y la composición de arriba son los PEDIDOS, no la suma a medias que enseña Seal, y la
+   * pantalla debe decirlo y no dejar cambiar nada hasta que termine. `stalled`: se ha quedado
+   * a medias por algo que tiene que mirar una persona (y lo de arriba es lo que hay en Seal).
+   */
+  pendingChange?: { since: string; stalled: boolean } | null;
 }
 
 export interface SubscriptionAddress {

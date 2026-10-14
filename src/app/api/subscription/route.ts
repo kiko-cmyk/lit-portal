@@ -1,4 +1,5 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { maskPendingLineRepair } from "@/lib/line-repair-runner";
 import { mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -52,5 +53,7 @@ export const GET = withCustomer<Subscription>(async (_req, ctx) => {
   }
   assertSubscriptionBelongsToCustomer(pick, email, "subscription:GET");
 
-  return mapToSubscription(pick, ctx.customerId);
+  // Con un cambio de líneas a medio aplicar, Cuenta enseña lo PEDIDO, no la suma de lo viejo
+  // y lo nuevo, igual que el Hub (14-oct-2026). Ver `maskPendingLineRepair`.
+  return maskPendingLineRepair(ctx.customerId, pick, mapToSubscription(pick, ctx.customerId));
 });

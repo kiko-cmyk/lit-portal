@@ -13,6 +13,7 @@ import {
   type SealSubscription,
 } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import { assertNoPendingLineRepair } from "@/lib/line-repair-runner";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import { pickRequestedSub, requestedSubIdFrom } from "@/lib/sub-resolve";
@@ -86,6 +87,10 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
   if (next && isWithinCutoff(next.date)) {
     throw new ApiHttpError(400, "cutoff_passed", "Next order already ships within 24h");
   }
+
+  // Un cambio de plan a medio aplicar (14-oct-2026): la sub puede tener las líneas viejas y
+  // las nuevas a la vez hasta que termine, y Adelantar en ese hueco las cobraría todas.
+  await assertNoPendingLineRepair(ctx.customerId, sub.id, "charge-now");
 
   // Un Adelantar de esta sub aún en curso (2026-10-14): o se está cobrando, o la
   // tarjeta lo acaba de rechazar y el webhook lo está rescatando, o Seal no
@@ -246,6 +251,19 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
         409,
         "charge_already_scheduled",
         "A charge for this subscription is already being processed. Try again in a few minutes.",
+      );
+    }
+    // RESPUESTA AMBIGUA = "NO SABEMOS", NO "FALLÓ" (14-oct-2026). Relanzar el error lo convertía
+    // en un 5xx que la App Proxy sustituye por HTML, y el cliente leía "No se pudo procesar el
+    // pago… inténtalo más tarde". Si Seal sí había cobrado, el bloqueo de 15 minutos caducaba
+    // y un segundo intento cobraba OTRA caja. Un 409 llega tal cual: la pantalla le dice que no
+    // lo repita y que lo verá en sus pedidos. El rescate asíncrono (webhook o cron) decide con
+    // lo que diga Seal, como antes.
+    if (!explicitRejection) {
+      throw new ApiHttpError(
+        409,
+        "charge_unconfirmed",
+        "Seal did not answer clearly; the charge may have gone through. Do not retry.",
       );
     }
     throw err;

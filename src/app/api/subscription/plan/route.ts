@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { after } from "next/server";
 import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
-import { classifyLineState, LINE_REPAIR_TTL_MS, sealWriteDefinitelyRejected } from "@/lib/line-repair";
+import { classifyLineState, isRemoveAllItemsRejection, LINE_REPAIR_TTL_MS, sealBusyReason, sealWriteDefinitelyRejected } from "@/lib/line-repair";
+import { processRepairIntent, waitUntilSeal, type RepairIntentRow } from "@/lib/line-repair-runner";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { requestDeadlineLeft, runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
+import { extendRequestDeadline, requestDeadlineLeft, runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { acquirePlanLock } from "@/lib/plan-lock";
 import { alertSlackError, alertSlackErrorAwaited } from "@/lib/alert";
 import { naturalNextShipDate, SEAL_INTERVAL_BY_FREQUENCY, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
@@ -116,7 +118,7 @@ const REQUEST_BUDGET_MS = 9_500;
  * customer's response is already lost. The 60 s default let a doomed request
  * mutate Seal for another ~50 s with nobody listening.
  */
-export const maxDuration = 20;
+export const maxDuration = 60;
 
 export const PATCH = withCustomer<Subscription>((req, ctx) =>
   runWithRequestDeadline(REQUEST_BUDGET_MS, () => patchPlan(req, ctx)),
@@ -360,6 +362,13 @@ const patchPlan = async (
     if (subForCheck && nextAttemptDate === null) {
       nextAttemptDate = getNextBillingAttempt(subForCheck)?.date ?? null;
     }
+    // La frecuencia ACTUAL sale de Seal, no del body (14-oct-2026). Con una pestaña vieja
+    // o una respuesta sintética el front puede mandar una que ya no es, y de ella salen
+    // `planChanged` (y con él un cambio de intervalo que Seal regenera aunque sea el mismo),
+    // la fecha natural y el `from` del ledger.
+    if (subForCheck?.delivery_interval) {
+      currentFrequency = normalizeFrequency(subForCheck.delivery_interval);
+    }
   }
 
   // Refuse plan changes on a PAUSED sub (2026-07-28). Deliberately HERE and not
@@ -435,7 +444,12 @@ const patchPlan = async (
     guardBlind: false,
     close: async () => {},
   };
-  const planLock = await acquirePlanLock(ctx.customerId, sealSubscriptionId, "plan-route");
+  // TTL de 60 s (14-oct-2026): desde que el cambio puede terminarse en segundo plano, la
+  // parte con cerrojo de la petición dura hasta ~25 s, y un cerrojo que caduca a mitad deja
+  // entrar a otra petición sobre la misma sub. Lo que sigue tras la respuesta (`after()`) ya
+  // no lo lleva: lo protege la intención de reparación pendiente, que la guarda de entrada
+  // respeta.
+  const planLock = await acquirePlanLock(ctx.customerId, sealSubscriptionId, "plan-route", { ttlSeconds: 60 });
   try {
     return await applyPlanChange();
   } catch (e) {
@@ -1093,6 +1107,36 @@ const patchPlan = async (
   // regenerator needs ~300-500 ms to settle between calls; without this
   // pause we've seen the third mutation get silently dropped.
 
+  // ───── ANTES DE LA PRIMERA ESCRITURA: ¿SEAL EN REPOSO? ¿HAY TIEMPO? (14-oct-2026) ─────
+  //
+  // Medido en la sub de prueba 16923672: Seal contesta 200 y apunta en su log escrituras
+  // que luego PIERDE cuando llegan con la sub todavía procesando otra (un add a los 8 s de
+  // un cambio de intervalo no apareció nunca; un cambio de intervalo a los 3 s de quitar
+  // líneas, tampoco). En reposo, en cambio, todo entra. Así que si esta sub tiene
+  // escrituras recientes o el calendario a medio regenerar, no se empieza: el cliente lo
+  // intenta en un par de minutos y no se ha tocado nada.
+  if (preMutationSub) {
+    const busy = sealBusyReason(preMutationSub);
+    if (busy) {
+      log("seal-busy-refused", { busy });
+      throw new ApiHttpError(409, "seal_busy", `Seal is still processing a recent change to this subscription (${busy}); nothing was changed`);
+    }
+  }
+  // Y si la fase de lecturas se ha comido el presupuesto, tampoco se empieza: con poco
+  // margen el primer cambio sale y los siguientes nacen muertos a 0 ms, que es como el
+  // 14-oct quedó el Pack de 4 junto a las 3 sueltas.
+  const budgetAtStart = requestDeadlineLeft();
+  if (budgetAtStart !== null && budgetAtStart < MIN_BUDGET_TO_START_MS) {
+    log("budget-too-low-to-start", { budgetAtStart });
+    throw new ApiHttpError(409, "seal_busy", `Not enough time left to apply the change safely (${budgetAtStart} ms); nothing was changed`);
+  }
+  // A partir de aquí la petición se COMPROMETE: cada paso tiene que salir con tiempo de
+  // verdad. El deadline solo servía para no empezar lo que no cabe. Si al cliente no se le
+  // puede contestar a tiempo con el cambio terminado, se le contesta `change_applying` y el
+  // resto lo termina el `after()` (ver `handOverToBackground`).
+  extendRequestDeadline(COMMITTED_BLOCK_MS);
+  const respondBy = t0 + RESPOND_BY_MS;
+
   // ── Recompensa de referido aplicada: se retira ANTES de tocar nada (2026-10-10) ──
   //
   // Mismo gotcha de Seal que el 15% de abajo: un alta + baja de líneas arrastra
@@ -1162,13 +1206,28 @@ const patchPlan = async (
    *  bloque de después del Step 1). Best effort, como las del final: nunca tumba el cambio. */
   const armReanchorAfterIntervalChange = async () => {
     if (!effectivePreserveYYYYMMDD || isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) return;
-    await afterBudget(
-      () => writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD),
-      SUPABASE_WRITE_RESERVE_MS,
-    ).then(
-      () => log("reanchor-intent-armed-after-interval", { effectivePreserveYYYYMMDD, reanchorMode }),
-      (e) => log("reanchor-intent-write-failed", { msg: String(e), when: "after-interval" }),
-    );
+    // `writeReanchorIntent` ya LANZA si no guarda (antes se tragaba el error de Supabase y
+    // esto apuntaba "armada" sin fila). Un reintento y, si no, a una persona: el intervalo
+    // ya ha cambiado y sin esta fila el próximo cobro puede adelantarse.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const { preserveDate } = await runWithoutRequestDeadline(() =>
+          writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD),
+        );
+        log("reanchor-intent-armed-after-interval", { preserveDate, reanchorMode, attempt });
+        return;
+      } catch (e) {
+        log("reanchor-intent-write-failed", { msg: String(e), attempt });
+      }
+    }
+    await alertSlackErrorAwaited({
+      path: "/api/subscription/plan",
+      code: `reanchor_intent_unarmed:${sealSubscriptionId}`,
+      msg:
+        `sub ${sealSubscriptionId}: la frecuencia ha cambiado pero no se pudo guardar la fecha a conservar ` +
+        `(${effectivePreserveYYYYMMDD}). Mirar el próximo cobro en unos minutos y re-anclarlo a mano si se adelanta.`,
+      customerId: ctx.customerId,
+    });
   };
 
   // ───── Step 1: change delivery_interval FIRST (if needed) ─────
@@ -1179,38 +1238,59 @@ const patchPlan = async (
   // is present (Juan 2026-05-19 root cause). Dropping billing_interval
   // makes the edit land cleanly even in combination with later mutations.
   if (planChanged) {
-    let firstErr: unknown = null;
-    try {
-      await seal.editSubscription(sealSubscriptionId, {
-        delivery_interval: expectedInterval,
-      });
-      log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 1 });
-    } catch (e) {
-      firstErr = e;
-      log("seal-edit-interval-retry", {
-        msg: e instanceof Error ? e.message : String(e),
-        interval: expectedInterval,
-      });
-      await new Promise((r) => setTimeout(r, 700));
+    // NO SE SIGUE A CIEGAS (14-oct-2026). Antes: OK de Seal → a las líneas; y dos fallos →
+    // 502 "no se ha tocado nada", aunque el fallo fuera un timeout con el intervalo ya puesto
+    // (y entonces el calendario se regeneraba sin nadie que conservara la fecha). Ahora:
+    //   - rechazo SEGURO de Seal: se reintenta una vez; si vuelve a decir que no, no ha
+    //     cambiado nada y se le dice al cliente (409, que el App Proxy sí deja pasar).
+    //   - resultado desconocido: no se reenvía a ciegas; se LEE.
+    //   - en los dos casos, antes de tocar líneas se espera a VER el intervalo nuevo en Seal.
+    let intervalAccepted = false;
+    let intervalErr: unknown = null;
+    for (let attempt = 1; attempt <= 2 && !intervalAccepted; attempt++) {
       try {
         await seal.editSubscription(sealSubscriptionId, {
           delivery_interval: expectedInterval,
         });
-        log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 2 });
-      } catch (e2) {
-        const msg = e2 instanceof Error ? e2.message : String(e2);
-        log("seal-edit-interval-failed-twice", {
-          firstMsg: firstErr instanceof Error ? firstErr.message : String(firstErr),
-          secondMsg: msg,
+        intervalAccepted = true;
+        log("seal-edit-interval-ok", { interval: expectedInterval, attempt });
+      } catch (e) {
+        intervalErr = e;
+        const rejected = sealWriteDefinitelyRejected(e);
+        log("seal-edit-interval-failed", {
+          attempt,
+          rejected,
+          msg: e instanceof Error ? e.message : String(e),
           interval: expectedInterval,
         });
-        // Variant hasn't been touched yet — clean abort, sub unchanged.
-        throw new ApiHttpError(
-          502,
-          "frequency_change_failed",
-          `Frequency change rejected by Seal: ${msg}`,
-        );
+        if (!rejected) break;
+        if (attempt === 1) await new Promise((r) => setTimeout(r, 1_500));
       }
+    }
+    if (!intervalAccepted && intervalErr !== null && sealWriteDefinitelyRejected(intervalErr)) {
+      const msg = intervalErr instanceof Error ? intervalErr.message : String(intervalErr);
+      // Variant hasn't been touched yet — clean abort, sub unchanged.
+      throw new ApiHttpError(409, "frequency_change_failed", `Frequency change rejected by Seal: ${msg}`);
+    }
+    const intervalVisible = await waitUntilSeal(
+      sealSubscriptionId,
+      (s) => sameSealInterval(s.delivery_interval, expectedInterval),
+      INTERVAL_VISIBLE_MS,
+      700,
+    );
+    if (!intervalVisible) {
+      // Aceptado (o desconocido) pero Seal no lo enseña: puede entrar tarde o haberse
+      // perdido. Las líneas NO se tocan. En modo "preserve" la fecha se protege igual (si el
+      // intervalo no entra, el primer cobro sigue en esa fecha y la intención se cierra
+      // sola); en "natural" no, porque esa fecha es posterior y movería el envío.
+      log("interval-not-visible", { expectedInterval, accepted: intervalAccepted });
+      if (reanchorMode === "preserve") await armReanchorAfterIntervalChange();
+      ledger.outcomeUnknown = true;
+      throw new ApiHttpError(
+        409,
+        "change_unconfirmed",
+        "Seal accepted the frequency change but does not show it yet; nothing else was changed",
+      );
     }
     // LA FECHA SE ANCLA EN CUANTO SEAL ACEPTA EL INTERVALO (14-oct-2026, sub 12635109).
     //
@@ -1228,12 +1308,8 @@ const patchPlan = async (
     // movería el envío de un cambio que no entró. Las escrituras del final se quedan: son
     // el mismo upsert y cubren que esta no llegue.
     //
-    // Va dentro de la pausa de después, así que en un cambio con líneas no cuesta tiempo.
-    await Promise.all([
-      armReanchorAfterIntervalChange(),
-      // Pause so Seal can regenerate billing_attempts before the next call.
-      itemsChanged ? new Promise((r) => setTimeout(r, 500)) : Promise.resolve(),
-    ]);
+    // (Ya no hace falta la pausa de 500 ms de antes: se acaba de VER el intervalo en Seal.)
+    await armReanchorAfterIntervalChange();
   }
 
   // ── Retention-discount carry-over guard (audit 2026-07-06) ──
@@ -1448,14 +1524,22 @@ const patchPlan = async (
   // de sobra se sigue corriendo dentro, para no alargar una respuesta que sí espera.
   // Todos los códigos que se soltaron para el swap se reponen juntos, en cada salida de la
   // ruta (la que sale bien y todas las de error), con margen para los dos.
-  const reattachCarriedDiscounts = () =>
-    afterBudget(
+  //
+  // UNA SOLA VEZ POR PETICIÓN (14-oct-2026): desde que la verificación puede pasar el relevo
+  // al `after()` DESPUÉS de haber repuesto, una segunda llamada aplicaba el 15% otra vez, y
+  // `apply` no es idempotente (el código quedaba doble).
+  let discountsReattached = false;
+  const reattachCarriedDiscounts = async () => {
+    if (discountsReattached) return;
+    discountsReattached = true;
+    await afterBudget(
       async () => {
         await reattachRetentionDiscountNow();
         await reattachDiscoveryCreditNow();
       },
       RETENTION_REATTACH_RESERVE_MS * Math.max(1, (retentionCarry ? 1 : 0) + (discoveryCarry ? 1 : 0)),
     );
+  };
 
   // ───── Step 2: converge the lines on the target (edits → adds → removes) ─────
   //
@@ -1519,6 +1603,20 @@ const patchPlan = async (
     }
     });
 
+  /** Lo que la red guarda como objetivo: las líneas del plan y, en las que hay que AÑADIR, los
+   *  datos de alta que solo da Shopify (14-oct-2026). Con ellos, quien termine el cambio (el
+   *  `after()` o el cron) puede volver a añadir una línea que Seal perdió en silencio, en vez
+   *  de deshacerle el cambio al cliente. */
+  const desiredForRepair: TargetLine[] = targetPlan.lines.map((l) => {
+    const d = addDetails.find((a) => String(a.line.variantId) === String(l.variantId))?.details;
+    return d
+      ? { ...l, sealAdd: { title: d.title, sku: d.sku, taxable: d.taxable, requiresShipping: d.requiresShipping } }
+      : l;
+  });
+  /** Las líneas que esta petición AÑADE: hasta verlas en Seal no se quita nada. */
+  const addedTargets: TargetLine[] = desiredForRepair.filter((l) => !!l.sealAdd);
+  const addsVisibleIn = (s: SealSubscription) => hasAllTargetLines(getLines(s), addedTargets);
+
   /** Record the desired end state so the repair cron can converge asynchronously.
    *  Written BEFORE we touch Seal (see the pre-arm below) and again from the
    *  catch blocks, for the case where we know precisely why we failed. */
@@ -1536,7 +1634,7 @@ const patchPlan = async (
           {
             customer_id: ctx.customerId,
             seal_subscription_id: String(sealSubscriptionId),
-            desired: targetPlan.lines,
+            desired: desiredForRepair,
             snapshot: currentLines,
             status: "pending",
             attempts: 0,
@@ -1593,6 +1691,84 @@ const patchPlan = async (
     }
     });
 
+  /**
+   * Termina el cambio DESPUÉS de contestar al cliente (14-oct-2026).
+   *
+   * Medido en la sub de prueba: tras un cambio de intervalo, Seal tarda de 5 a 17 s en
+   * enseñar las líneas recién añadidas, y hasta entonces se niega a quitar las viejas
+   * ("You can't remove all items"). Eso no cabe en la paciencia del App Proxy, así que la
+   * petición contesta `change_applying` y aquí se espera a VER lo añadido y se termina con
+   * la misma lógica que el cron (`processRepairIntent`: descuentos, cambios ajenos, ledger).
+   * Sin añadir nunca desde aquí: un add que aún no se ve puede ser uno lento, no uno perdido.
+   * Si en este rato no aparece, la fila sigue pendiente y la remata el cron, que sí añade
+   * cuando Seal está en reposo. Sin cerrojo: la intención pendiente ya hace que la guarda
+   * de entrada rechace cualquier otro cambio sobre la sub mientras tanto.
+   */
+  const finishInBackground = async (armedAt: string | null) => {
+    try {
+      const visible = addedTargets.length
+        ? await waitUntilSeal(sealSubscriptionId, addsVisibleIn, BACKGROUND_VISIBLE_MS, 1_500)
+        : true;
+      if (!visible) {
+        log("background-adds-not-visible", { waitedMs: BACKGROUND_VISIBLE_MS });
+        return;
+      }
+      const { data: row, error } = await supabaseAdmin()
+        .from("subscription_line_repairs")
+        .select("customer_id, seal_subscription_id, desired, snapshot, attempts, created_at, updated_at")
+        .eq("customer_id", ctx.customerId)
+        .eq("seal_subscription_id", String(sealSubscriptionId))
+        .eq("status", "pending")
+        .maybeSingle();
+      if (error || !row) {
+        log("background-no-repair-row", { msg: error?.message ?? "sin fila pendiente" });
+        return;
+      }
+      // Solo la red que armó ESTA petición: si otra la rearmó, es suya.
+      if (armedAt && Date.parse(row.created_at as string) !== Date.parse(armedAt)) {
+        log("background-row-rearmed-by-other");
+        return;
+      }
+      const outcome = await processRepairIntent(row as RepairIntentRow, {
+        allowAdds: false,
+        ignoreBusy: true,
+        source: "plan-route-after",
+      });
+      log("background-finish", { outcome });
+    } catch (e) {
+      log("background-finish-threw", { msg: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  /**
+   * Pasar el relevo al `after()` y contestar `change_applying` (14-oct-2026).
+   *
+   * Se reponen antes los descuentos que se soltaron (el que termine los volverá a soltar y
+   * reponer alrededor de su propio cambio, como hace el cron) y se refresca la red con el
+   * motivo. 409 y no 5xx: la App Proxy de Shopify sustituye CUALQUIER 5xx por el HTML de la
+   * tienda, y el cliente vería "gateway_timeout" en vez de saber que su plan nuevo ya está
+   * en marcha.
+   */
+  const handOverToBackground = async (reason: string): Promise<never> => {
+    await reattachCarriedDiscounts();
+    const scheduled = await scheduleRepair(reason);
+    if (scheduled) {
+      const armedAt = ledger.armedAt;
+      after(() => runWithoutRequestDeadline(() => finishInBackground(armedAt)));
+    } else if (!ledger.repairArmed) {
+      await alertSlackErrorAwaited({
+        path: "/api/subscription/plan",
+        code: `handover_unarmed:${sealSubscriptionId}`,
+        msg:
+          `sub ${sealSubscriptionId}: el cambio de líneas quedó a medias (${reason}) y NO se pudo armar la ` +
+          `reparación. Revisar a mano: desired=${JSON.stringify(targetPlan.lines)}`,
+        customerId: ctx.customerId,
+      });
+    }
+    log("handed-over-to-background", { reason, armed: ledger.repairArmed });
+    throw new ApiHttpError(409, "change_applying", `Your change is still being applied (${reason})`);
+  };
+
   // ARM THE SAFETY NET BEFORE THE FIRST MUTATION (incident 2026-09-04).
   //
   // Every recovery path below (retry, restoreSnapshot, scheduleRepair, the Slack
@@ -1618,7 +1794,10 @@ const patchPlan = async (
   // apuntaba en el log y seguía con el add+remove igual: justo el swap que la red existe
   // para proteger, hecho sin ella. Ahora se para aquí, antes de tocar las líneas. Si el
   // intervalo ya cambió, el reintento del cliente lo verá hecho y solo hará las líneas.
-  if (diff.adds.length || diff.removes.length) {
+  //
+  // TAMBIÉN CON SOLO EDITS (14-oct-2026): Seal también puede perder un `edit_items`, y sin
+  // red la verificación lo veía pero nadie lo terminaba.
+  if (diff.edits.length || diff.adds.length || diff.removes.length) {
     const armed = await scheduleRepair("pre-armed before line mutation");
     if (!armed) {
       await reattachCarriedDiscounts();
@@ -1633,37 +1812,13 @@ const patchPlan = async (
   /** La escritura falló SIN que Seal la rechazara: puede haber entrado (2-oct-2026).
    *
    *  No se deshace nada sobre una lectura que puede ir por detrás de Seal (ver
-   *  restoreSnapshot). Se deja la red armada con el objetivo y el cron decide dentro de
-   *  unos minutos con una lectura asentada: completa lo que quedó a medias, o confirma
-   *  que no entró nada. Mientras tanto la guarda del principio no deja tarificar encima,
-   *  y el cliente ve que su cambio se está terminando de aplicar en vez de "inténtalo de
-   *  nuevo", que es lo que le invitaba a pedir otra vez sobre la foto rota. */
+   *  restoreSnapshot). Se deja la red armada con el objetivo y se termina detrás: si el add
+   *  entró, se quita lo viejo en cuanto Seal lo enseñe; si se perdió, el cron lo vuelve a
+   *  añadir cuando Seal esté en reposo (14-oct-2026: la red lleva los datos de alta). Así
+   *  que el cambio del cliente SIEMPRE acaba aplicado, y se le dice `change_applying`. */
   const handOverUnknownOutcome = async (step: string, msg: string): Promise<never> => {
-    // Refresca el motivo de la fila. Si este upsert falla pero el pre-armado entró, la red
-    // sigue puesta: lo que cuenta es `ledger.repairArmed`, no lo que devuelva este intento.
-    await scheduleRepair(`${step}: resultado desconocido (${msg})`);
-    const armed = ledger.repairArmed;
-    if (!armed) {
-      ledger.outcomeUnknown = true;
-      await alertSlackErrorAwaited({
-        path: "/api/subscription/plan",
-        code: "unknown_write_unarmed",
-        msg:
-          `sub ${sealSubscriptionId}: ${step} falló sin saber si Seal la aplicó (${msg}) y NO se pudo ` +
-          `armar la reparación. Revisar a mano. snapshot=${JSON.stringify(currentLines)} ` +
-          `desired=${JSON.stringify(targetPlan.lines)}`,
-        customerId: ctx.customerId,
-      });
-    }
-    await reattachCarriedDiscounts();
-    // 409 y no 5xx: la App Proxy de Shopify sustituye CUALQUIER 5xx por el HTML de la
-    // tienda, que el front lee como `gateway_timeout` ("inténtalo de nuevo"). Un 409 sí
-    // llega, y `change_in_progress` le dice lo que de verdad pasa y le quita el botón.
-    throw new ApiHttpError(
-      409,
-      "change_in_progress",
-      `Your change is still being applied (${step}: unknown outcome, repair ${armed ? "armed" : "NOT armed"}: ${msg})`,
-    );
+    if (!ledger.repairArmed) ledger.outcomeUnknown = true;
+    return handOverToBackground(`${step}: resultado desconocido (${msg})`);
   };
 
   // 2a. Edits in place — no item ids change, nothing is removed.
@@ -1687,7 +1842,7 @@ const patchPlan = async (
       if (outcome === "restored") await disarmRepairIntent();
       await reattachCarriedDiscounts();
       throw new ApiHttpError(
-        502,
+        409,
         planChanged ? "variant_change_failed_after_interval" : "seal_edit_items_failed",
         msg,
       );
@@ -1729,13 +1884,31 @@ const patchPlan = async (
       if (outcome === "restored") await disarmRepairIntent();
       await reattachCarriedDiscounts();
       throw new ApiHttpError(
-        502,
+        409,
         planChanged ? "variant_change_failed_after_interval" : "seal_add_items_failed",
         msg,
       );
     }
-    if (diff.removes.length) {
-      await new Promise((r) => setTimeout(r, 500));
+    // NO SE QUITA NADA HASTA VER LO AÑADIDO (14-oct-2026). Tras un cambio de intervalo, Seal
+    // tarda de 5 a 17 s en enseñar las líneas nuevas y mientras tanto contesta 503 "You
+    // can't remove all items" a cada remove; el 14-oct ese hueco, con el presupuesto
+    // agotado, dejó el Pack de 4 junto a las 3 sueltas. Se mira cada 0,7 s hasta la hora
+    // de contestar; si para entonces no se ven, se termina en segundo plano.
+    if (diff.removes.length && addedTargets.length) {
+      const visible = await waitUntilSeal(
+        sealSubscriptionId,
+        addsVisibleIn,
+        Math.max(0, respondBy - Date.now()),
+        700,
+      );
+      log("adds-visibility", { visible, waitedMs: Date.now() - t0 });
+      if (!visible) return await handOverToBackground("añadido; Seal todavía no lo enseña");
+      // Ya se ve, pero quitar lo viejo (~3,5 s, medido) y verificar no cabe antes de la hora
+      // de contestar: el cliente recibiría `gateway_timeout` sobre un cambio que va bien (en
+      // la prueba del 14-oct, frecuencia + cajas acabó a los 13,6 s). Se termina detrás.
+      if (Date.now() + REMOVE_AND_VERIFY_MS > respondBy) {
+        return await handOverToBackground("lo añadido ya se ve; se quita lo viejo en segundo plano");
+      }
     }
   }
 
@@ -1744,111 +1917,32 @@ const patchPlan = async (
   // heals the first time its owner touches their plan.
   if (diff.removes.length) {
     try {
-      // CON LAS LÍNEAS NUEVAS YA DENTRO, ESTE REMOVE NO ES OPCIONAL (14-oct-2026, sub 12635109).
-      // Es lo único que separa al cliente de pagar el plan viejo y el nuevo a la vez. Dentro
-      // del deadline, con el presupuesto ya gastado, la llamada nacía muerta a 0 ms sin salir
-      // hacia Seal: a Juan le dejó el Pack de 4 junto a sus 3 cajas sueltas (170,10 por
-      // envío) hasta que pasó el cron, cinco minutos después. Con menos de REMOVE_RESERVE_MS
-      // se lanza fuera, con el presupuesto propio del cliente de Seal. Mejor una respuesta
-      // tarde que una sub cobrando dos planes.
-      await afterBudget(() => seal.removeItems(sealSubscriptionId, diff.removes), REMOVE_RESERVE_MS);
+      await seal.removeItems(sealSubscriptionId, diff.removes);
       log("seal-remove-items-ok", { count: diff.removes.length });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log("seal-remove-items-failed", { msg, rejected: sealWriteDefinitelyRejected(e) });
-      // Worse than a failed add: the old AND new lines may both be live, so the next
-      // charge would be too HIGH.
+      log("seal-remove-items-failed", {
+        msg,
+        rejected: sealWriteDefinitelyRejected(e),
+        removeAll: isRemoveAllItemsRejection(e),
+      });
+      // ANTES DE NADA, MIRAR (2-oct-2026): un remove que "falla" puede haber entrado (la
+      // 13416998). Si lo viejo ya no está, es un ÉXITO y se sigue por el camino feliz.
       //
-      // ANTES DE REINTENTAR, MIRAR (2-oct-2026). Un remove que "falla" aquí puede haber
-      // entrado: la 13416998 (1-oct) tiene en el log de Seal la línea quitada a las
-      // 08:12:42 y esta ruta la dio por fallida, reintentó contra un item que ya no
-      // existía, y acabó con `mix_inconsistent_state` y un 502 sobre una sub que estaba
-      // exactamente como pidió la clienta. Si lo viejo ya no está, esto es un ÉXITO y
-      // sigue por el camino feliz (applied, verificación, 200).
-      //
-      // Y ya NO se deshace quitando las líneas nuevas: con una lectura que puede ir por
-      // detrás de Seal, "deshacer" puede dejar a la sub sin lo que paga. La red está
-      // armada desde antes del primer cambio y el cron sabe terminar este estado hacia el
-      // objetivo con un solo remove.
-      //
-      // VARIOS REINTENTOS, CON ESPERA CRECIENTE (14-oct-2026). Había uno solo, a los 800 ms,
-      // y el 14-oct falló también, aunque el mismo remove entró sin problema desde el cron
-      // cinco minutos después. Lo que contestó Seal se perdía: `last_error` y el aviso solo
-      // llevaban el error del primer intento ("timed out after 0ms", el que ni salió), así
-      // que ahora llevan también el de cada reintento. Cada vuelta relee antes, por si el
-      // anterior entró aunque contestara mal. Fuera del deadline: dentro, con el presupuesto
-      // gastado, cada uno nacería muerto a 0 ms. Lo que no se quite antes del techo lo
-      // termina el cron, con la red armada desde antes del primer cambio.
-      let converged = false;
-      let stillPresent = diff.removes;
-      const retryErrors: string[] = [];
-      for (const [i, waitMs] of REMOVE_RETRY_WAITS_MS.entries()) {
-        const attempt = i + 1;
-        if (Date.now() - t0 + waitMs + REMOVE_RETRY_SLOT_MS > REMOVE_RETRY_STOP_MS) {
-          log("seal-remove-items-retry-out-of-time", { attempt, elapsedMs: Date.now() - t0 });
-          break;
-        }
-        await new Promise((r) => setTimeout(r, waitMs));
-        try {
-          const settled = await runWithoutRequestDeadline(() => seal.getSubscriptionById(sealSubscriptionId));
-          if (settled) {
-            const liveIds = new Set(getLines(settled).map((l) => l.itemId));
-            stillPresent = diff.removes.filter((id) => liveIds.has(id));
-            if (stillPresent.length === 0) {
-              converged = true;
-              log("seal-remove-items-landed-anyway", { attempt });
-              break;
-            }
-          }
-        } catch (readErr) {
-          log("seal-remove-items-reread-failed", {
-            attempt,
-            msg: readErr instanceof Error ? readErr.message : String(readErr),
-          });
-        }
-        try {
-          await runWithoutRequestDeadline(() => seal.removeItems(sealSubscriptionId, stillPresent));
-          converged = true;
-          log("seal-remove-items-ok-on-retry", { attempt, count: stillPresent.length });
-          break;
-        } catch (retryErr) {
-          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          retryErrors.push(`#${attempt}: ${retryMsg}`);
-          log("seal-remove-items-retry-failed", { attempt, msg: retryMsg });
-        }
-      }
-      // Si convergió, no se lanza: el bloque de después desarma la red, apunta `applied`,
-      // repone el descuento y verifica, como en cualquier cambio que sale bien.
-      if (!converged) {
-        await reattachCarriedDiscounts();
-        // Refresh the pre-armed intent with the real reason, for the operator
-        // reading `last_error` and for the alert below.
-        const reason =
-          `remove_items failed: ${msg}` +
-          (retryErrors.length ? `; reintentos: ${retryErrors.join(" | ")}` : "; sin tiempo para reintentar");
-        const scheduled = await scheduleRepair(reason);
-        await alertSlackErrorAwaited({
-          path: "/api/subscription/plan",
-          code: "mix_inconsistent_state",
-          msg:
-            `sub ${sealSubscriptionId}: could not converge lines (${reason}). desired=${JSON.stringify(targetPlan.lines)} ` +
-            `snapshot=${JSON.stringify(currentLines)}. repair intent ${scheduled ? "written" : "FAILED TO WRITE"}. ` +
-            `If a charge fires before the cron converges, REFUND the duplicate line.`,
-          customerId: ctx.customerId,
-        });
-        // 409 por lo mismo que `handOverUnknownOutcome`: un 5xx no llega al cliente.
-        //
-        // `change_applying` y no `change_in_progress` (14-oct-2026). Aquí el add SÍ entró y
-        // el cron va a terminar ESTE cambio, el que el cliente acaba de pedir. El código de
-        // siempre le decía "todavía estamos terminando tu último cambio... vuelve a
-        // intentarlo", y Juan no supo qué había pasado con el suyo. `change_in_progress` se
-        // queda para la guarda del principio, que sí habla de un cambio anterior.
-        throw new ApiHttpError(
-          409,
-          "change_applying",
-          `Your change is still being applied (${reason}; subscription has extra lines; a repair is scheduled)`,
-        );
-      }
+      // Y si sigue, NO se reintenta a ciegas aquí ni se deshace nada (14-oct-2026): se pasa
+      // el relevo al `after()`, que espera a que Seal enseñe lo añadido y quita lo viejo con
+      // la lógica del cron. El reintento único que había llegaba demasiado pronto (Seal
+      // seguía sin ver las líneas nuevas) y su error ni siquiera se guardaba.
+      const gone = await waitUntilSeal(
+        sealSubscriptionId,
+        (s) => {
+          const ids = new Set(getLines(s).map((l) => Number(l.itemId)));
+          return diff.removes.every((id) => !ids.has(Number(id)));
+        },
+        0,
+      );
+      if (!gone) return await handOverToBackground(`remove_items: ${msg}`);
+      log("seal-remove-items-landed-anyway");
     }
   }
 
@@ -1982,59 +2076,60 @@ const patchPlan = async (
         actualCents,
         intervalMatches, linesMatch, moneyMatches, oneTimeLeak,
       });
-      // Cerrar el apunte con lo que de verdad pasó y, si lo que no cuadra son las LÍNEAS o
-      // el IMPORTE, volver a armar la red (2-oct-2026). Esta lectura es una sola y puede ir
-      // por detrás de Seal, igual que la del restore; si la sub quedó de verdad a medias,
-      // el "inténtalo de nuevo" del cliente partiría de esa foto rota. Con la red armada,
-      // la guarda del principio lo para y el cron decide con una lectura asentada: si ya
-      // estaba bien, cierra en la siguiente pasada sin escribir nada en Seal.
+      // Cerrar el apunte con lo que de verdad pasó (2-oct-2026). Y desde el 14-oct-2026 nada
+      // de 502 aquí: la App Proxy sustituye cualquier 5xx por el HTML de la tienda y el
+      // cliente leía `gateway_timeout`, sin saber si su cambio había entrado.
       await writeAudit("verify_mismatch");
-      if (!linesMatch || !moneyMatches) {
-        await scheduleRepair(`verificación no cuadra (líneas ${linesMatch ? "ok" : "NO"}, importe ${moneyMatches ? "ok" : "NO"})`);
-      }
       if (oneTimeLeak) {
+        await alertSlackErrorAwaited({
+          path: "/api/subscription/plan",
+          code: `mix_line_not_recurring:${sealSubscriptionId}`,
+          msg: `sub ${sealSubscriptionId}: una línea del plan nuevo quedó como compra única (el producto no está en el plan de venta). Dejarla recurrente a mano.`,
+          customerId: ctx.customerId,
+        });
         throw new ApiHttpError(
-          502,
+          409,
           "mix_line_not_recurring",
           `A line landed as one-time (product not attached to the selling plan). Contact support.`,
         );
       }
-      // Money first: it is the most consequential mismatch and the early warning that
-      // Seal is not honouring our per-unit price.
       if (!moneyMatches) {
+        // Money first: it is the most consequential mismatch and the early warning that
+        // Seal is not honouring our per-unit price.
         alertSlackError({
           path: "/api/subscription/plan",
-          code: "mix_price_mismatch",
+          code: `mix_price_mismatch:${sealSubscriptionId}`,
           msg:
             `sub ${sealSubscriptionId}: after the change Seal charges ${actualCents}c but the ` +
             `${targetPlan.boxCount}-box tier is ${targetPlan.totalCents}c. Seal may be ignoring the ` +
             `per-unit price we send. Verify before the next charge.`,
           customerId: ctx.customerId,
         });
-        throw new ApiHttpError(
-          502,
-          "mix_price_mismatch",
-          `Seal did not apply the expected price (${actualCents}c vs ${targetPlan.totalCents}c).`,
+      }
+      if (!linesMatch || !moneyMatches) {
+        // Esta lectura es UNA y puede ir por detrás de Seal, igual que la del restore. Se
+        // pasa el relevo: el `after()` espera a ver lo pedido y converge con la lógica del
+        // cron (que corrige también precios con `edit_items`), y el cron hace de red.
+        return await handOverToBackground(
+          `verificación no cuadra (líneas ${linesMatch ? "ok" : "NO"}, importe ${moneyMatches ? "ok" : "NO"})`,
         );
       }
-      if (!intervalMatches && linesMatch) {
-        throw new ApiHttpError(
-          502,
-          itemsChanged ? "frequency_change_failed_partial" : "frequency_change_failed",
-          `Seal accepted the edit but delivery_interval is still "${verified.delivery_interval}" (expected "${expectedInterval}").`,
-        );
-      }
-      if (intervalMatches && !linesMatch) {
-        throw new ApiHttpError(
-          502,
-          "variant_change_failed",
-          `Seal accepted the item changes but the lines don't match the target.`,
-        );
-      }
+      // Solo el intervalo: las líneas están bien, pero Seal enseña la frecuencia vieja aunque
+      // se VIO la nueva antes de tocar líneas. Seal la ha perdido por detrás (medido en la
+      // sub de prueba: un cambio de intervalo que llega con la sub procesando líneas no
+      // sobrevive). Reenviarlo ahora correría la misma suerte: a una persona.
+      await alertSlackErrorAwaited({
+        path: "/api/subscription/plan",
+        code: `frequency_lost_after_lines:${sealSubscriptionId}`,
+        msg:
+          `sub ${sealSubscriptionId}: las cajas quedaron bien, pero Seal enseña el intervalo ` +
+          `"${verified.delivery_interval}" en vez de "${expectedInterval}". Ponerlo a mano en Seal y mirar la fecha del próximo cobro.`,
+        customerId: ctx.customerId,
+      });
       throw new ApiHttpError(
-        502,
-        "plan_verification_failed",
-        `Both interval and lines didn't match expected values after plan change.`,
+        409,
+        "change_unconfirmed",
+        `Seal accepted the edit but delivery_interval is still "${verified.delivery_interval}" (expected "${expectedInterval}").`,
       );
     }
 
@@ -2147,7 +2242,10 @@ const patchPlan = async (
   // sub state). Record a re-anchor intent so the cron drain
   // (/api/cron/reanchor-drain) preserves the prior next-ship date once Seal
   // finishes regenerating. This is exactly the case the safety net exists for.
-  if (effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
+  // Solo si cambió la frecuencia (14-oct-2026): sin cambio de intervalo Seal no regenera el
+  // calendario y escribir aquí la fecha viva podía PISAR una intención pendiente de un cambio
+  // anterior con la fecha ya adelantada.
+  if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
     await afterBudget(
       () => writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD!),
       SUPABASE_WRITE_RESERVE_MS,
@@ -2172,9 +2270,15 @@ const patchPlan = async (
   // compara con `desired`: si de verdad quedó bien, cierra como no-op y no ha costado
   // nada; si no, lo converge. Es exactamente la asimetría que ya asumimos en el resto
   // de la ruta: una intención de sobra es barata, una que falta cuesta dinero.
-  if (diff.adds.length || diff.removes.length) {
-    await scheduleRepair(`sin verificar (${verifyOutcome})`);
+  if (diff.edits.length || diff.adds.length || diff.removes.length) {
+    const rearmed = await scheduleRepair(`sin verificar (${verifyOutcome})`);
     log("repair-intent-rearmed-unverified", { verifyOutcome });
+    // Que lo compruebe el `after()` en cuanto Seal conteste, en vez de esperar al cron: si
+    // quedó bien, cierra la fila sin escribir nada en Seal (14-oct-2026).
+    if (rearmed) {
+      const armedAt = ledger.armedAt;
+      after(() => runWithoutRequestDeadline(() => finishInBackground(armedAt)));
+    }
   }
 
   log("done-unverified", {
@@ -2202,6 +2306,25 @@ const patchPlan = async (
  * que queda es dejar bien la sub y el ledger: dentro del deadline cada llamada nacería
  * muerta a 0 ms. `maxDuration` (20 s) sigue siendo el techo. (2-oct-2026)
  */
+/** ¿Enseña ya Seal todas estas líneas (variante, cantidad y precio)? Para no quitar lo viejo
+ *  antes de VER lo nuevo (14-oct-2026). */
+function hasAllTargetLines(live: SubscriptionLine[], targets: TargetLine[]): boolean {
+  return targets.every((t) =>
+    live.some(
+      (l) =>
+        String(l.variantId) === String(t.variantId) &&
+        Number(l.quantity) === Number(t.quantity) &&
+        priceToCents(l.unitPrice) === t.unitPriceCents,
+    ),
+  );
+}
+
+/** "4 months" y "4 month" son el mismo intervalo para Seal (la verificación ya lo trataba así). */
+function sameSealInterval(actual: string | null | undefined, expected: string): boolean {
+  const norm = (s: string) => s.toLowerCase().trim().replace(/s\b/g, "").trim();
+  return norm(actual ?? "") === norm(expected);
+}
+
 function afterBudget<T>(fn: () => Promise<T>, reserveMs = 0): Promise<T> {
   const left = requestDeadlineLeft();
   return left !== null && left <= reserveMs ? runWithoutRequestDeadline(fn) : fn();
@@ -2214,17 +2337,22 @@ const SUPABASE_WRITE_RESERVE_MS = 1_000;
  *  seguimiento. Con menos, cada llamada se corta y o se pierde el descuento o queda puesto
  *  sin seguimiento, que es la fuga del 23-jul. */
 const RETENTION_REATTACH_RESERVE_MS = 3_000;
-/** Margen para el remove que sigue a un add que entró: un PUT de Seal tarda ~1-2 s. Con
- *  menos presupuesto se lanza fuera del deadline (ver el bloque 2c, 14-oct-2026). */
-const REMOVE_RESERVE_MS = 3_000;
-/** Esperas antes de cada reintento del remove; cada vuelta relee y vuelve a quitar. */
-const REMOVE_RETRY_WAITS_MS = [800, 2_000, 4_000] as const;
-/** Lo que se reserva para una vuelta (relectura + remove) en un día normal de Seal. */
-const REMOVE_RETRY_SLOT_MS = 3_500;
-/** No se empieza una vuelta que acabe más tarde que esto desde el inicio de la petición:
- *  deja ~4,5 s de `maxDuration` (20 s) para reponer el descuento, rearmar la red, avisar
- *  y cerrar el ledger. El cerrojo de plan caduca a los 30 s, así que el techo no se sube. */
-const REMOVE_RETRY_STOP_MS = 15_500;
+/** Sin al menos esto de presupuesto no se empieza a escribir en Seal (14-oct-2026): da para el
+ *  primer cambio y su comprobación. Lo que no cabe se rechaza sin tocar nada. */
+const MIN_BUDGET_TO_START_MS = 4_000;
+/** Lo que se amplía el deadline al comprometerse con la secuencia de escrituras: ningún paso
+ *  sale ya a 0 ms. Por debajo de `maxDuration` (60 s) y del TTL del cerrojo (60 s). */
+const COMMITTED_BLOCK_MS = 30_000;
+/** Desde el inicio de la petición, cuándo hay que contestar aunque el cambio no haya
+ *  terminado: el App Proxy de Shopify deja de esperar hacia los 10-13 s. Si para entonces
+ *  Seal no enseña lo añadido, se contesta `change_applying` y sigue el `after()`. */
+const RESPOND_BY_MS = 11_000;
+/** Lo que tarda quitar lo viejo y verificar, medido contra Seal el 14-oct-2026 (PUT ~3,6 s). */
+const REMOVE_AND_VERIFY_MS = 4_500;
+/** Tras cambiar el intervalo, cuánto se espera a VERLO en Seal antes de tocar líneas. */
+const INTERVAL_VISIBLE_MS = 8_000;
+/** Cuánto sigue el `after()` esperando a ver lo añadido antes de dejárselo al cron. */
+const BACKGROUND_VISIBLE_MS = 40_000;
 
 /**
  * Lo que el `catch` de fuera necesita saber para cerrar el apunte de la petición en

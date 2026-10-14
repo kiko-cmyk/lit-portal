@@ -6,6 +6,8 @@ import { applyFollowupSafe } from "@/lib/reactivation";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
+import { reanchorConverged } from "@/lib/frequency-core";
+import { tryWithPlanLock } from "@/lib/plan-lock";
 import { klaviyo } from "@/lib/klaviyo";
 import { discoveryRenewalCreditOnSealEvent } from "@/lib/discovery-renewal-credit";
 import { consumeReferralRewardsForSub } from "@/lib/referral-reward";
@@ -472,13 +474,29 @@ function safeEqual(a: string, b: string): boolean {
  * mid-regeneration snapshot).
  */
 async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): Promise<void> {
+  // NUNCA LANZA (14-oct-2026). Se llama a mitad del handler, y una excepción aquí se
+  // saltaba todo lo de después: el consumo del 15%, del crédito Discovery y de las
+  // recompensas de referidos, y el rescate del Adelantar. La reserva del evento ya está
+  // hecha, así que la reentrega de Seal se deduplicaba y eso quedaba para los crons
+  // diarios. Lo que no se haga aquí lo remata `reanchor-drain`.
+  try {
+    await applyReanchorIfPendingUnsafe(subFromEvent);
+  } catch (e) {
+    console.error("[seal-webhook] reanchor failed (lo remata reanchor-drain)", {
+      sealSubId: subFromEvent?.id,
+      msg: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | null): Promise<void> {
   const sealSubId = subFromEvent?.id;
   if (!sealSubId) return;
 
   const sb = supabaseAdmin();
   const { data: intent } = await sb
     .from("subscription_reanchor_intents")
-    .select("customer_id, preserve_date, status")
+    .select("customer_id, preserve_date, status, created_at")
     .eq("seal_subscription_id", String(sealSubId))
     .eq("status", "pending")
     .maybeSingle();
@@ -538,11 +556,19 @@ async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): P
     // Converged: the next charge is on/after the preserved date and the whole
     // cadence was shifted with it. Done — clear the intent. (This is also the
     // re-entry after our own reschedules fire another subscription/updated.)
+    //
+    // Salvo la igualdad exacta con una intención recién armada: puede ser el calendario
+    // VIEJO en una lectura atrasada, ver `reanchorConverged`. Se deja para después.
+    if (!reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+      console.log("[seal-webhook] reanchor: igualdad con intención reciente, se espera", { sealSubId, preserve });
+      return;
+    }
     await sb
       .from("subscription_reanchor_intents")
       .delete()
       .eq("customer_id", intent.customer_id)
-      .eq("seal_subscription_id", String(sealSubId));
+      .eq("seal_subscription_id", String(sealSubId))
+      .eq("created_at", intent.created_at as string);
     console.log("[seal-webhook] reanchor converged", { sealSubId, preserve, nextCharge: firstDay });
     return;
   }
@@ -551,8 +577,18 @@ async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): P
   // forward so the next charge lands on preserve and the new cadence runs from
   // there. reanchorCadence fires more subscription/updated events; on re-entry
   // firstDay === preserve, so we converge and clear the intent.
-  const moved = await seal.reanchorCadence(Number(sealSubId), preserve);
-  console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved, from: firstDay });
+  //
+  // Con el cerrojo de la sub (14-oct-2026): esas mismas re-entradas llegan MIENTRAS se
+  // mueve, ven el primer cobro sin mover todavía y lo volvían a desplazar todo. Si otro
+  // lo tiene, se salta: ese otro lo está haciendo.
+  const res = await tryWithPlanLock(String(intent.customer_id), Number(sealSubId), "reanchor-webhook", () =>
+    seal.reanchorCadence(Number(sealSubId), preserve),
+  );
+  if (!res.ran) {
+    console.log("[seal-webhook] reanchor: otro tiene el cerrojo, se salta", { sealSubId, reason: res.reason });
+    return;
+  }
+  console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved: res.value, from: firstDay });
 }
 
 /** Seal's attempt object on billing_attempt/* payloads. Verified 2026-07-29. */

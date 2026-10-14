@@ -58,7 +58,9 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
   const text =
     `:rotating_light: *lit-portal* \`${alert.code}\` on \`${alert.path}\`` +
     (alert.customerId ? ` · customer ${alert.customerId}` : "") +
-    `\n> ${alert.msg.slice(0, 300)}` +
+    // 2.500 y no 300 (14-oct-2026): los avisos de líneas a medias llevan el objetivo y la foto,
+    // y con 300 se cortaban justo antes de lo que dice qué hacer ("REFUND…", "FAILED TO WRITE").
+    `\n> ${alert.msg.slice(0, 2500)}` +
     `\ncommit \`${commit}\` · region \`${region}\``;
 
   try {
@@ -66,6 +68,9 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
+      // Con tope (14-oct-2026): se espera en salidas de error y en crons, y un Slack colgado
+      // se comía el tiempo de la función justo cuando más falta hacía.
+      signal: AbortSignal.timeout(4_000),
     });
   } catch (e) {
     console.warn("[alert] slack post failed:", e);
@@ -138,6 +143,7 @@ async function postNotice(opts: SlackNotice): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(4_000),
     });
   } catch (e) {
     console.warn("[alert] slack notice failed:", e);

@@ -712,7 +712,7 @@ export default function AccountPage() {
               onCancel={() => setCancelOpen(true)}
               onSkip={() => setSkipOpen(true)}
               onChangeFrequency={() => setPlanOpen(true)}
-              alternativesDisabled={!!subscription?.withinCutoff}
+              alternativesDisabled={!!subscription?.withinCutoff || !!subscription?.pendingChange}
             />
           </div>
         )}
@@ -963,7 +963,9 @@ function PlanCard({
   const t = useLang();
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
-  const locked = !!subscription.withinCutoff;
+  // También mientras un cambio de plan se termina de aplicar (14-oct-2026): lo que enseña la
+  // tarjeta ya es lo pedido, y escribir encima de un cambio a medias es lo que no se hace.
+  const locked = !!subscription.withinCutoff || !!subscription.pendingChange;
   const freq = frequencyParts(subscription.frequency);
   const next = subscription.nextShipDate ? new Date(subscription.nextShipDate) : null;
   const nextLabel = next
@@ -1104,6 +1106,22 @@ function PlanCard({
           />
         )}
       </div>
+
+      {subscription.pendingChange && (
+        <div className="mt-4 lp2-notice md:mx-0" role="status" aria-live="polite">
+          {subscription.pendingChange.stalled ? (
+            <T
+              en="We're reviewing your last change: it didn't finish applying and we're on it. You won't be overcharged, and we'll write to you once it's sorted."
+              es="Estamos revisando tu último cambio: se ha quedado a medias y lo estamos mirando nosotros. No te cobraremos de más y te escribimos en cuanto esté."
+            />
+          ) : (
+            <T
+              en="We're finishing your change. This is your new plan and it will be ready in a few minutes. You don't need to do anything and you won't be overcharged."
+              es="Estamos terminando de aplicar tu cambio. Este es tu plan nuevo y estará listo en unos minutos. No hace falta que hagas nada y no te cobraremos de más."
+            />
+          )}
+        </div>
+      )}
 
       {!paused && (
         <div className="mt-auto pt-5 md:pt-6">

@@ -198,7 +198,27 @@ export function FlavorOverlay({
             es: "No pudimos aplicar tus sabores. Escríbenos y lo hacemos por ti.",
           }),
         );
-      } else if (err.code === "variant_change_failed" || err.code === "seal_add_items_failed" || err.code === "seal_edit_items_failed") {
+      } else if (err.code === "seal_busy") {
+        // Rechazado antes de tocar nada (14-oct-2026): Seal seguía con un cambio reciente.
+        setError(
+          t({
+            en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+            es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+          }),
+        );
+      } else if (err.code === "change_unconfirmed") {
+        setError(
+          t({
+            en: "We couldn't confirm your change. Reload the page in a few minutes to see how your flavors ended up and, if they didn't change, try again.",
+            es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo han quedado tus sabores y, si no han cambiado, vuelve a pedirlo.",
+          }),
+        );
+      } else if (
+        err.code === "variant_change_failed" ||
+        err.code === "variant_change_failed_after_interval" ||
+        err.code === "seal_add_items_failed" ||
+        err.code === "seal_edit_items_failed"
+      ) {
         setError(
           t({
             en: "Couldn't change your flavor. Try again in a moment.",

@@ -62,7 +62,66 @@ export const LINE_REPAIR_TTL_MS = 6 * 60 * 60_000;
 export function sealWriteDefinitelyRejected(e: unknown): boolean {
   if (!(e instanceof SealApiError)) return false;
   if (e.status === 200) return true; // `success: false`: rechazo explícito con HTTP 200
+  // Un 5xx con el cuerpo de Seal y `success: false` también es un NO (14-oct-2026): Seal
+  // contesta 503 cuando se niega ("You can't remove all items…", "Could not edit the
+  // subscription.", su limitador de 10 peticiones a la vez). Un 5xx sin ese cuerpo (HTML
+  // de un borde, cuerpo vacío) sigue siendo "no sé".
+  if (e.status >= 500 && e.sealRejection() !== null) return true;
   return e.status >= 400 && e.status < 500 && e.status !== 408;
+}
+
+/**
+ * Seal se niega a quitar las líneas porque, según SU lectura, la sub se quedaría vacía:
+ * todavía no ve las que acabamos de añadir (14-oct-2026, medido en la sub de prueba
+ * 16923672: tras un cambio de intervalo, el add tarda de 5 a 17 s en verse, y mientras
+ * tanto cada remove vuelve con 503 "You can't remove all items from the subscription.").
+ * No es un fallo: es "todavía no". Se espera a ver las líneas nuevas y se vuelve a quitar.
+ */
+export function isRemoveAllItemsRejection(e: unknown): boolean {
+  return e instanceof SealApiError && /can't remove all items/i.test(e.sealRejection() ?? "");
+}
+
+/** Cuánto hay que dejar pasar desde la última escritura de una sub para volver a escribir. */
+export const SEAL_SETTLE_MS = 60_000;
+/** Tras un cambio de intervalo Seal regenera el calendario: de 30 s a 4,5 min, medido. */
+const SEAL_REGEN_WINDOW_MS = 15 * 60_000;
+
+/** "2026-10-14 13:12:14" (UTC, sin zona) → epoch ms, o NaN. */
+function sealLogTime(created: string): number {
+  return Date.parse(`${created.replace(" ", "T")}Z`);
+}
+
+/**
+ * ¿Está Seal todavía procesando una escritura reciente de esta sub? Devuelve el motivo, o
+ * null si se puede escribir.
+ *
+ * POR QUÉ (14-oct-2026, sub de prueba 16923672). Seal acepta una escritura, la apunta en
+ * su log, contesta 200… y un proceso suyo posterior la PISA con un estado anterior. Medido:
+ *   - un `add_items` 8 s después de un cambio de intervalo: "Items were added", en el log, y
+ *     el Pack no apareció nunca (4 minutos después seguía sin estar);
+ *   - un cambio de intervalo 3-4 s después de quitar líneas: "Subscription was edited", en
+ *     el log, y la sub siguió en 5 meses (2 de 2 veces).
+ * Con Seal en reposo, en cambio, cada escritura entra. Así que no se empieza un cambio de
+ * plan mientras la sub tenga escrituras recientes o el calendario a medio regenerar: se le
+ * dice al cliente que lo intente en un par de minutos, sin haber tocado nada.
+ */
+export function sealBusyReason(sub: SealSubscription, now: number = Date.now()): string | null {
+  const log = sub.log ?? [];
+  const times = log.map((e) => sealLogTime(e.created)).filter((t) => Number.isFinite(t));
+  const latest = times.length ? Math.max(...times) : NaN;
+  if (Number.isFinite(latest) && now - latest < SEAL_SETTLE_MS) {
+    return `escritura en Seal hace ${Math.round((now - latest) / 1000)} s`;
+  }
+  if (sub.status === "ACTIVE") {
+    const pending = (sub.billing_attempts ?? []).some(
+      (ba) => !ba.completed_at && !ba.status && !ba.skipped_on && ba.date,
+    );
+    const recentInterval = log.some(
+      (e) => /changed the (billing )?interval/i.test(e.content) && now - sealLogTime(e.created) < SEAL_REGEN_WINDOW_MS,
+    );
+    if (!pending && recentInterval) return "calendario regenerándose tras un cambio de intervalo";
+  }
+  return null;
 }
 
 export type LineState =
@@ -177,9 +236,21 @@ export type LineRepairPlan =
       towards: "target" | "snapshot";
       edits: LineDiff["edits"];
       removes: number[];
+      /** Líneas a añadir ANTES de quitar nada. Solo hacia el objetivo y con `allowAdds`. */
+      adds?: TargetLine[];
     }
   | { kind: "needs_adds"; adds: TargetLine[]; removes: number[] }
   | { kind: "foreign"; reason: string };
+
+export interface LineRepairOptions {
+  /**
+   * Se pueden AÑADIR líneas para llegar al objetivo (14-oct-2026), siempre que cada una
+   * traiga `sealAdd`. Quien lo pide tiene que haber comprobado antes que Seal está en
+   * reposo (`sealBusyReason`): un add que todavía no se ve no es un add perdido, y volver
+   * a añadirlo duplicaría la línea.
+   */
+  allowAdds?: boolean;
+}
 
 /**
  * Cómo dejar coherente una sub a medias usando SOLO `edit_items` y `remove_items`, que
@@ -197,14 +268,33 @@ export function planLineRepair(
   live: SubscriptionLine[],
   snapshot: SubscriptionLine[],
   target: TargetLine[],
+  opts: LineRepairOptions = {},
 ): LineRepairPlan {
   const state = classifyLineState(live, snapshot, target);
-  if (state.kind === "at_target" || state.kind === "at_snapshot") {
-    return { kind: "nothing_to_do", state: state.kind };
-  }
+  if (state.kind === "at_target") return { kind: "nothing_to_do", state: "at_target" };
   if (state.kind === "foreign") return state;
 
   const toTarget = diffLines(live, target);
+  // TERMINAR EL CAMBIO, NO DESHACERLO (14-oct-2026). Seal puede perder un add en silencio
+  // (lo acepta, lo apunta y no aparece), y entonces lo vivo es la foto o la foto a medias.
+  // Antes eso se cerraba como "no entró nada" o se devolvía a la foto, y el cliente, al que
+  // se le había dicho "tu plan nuevo se está terminando de aplicar", se quedaba con el plan
+  // viejo. Con los datos de alta guardados y Seal en reposo, se completa hacia el objetivo:
+  // primero se añade y, solo cuando Seal lo enseña, se quita lo viejo.
+  //
+  // Y no solo cuando faltan líneas: un cambio de solo ediciones (cantidades o precios) que
+  // Seal perdió también deja la sub como la foto, y se completa igual, con `edit_items`.
+  const reachable = toTarget.adds.every((a) => !!a.sealAdd?.title);
+  if (opts.allowAdds === true && reachable) {
+    return {
+      kind: "converge",
+      towards: "target",
+      edits: toTarget.edits,
+      removes: toTarget.removes,
+      ...(toTarget.adds.length ? { adds: toTarget.adds } : {}),
+    };
+  }
+  if (state.kind === "at_snapshot") return { kind: "nothing_to_do", state: "at_snapshot" };
   if (!toTarget.adds.length) {
     return { kind: "converge", towards: "target", edits: toTarget.edits, removes: toTarget.removes };
   }
