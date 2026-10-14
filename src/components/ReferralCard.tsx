@@ -126,7 +126,9 @@ export function ReferralCard({ placement }: ReferralCardProps) {
       {/* Su foto (Juan 2026-10-14): dos amigos con LIT en un picnic, del CDN
           de Shopify (está en el img-src de la CSP). `srcSet` con el ancho que
           sirve el CDN, para que el móvil no baje los 480 KB del original: unos
-          160 KB a 800 px. Encuadre en las caras, que están arriba a la derecha.
+          160 KB a 800 px. Encuadre en las caras, que están arriba a la derecha;
+          en escritorio la tarjeta es ancha y baja, y al 24 % se cortaba la cara
+          de ella por los ojos (Juan 2026-10-14): al 10 % entran las dos.
           Con algo de color y contraste, como la anterior: en blanco y negro
           puro no se reconocía a nadie. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -138,7 +140,7 @@ export function ReferralCard({ placement }: ReferralCardProps) {
         sizes="(min-width: 768px) 1200px, 100vw"
         loading="lazy"
         decoding="async"
-        className="pointer-events-none absolute inset-0 -z-10 h-full w-full object-cover object-[68%_22%] md:object-[center_24%]"
+        className="pointer-events-none absolute inset-0 -z-10 h-full w-full object-cover object-[68%_22%] md:object-[center_10%]"
         style={{ filter: "saturate(0.6) contrast(1.15) brightness(1.1)" }}
       />
       {/* El velo. En móvil el texto ocupa toda la tarjeta, de arriba abajo; en
