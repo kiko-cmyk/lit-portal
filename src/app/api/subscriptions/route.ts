@@ -1,6 +1,7 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isB2BCustomer } from "@/lib/flags";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { findExternalCancel, portalCancelEligible } from "@/lib/reactivation";
 import { getNextBillingAttempt, mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -91,12 +92,10 @@ export const GET = withCustomer<{
         .select("cancel_count, last_cancelled_at")
         .eq("customer_id", ctx.customerId)
         .maybeSingle();
-      const HOLD_DAYS = 90;
-      canReactivate =
-        (prefs?.cancel_count ?? 0) === 1 &&
-        !!prefs?.last_cancelled_at &&
-        Date.now() - new Date(prefs.last_cancelled_at as string).getTime() <=
-          HOLD_DAYS * 24 * 60 * 60 * 1000;
+      canReactivate = portalCancelEligible(prefs);
+      // Bajas por impago o por atención (2026-10-14): también pueden volver.
+      // Solo se mira si la regla de siempre no basta: una lectura más a Seal.
+      if (!canReactivate) canReactivate = (await findExternalCancel(subs)) !== null;
     } catch (e) {
       // Supabase caído o lento no puede apagar una pestaña: se asume que SÍ
       // puede reactivar y la pestaña se queda viva. El peor caso es un viaje

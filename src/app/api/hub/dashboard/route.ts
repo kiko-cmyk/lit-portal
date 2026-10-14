@@ -5,6 +5,7 @@ import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
 import { getNextBillingAttempt, mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { findExternalCancel, portalCancelEligible } from "@/lib/reactivation";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type {
@@ -46,6 +47,9 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
 
   // Fallback to the full scan on a cache miss (cold first load, or stale id).
   let sub: SealSubscription | null = fastSub;
+  // De qué baja viene la sub cancelada que se enseña para reactivar (2026-10-14):
+  // el Hub pinta la tarjeta de impago con su propio texto.
+  let reactivationKind: "portal" | "unpaid" | "support" | null = null;
   if (!sub && requestedSubId) {
     // Explicit selection not resolvable/owned → 404, don't silently show another sub.
     throw new ApiHttpError(404, "subscription_not_found", `No subscription ${requestedSubId}`);
@@ -82,17 +86,21 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     // /api/subscription/reactivate), surface the most recent cancelled sub;
     // mapStatus turns it into "expired" and the Hub renders the ReactivateCard.
     if (!sub) {
-      const HOLD_DAYS = 90;
-      const eligibleToReactivate =
-        (prefsRes?.cancel_count ?? 0) === 1 &&
-        !!prefsRes?.last_cancelled_at &&
-        Date.now() - new Date(prefsRes.last_cancelled_at as string).getTime() <=
-          HOLD_DAYS * 24 * 60 * 60 * 1000;
-      if (eligibleToReactivate) {
+      if (portalCancelEligible(prefsRes)) {
         sub =
           subsRes
             .filter((s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for)
             .sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ?? null;
+        if (sub) reactivationKind = "portal";
+      } else {
+        // Bajas por impago o por atención (2026-10-14): también se enseña la
+        // tarjeta de reactivar. Con impago, con su propio texto: el último pago no
+        // pasó y la caja se cobra mañana (lib/reactivation.ts).
+        const external = await findExternalCancel(subsRes).catch(() => null);
+        if (external) {
+          sub = external.sub;
+          reactivationKind = external.actor;
+        }
       }
     }
   }
@@ -150,6 +158,24 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     }
   } catch (err) {
     console.warn("[hub-dashboard] reanchor drain failed:", err);
+  }
+
+  // Reactivación o reanudación cuyo seguimiento aún no ha corrido (2026-10-14):
+  // Seal sigue regenerando el calendario, o el portal aún no ha traído a mañana
+  // el cobro de quien volvió tras un impago. Mismo banner y mismo re-poll que un
+  // cambio de plan. Solo lectura: lo aplica el webhook (lib/reactivation.ts).
+  if (!reanchorPending) {
+    try {
+      const { data: followup } = await sb
+        .from("reactivation_followups")
+        .select("status")
+        .eq("seal_subscription_id", String(sub.id))
+        .in("status", ["pending", "handling"])
+        .maybeSingle();
+      if (followup) reanchorPending = true;
+    } catch (err) {
+      console.warn("[hub-dashboard] reactivation followup lookup failed:", err);
+    }
   }
 
   const subscription = mapToSubscription(sub, ctx.customerId);
@@ -280,5 +306,6 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     nextEvent,
     upcomingShipments,
     reanchorPending,
+    reactivationKind,
   };
 });

@@ -474,6 +474,13 @@ export interface HubDashboard {
    */
   upcomingShipments: UpcomingShipment[];
   /**
+   * Solo con la tarjeta de reactivar (2026-10-14): de qué baja viene. `unpaid` =
+   * Seal la canceló por impago (texto propio: el último pago no pasó y la caja se
+   * cobra mañana); `support` = la canceló atención desde el admin de Seal;
+   * `portal` = baja hecha desde el portal.
+   */
+  reactivationKind?: "portal" | "unpaid" | "support" | null;
+  /**
    * True while a re-anchor intent is still pending for this customer — i.e. a
    * frequency change is in flight and Seal hasn't finished regenerating +
    * re-anchoring the cadence yet. The Hub shows the "updating your calendar"
