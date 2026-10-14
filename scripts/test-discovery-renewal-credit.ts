@@ -194,13 +194,19 @@ check(
 );
 check(
   "todas las salidas de la ruta reponen los dos códigos",
+  // Desde el 14-oct-2026 las salidas "a medias" (resultado desconocido, lo añadido aún no se
+  // ve, el remove que falla, la verificación que no cuadra) pasan todas por
+  // `handOverToBackground`, que repone una vez para todas: de ahí 5 y no 6.
   !/reattachRetentionDiscount\(\)/.test(planRoute) &&
-    (planRoute.match(/await reattachCarriedDiscounts\(\);/g) ?? []).length >= 6 &&
+    (planRoute.match(/await reattachCarriedDiscounts\(\);/g) ?? []).length >= 5 &&
+    /const handOverToBackground = async[\s\S]{0,200}await reattachCarriedDiscounts\(\);/.test(planRoute) &&
     /reattachRetentionDiscountNow\(\);\s*await reattachDiscoveryCreditNow\(\);/.test(planRoute),
   "Si alguna salida solo repusiera el 15%, el cliente perdería su crédito Discovery en ese camino.",
 );
 
-const drain = readFileSync("src/app/api/cron/mix-repair-drain/route.ts", "utf8");
+// La lógica de cada intención vive en la librería desde el 14-oct-2026 (la usan el cron y el
+// `after()` de la ruta de plan); el cron solo la recorre.
+const drain = readFileSync("src/lib/line-repair-runner.ts", "utf8");
 check(
   "el cron de reparación trata el crédito Discovery como código seguido",
   /trackedDiscoveryCode\(subId\)/.test(drain) && /ensureDiscoveryCreditAttached\(/.test(drain),

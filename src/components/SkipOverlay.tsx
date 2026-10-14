@@ -1,5 +1,6 @@
 "use client";
 
+import { skipErrorMessage } from "@/lib/skip-messages";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { addCycle, subCycle } from "@/lib/cadence";
@@ -263,6 +264,21 @@ export function SkipOverlay({
                   en: "We're finishing another update to your subscription. Wait a moment and try again.",
                   es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
                 })
+            : code === "seal_busy"
+              ? t({
+                  en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+                  es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+                })
+            : code === "change_unconfirmed"
+              ? t({
+                  en: "We couldn't confirm your change. Reload the page in a few minutes to see how your plan ended up and, if it didn't change, try again.",
+                  es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo ha quedado tu plan y, si no ha cambiado, vuelve a pedirlo.",
+                })
+            : code === "frequency_change_failed"
+              ? t({
+                  en: "We couldn't change the frequency and nothing was changed. Try again in a few minutes.",
+                  es: "No hemos podido cambiar la frecuencia y no se ha cambiado nada. Inténtalo de nuevo en unos minutos.",
+                })
             : code === "change_applying"
               ? t({
                   en: "Your change is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to do it again.",
@@ -298,6 +314,9 @@ export function SkipOverlay({
           sealSubscriptionId: subscription.sealSubscriptionId,
           reason,
           freeText: freeText || undefined,
+          // El envío que se le enseñó (14-oct-2026): el servidor salta ESE y, si ya estaba
+          // saltado (un intento anterior que entró sin respuesta), no salta otro.
+          expectedNextShipDate: subscription.nextShipDate,
         }),
       });
       setDoneSkip(res);
@@ -305,17 +324,8 @@ export function SkipOverlay({
       setStep("done-skip");
     } catch (e) {
       const code = (e as { code?: string }).code;
-      setError(
-        code === "already_charged" || code === "no_pending_attempt"
-          ? t({
-              en: "This order is already being processed and can't be skipped.",
-              es: "Este pedido ya se está procesando y no se puede saltar.",
-            })
-          : t({
-              en: "Couldn't skip. Try again or contact us.",
-              es: "No se pudo saltar. Inténtalo de nuevo o escríbenos.",
-            }),
-      );
+      const status = (e as { status?: number }).status;
+      setError(skipErrorMessage(code, status, t));
     } finally {
       setBusy(false);
     }

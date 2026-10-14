@@ -36,7 +36,8 @@ import {
   SEAL_INTERVAL_BY_FREQUENCY,
   shiftedNextShipDate,
 } from "@/lib/frequency-core";
-import type { SealSubscription } from "@/lib/seal";
+import { SealApiError, type SealSubscription } from "@/lib/seal";
+import { UpstreamTimeoutError } from "@/lib/http-timeout";
 
 let failures = 0;
 
@@ -100,6 +101,9 @@ function day(offsetDays: number): string {
 
 function fakeDeps(o: {
   editFails?: number;
+  /** Cómo falla el edit: un NO explícito de Seal (por defecto) o un timeout nuestro, que no
+   *  dice si entró (14-oct-2026). */
+  editError?: "rejected" | "timeout";
   readBack?: FrequencyChangeDeps["readBack"];
   intentFails?: boolean;
 } = {}) {
@@ -110,7 +114,8 @@ function fakeDeps(o: {
       calls.edits.push(edits);
       if (editFails > 0) {
         editFails--;
-        throw new Error("Seal edit rejected: busy");
+        if (o.editError === "timeout") throw new UpstreamTimeoutError("seal", "/subscription", 6000);
+        throw new SealApiError(200, "Seal edit rejected: busy");
       }
     },
     readBack: o.readBack ?? (async () => sub({ delivery_interval: "2 months" })),
@@ -285,6 +290,19 @@ const run = async () => {
     const { deps, calls } = fakeDeps({ editFails: 2 });
     await rejects("dos fallos del edit son frequency_change_failed", changeFrequencyOnly(base, deps), "frequency_change_failed");
     check("y no se escribe intención ni se da por verificado", calls.intents.length === 0 && calls.audits.join(",") === "intent,edit_failed", calls.audits.join(","));
+  }
+
+  // Un timeout NO es "no se ha tocado nada" (14-oct-2026): se mira antes de decidir.
+  {
+    const { deps, calls } = fakeDeps({ editFails: 2, editError: "timeout", readBack: async () => sub({ delivery_interval: "45 days" }) });
+    await rejects("dos timeouts y Seal sigue con la vieja: frequency_unverified", changeFrequencyOnly(base, deps), "frequency_unverified");
+    check("y sin intención (podría mover la fecha de un cambio que no entró)", calls.intents.length === 0 && calls.audits.join(",") === "intent,edit_unknown", calls.audits.join(","));
+  }
+  {
+    const { deps, calls } = fakeDeps({ editFails: 2, editError: "timeout" });
+    const r = await changeFrequencyOnly(base, deps);
+    check("dos timeouts pero Seal ya enseña la nueva: el cambio está hecho", r.changed && r.frequency === "2mo");
+    check("y la fecha se protege igual", calls.intents.length === 1 && r.reanchor === "intent_written", `${calls.intents.length} ${r.reanchor}`);
   }
 
   {

@@ -208,7 +208,44 @@ export function PlanOverlay({
             es: "No pudimos aplicar tu plan. Escríbenos y lo hacemos por ti.",
           }),
         );
-      } else if (err.code === "variant_change_failed" || err.code === "seal_edit_items_failed") {
+      } else if (err.code === "seal_busy") {
+        // Rechazado ANTES de tocar nada (14-oct-2026): Seal seguía procesando un cambio
+        // reciente de esta sub, y escribir encima es como se pierden los cambios.
+        setError(
+          t({
+            en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+            es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+          }),
+        );
+      } else if (err.code === "change_unconfirmed") {
+        // Seal aceptó el cambio pero no lo enseña: no sabemos si entrará. Ni "reintenta" ni
+        // "listo": que mire en unos minutos (14-oct-2026).
+        setUncertain(true);
+        setError(
+          t({
+            en: "We couldn't confirm your change. Reload the page in a few minutes to see how your plan ended up and, if it didn't change, try again.",
+            es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo ha quedado tu plan y, si no ha cambiado, vuelve a pedirlo.",
+          }),
+        );
+      } else if (err.code === "frequency_change_failed") {
+        setError(
+          t({
+            en: "We couldn't change the frequency and nothing was changed. Try again in a few minutes.",
+            es: "No hemos podido cambiar la frecuencia y no se ha cambiado nada. Inténtalo de nuevo en unos minutos.",
+          }),
+        );
+      } else if (err.code === "variant_change_failed_after_interval") {
+        setError(
+          t({
+            en: "We changed the frequency, but not the boxes. Try again in a few minutes to change them.",
+            es: "Hemos cambiado la frecuencia, pero no las cajas. Inténtalo de nuevo en unos minutos para cambiarlas.",
+          }),
+        );
+      } else if (
+        err.code === "variant_change_failed" ||
+        err.code === "seal_edit_items_failed" ||
+        err.code === "seal_add_items_failed"
+      ) {
         setError(
           t({
             en: "Couldn't change the number of boxes. Try again in a moment.",

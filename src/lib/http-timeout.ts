@@ -43,11 +43,30 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * AsyncLocalStorage rather than a module variable because route handlers run
  * concurrently in one instance and would otherwise share the deadline.
  */
-const requestDeadline = new AsyncLocalStorage<number>();
+// Un objeto y no el número a secas para poder AMPLIARLO desde dentro (ver
+// `extendRequestDeadline`): con un primitivo, el valor que ve cada llamada queda fijado
+// al entrar en `run` y no hay forma de moverlo después.
+const requestDeadline = new AsyncLocalStorage<{ at: number }>();
 
 /** Run `fn` under a wall-clock budget of `ms` shared by every upstream call inside it. */
 export function runWithRequestDeadline<T>(ms: number, fn: () => Promise<T>): Promise<T> {
-  return requestDeadline.run(deadlineIn(ms), fn);
+  return requestDeadline.run({ at: deadlineIn(ms) }, fn);
+}
+
+/**
+ * Amplía el deadline ambiente hasta `ms` desde ahora (nunca lo acorta). Devuelve false si no
+ * hay deadline que ampliar.
+ *
+ * Para cuando la petición se compromete a una secuencia de escrituras que NO se puede dejar
+ * a medias (14-oct-2026, cambio de plan): el deadline sirve para no EMPEZAR lo que no cabe,
+ * pero una vez empezado, cada paso debe salir con tiempo de verdad. Si no, el paso siguiente
+ * nace muerto a 0 ms y la sub se queda con el plan viejo y el nuevo a la vez.
+ */
+export function extendRequestDeadline(ms: number): boolean {
+  const store = requestDeadline.getStore();
+  if (!store) return false;
+  store.at = Math.max(store.at, deadlineIn(ms));
+  return true;
 }
 
 /**
@@ -64,8 +83,8 @@ export function runWithoutRequestDeadline<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Milliseconds left in the ambient request budget, or null when there is none. */
 export function requestDeadlineLeft(): number | null {
-  const at = requestDeadline.getStore();
-  return at === undefined ? null : msLeft(at);
+  const store = requestDeadline.getStore();
+  return store === undefined ? null : msLeft(store.at);
 }
 
 /**
@@ -74,8 +93,8 @@ export function requestDeadlineLeft(): number | null {
  */
 export function budgetWithin(totalMs: number): number {
   const own = deadlineIn(totalMs);
-  const at = requestDeadline.getStore();
-  return at === undefined ? own : Math.min(own, at);
+  const store = requestDeadline.getStore();
+  return store === undefined ? own : Math.min(own, store.at);
 }
 
 /**

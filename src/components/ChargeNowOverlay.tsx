@@ -66,6 +66,28 @@ export function ChargeNowOverlay({
             es: "Ya estamos procesando un pedido tuyo. Espera unos minutos; no hace falta que vuelvas a intentarlo.",
           }),
         );
+      } else if (
+        code === "charge_unconfirmed" ||
+        code === "gateway_timeout" ||
+        (e as { status?: number }).status === 504
+      ) {
+        // No sabemos si se ha cobrado (14-oct-2026). Volver a pulsar podría cobrar otra caja:
+        // se bloquea el botón y se le dice dónde lo verá.
+        setLocked(true);
+        setError(
+          t({
+            en: "We couldn't confirm whether your order was charged. Please don't try again: in a few minutes you'll see it in My orders or get the confirmation email. If it doesn't appear, write to us.",
+            es: "No hemos podido confirmar si tu pedido se ha cobrado. No lo repitas: en unos minutos lo verás en Mis pedidos o te llegará el email de confirmación. Si no aparece, escríbenos.",
+          }),
+        );
+      } else if (code === "change_applying") {
+        setLocked(true);
+        setError(
+          t({
+            en: "Your plan change is still being applied. You'll be able to bring your order forward in a few minutes.",
+            es: "Tu cambio de plan se está terminando de aplicar. Podrás adelantar el envío en unos minutos.",
+          }),
+        );
       } else {
         setError(
           code === "cutoff_passed"

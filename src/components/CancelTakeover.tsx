@@ -1,5 +1,6 @@
 "use client";
 
+import { skipErrorMessage } from "@/lib/skip-messages";
 import { useEffect, useState } from "react";
 import { api, clearSelectedSubscription, clearSessionToken } from "@/lib/api-client";
 import { addCycle, subCycle } from "@/lib/cadence";
@@ -501,6 +502,22 @@ function Solucion({
         en: "We're finishing another update to your subscription. Wait a moment and try again.",
         es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
       });
+    // Rechazado antes de tocar nada (14-oct-2026): Seal seguía con un cambio reciente.
+    if (code === "seal_busy")
+      return t({
+        en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+        es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+      });
+    if (code === "change_unconfirmed")
+      return t({
+        en: "We couldn't confirm your change. Reload the page in a few minutes to see how your plan ended up and, if it didn't change, try again.",
+        es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo ha quedado tu plan y, si no ha cambiado, vuelve a pedirlo.",
+      });
+    if (code === "frequency_change_failed")
+      return t({
+        en: "We couldn't change the frequency and nothing was changed. Try again in a few minutes.",
+        es: "No hemos podido cambiar la frecuencia y no se ha cambiado nada. Inténtalo de nuevo en unos minutos.",
+      });
     // ESTE cambio entró a medias y el cron lo termina en minutos (14-oct-2026).
     if (code === "change_applying")
       return t({
@@ -550,16 +567,17 @@ function Solucion({
     try {
       await api("/api/subscription/skip", {
         method: "POST",
-        body: JSON.stringify({ sealSubscriptionId: subscription?.sealSubscriptionId, reason: "taking_a_break" }),
+        body: JSON.stringify({
+          sealSubscriptionId: subscription?.sealSubscriptionId,
+          reason: "taking_a_break",
+          expectedNextShipDate: subscription?.nextShipDate,
+        }),
       });
       onStayed();
     } catch (e) {
       const code = (e as { code?: string }).code;
-      setError(
-        code === "already_charged" || code === "no_pending_attempt"
-          ? t({ en: "This order is already being processed and can't be skipped.", es: "Este pedido ya se está procesando y no se puede saltar." })
-          : t({ en: "Couldn't skip. Try again or contact us.", es: "No se pudo saltar. Inténtalo de nuevo o escríbenos." }),
-      );
+      const status = (e as { status?: number }).status;
+      setError(skipErrorMessage(code, status, t));
     } finally {
       setBusy(false);
     }
@@ -956,6 +974,18 @@ function Descuento({
           t({
             en: "This discount is only available once, on a first cancellation, and it's no longer available on your account. You can keep your subscription as it is, or continue cancelling.",
             es: "Este descuento solo está disponible una vez, en la primera cancelación, y ya no está disponible en tu cuenta. Puedes seguir con tu suscripción tal como está, o continuar con la cancelación.",
+          }),
+        );
+        return;
+      }
+      if (code === "discount_apply_unconfirmed" || code === "gateway_timeout") {
+        // No sabemos si el 15% entró (14-oct-2026): repetirlo podría ponerlo dos veces, y
+        // decir "no se pudo" puede ser falso. Se le dice la verdad y no se le deja repetir.
+        setUnavailable(true);
+        setError(
+          t({
+            en: "We couldn't confirm whether your discount was applied. We're checking it and we'll write to you; there's no need to try again.",
+            es: "No hemos podido confirmar si tu descuento se ha aplicado. Lo estamos comprobando y te escribimos; no hace falta que lo repitas.",
           }),
         );
         return;
