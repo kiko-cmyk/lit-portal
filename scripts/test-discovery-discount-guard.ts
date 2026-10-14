@@ -141,48 +141,74 @@ check(
   "Así el cupón de siempre sigue saliendo aunque el código llegue a producción antes que la migración 2026-10-09.",
 );
 
-console.log("\n── la configuración del descuento ──\n");
+console.log("\n── la configuración del descuento (en su descuento PADRE, 2026-10-14) ──\n");
+
+// Desde el 2026-10-14 los códigos van DENTRO de «Cupón Discovery Set · 4,99€»,
+// así que la configuración vive en el padre: la función que lo crea
+// (lib/coupon-parent.ts) y la definición con la que se creó
+// (scripts/coupons-create-parents.ts).
+const PARENT_MOD = readFileSync("src/lib/coupon-parent.ts", "utf8");
+const CREATE = readFileSync("scripts/coupons-create-parents.ts", "utf8");
+const createFn = (() => {
+  const a = PARENT_MOD.indexOf("export async function createCouponParent");
+  const b = PARENT_MOD.indexOf("export async function addCouponCode", a);
+  return a >= 0 && b > a ? PARENT_MOD.slice(a, b) : "";
+})();
+const createCode = createFn
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"))
+  .join("\n");
+const discoveryDef = (() => {
+  const i = CREATE.indexOf('name: "DISCOVERY_COUPON_PARENT_GID"');
+  return i >= 0 ? CREATE.slice(i, i + 400) : "";
+})();
 
 check(
-  "NO aplica en compra única",
-  /appliesOnOneTimePurchase: false/.test(mod),
+  "el padre del Discovery NO aplica en compra única",
+  /appliesOnOneTimePurchase: false/.test(discoveryDef),
   "La promesa es devolver los 4,99 € al pedir una caja CON envíos programados. Si valiera en one-shot, el cliente lo gasta ahí y la campaña no convierte a nadie.",
 );
 
 check(
-  "aplica en suscripción, explícito",
-  /appliesOnSubscription: true/.test(mod),
+  "el padre aplica en suscripción, explícito",
+  /appliesOnSubscription: true/.test(createCode),
   "Es FALSE por defecto en Shopify. Omitirlo con one-time ya en false deja un cupón que no sirve en NINGÚN carrito.",
 );
 
 check(
   "solo el primer cobro",
-  /recurringCycleLimit: 1/.test(mod),
+  /recurringCycleLimit: 1/.test(createCode),
   "Sin esto son 4,99 € menos en cada entrega para siempre: un cupón de captación convertido en descuento permanente.",
 );
 
 check(
   "el código va suelto, nunca por segmento de clientes",
-  /customerSelection: \{ all: true \}/.test(mod),
+  /customerSelection: \{ all: true \}/.test(createCode),
   "Restringir por cliente es lo que dejó los cupones de GoAffPro con CERO redenciones: Shopify los rechaza a quien paga sin estar logueado, que es justo el comprador del Discovery Set.",
 );
 
 check(
-  "el importe es el precio del Set",
-  /const DISCOUNT_AMOUNT_EUR = "4\.99"/.test(mod),
-  "Es una devolución del precio del Discovery Set (4,99 €), no un descuento redondo.",
+  "una vez por cliente, y SIN usageLimit en el padre",
+  /appliesOncePerCustomer: true/.test(createCode) && !/usageLimit/.test(createCode),
+  "En un padre el usageLimit cuenta TODOS los códigos: con 1, el primer canje dejaría muerto el cupón de todos los demás. El «un solo uso» de cada código lo pone el portal (orders/paid y el cron).",
 );
 
 check(
-  "el título lleva el prefijo Discovery (los dos modos)",
-  /`Discovery \$\{code\}/.test(mod) && /`Discovery renovación \$\{code\}/.test(mod),
-  "Es por donde los busca el cron de limpieza y por donde se distinguen en el admin de los del perfilado.",
+  "el importe es el precio del Set",
+  /const DISCOUNT_AMOUNT_EUR = "4\.99"/.test(mod) && /DISCOVERY_DISCOUNT_VALUE_EUR/.test(discoveryDef),
+  "Es una devolución del precio del Discovery Set (4,99 €), no un descuento redondo, y el padre se crea con ese mismo importe.",
+);
+
+check(
+  "emite DENTRO del padre, no un descuento suelto",
+  /addCouponCode\(DISCOVERY_COUPON_PARENT_GID, code\)/.test(mod) && !/discountCodeBasicCreate/.test(mod),
+  "Un descuento suelto por cliente es lo que llenó el admin de Shopify (140 líneas en un mes). Juan, 2026-10-14: todos los nuevos dentro del padre.",
 );
 
 check(
   "el código de RENOVACIÓN no caduca",
-  /mode === "renewal"\s*\?\s*null/.test(mod) && /\.\.\.\(endsAt \?/.test(mod),
-  "La primera renovación de una sub de 45 días o más cae después de 30 días: un código caducado no descuenta, y el cron de limpieza BORRA los Discovery caducados sin usar antes de que se cobre.",
+  /mode === "renewal"\s*\?\s*null/.test(mod) && /row\.mode === "renewal"/.test(PARENT_MOD),
+  "La primera renovación de una sub de 45 días o más cae después de 30 días: el cron solo puede quitar ese código cuando la renovación ya se ha cobrado o anulado.",
 );
 
 console.log("\n── el cron de limpieza no borra cupones ajenos ──\n");
@@ -218,6 +244,12 @@ check(
   wouldDelete("Perfilado LIT-TW3DVWJD (27044729520477)") &&
     wouldDelete("Discovery LIT-AB34CD56 (28520928051549)"),
   "Si deja de reconocer sus propios prefijos, el cron no limpia nada y la lista del admin se vuelve inservible.",
+);
+
+check(
+  "NO borra los descuentos padre (sus títulos no empiezan por los prefijos)",
+  !wouldDelete("Cupón perfilado · 5€") && !wouldDelete("Cupón Discovery Set · 4,99€"),
+  "El bucle de los sueltos borra por prefijo de título. Si un padre empezara por «Perfilado » o «Discovery », un día podría llevarse por delante todos los códigos de la campaña.",
 );
 
 console.log(

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { sweepCouponParents, type ParentSweepTally } from "@/lib/coupon-parent";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 
@@ -6,7 +7,15 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
  * GET /apps/portal/api/cron/survey-discount-cleanup
  *
  * Diario: borra de Shopify los cupones de campaña (perfilado y Discovery Set)
- * que ya han caducado Y no ha usado nadie.
+ * que ya no deben funcionar.
+ *
+ * Desde el 2026-10-14 los cupones viven DENTRO de dos descuentos padre (ver
+ * `lib/coupon-parent.ts`), y lo principal de este cron es barrerlos: quita de
+ * cada padre los códigos caducados (su fecha está en Supabase, porque en un
+ * padre Shopify no deja caducidad por código), los ya usados y los de
+ * renovación del Discovery ya cobrados o anulados. Lo de abajo (borrar
+ * descuentos sueltos EXPIRED sin usar) queda para los sueltos que no se movieron
+ * a los padres, como los de compensación hechos a mano.
  *
  * ── Por qué existe ──
  *
@@ -152,5 +161,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     cursor = pageInfo.endCursor;
   }
 
-  return NextResponse.json({ ok: true, scanned, deleted, keptInUse, failed });
+  // Los padres. Un fallo aquí no tumba lo de arriba (ya está hecho): se devuelve
+  // y mañana se reintenta, porque los códigos siguen en su padre.
+  let parents: ParentSweepTally[] | { error: string };
+  try {
+    parents = await sweepCouponParents({ dryRun: req.nextUrl.searchParams.get("dry_run") === "1" });
+  } catch (err) {
+    console.error("[survey-discount-cleanup] barrido de los padres falló:", err);
+    parents = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return NextResponse.json({ ok: true, scanned, deleted, keptInUse, failed, parents });
 }
