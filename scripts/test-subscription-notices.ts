@@ -125,9 +125,24 @@ check(
   "Los «cobrar ya» de soporte no se tocan: puede estar haciendo algo a propósito.",
 );
 check(
-  "con dos filas en la ventana gana la más reciente",
+  "con dos filas antes del intento gana la más reciente",
   matchIntent([row(1, "2026-10-14T10:55:00Z"), row(2, "2026-10-14T11:02:20Z")], failedManual)?.id === 2,
   "Si el cliente pulsó dos veces, el fallo es del último.",
+);
+check(
+  "una fila escrita DESPUÉS del intento no se lo queda",
+  matchIntent([row(1, "2026-10-14T11:02:21Z"), row(2, "2026-10-14T11:04:00Z")], failedManual)?.id === 1 &&
+    matchIntent([row(2, "2026-10-14T11:04:00Z")], failedManual) === null,
+  "La fila se escribe siempre antes de llamar a Seal: una de minutos después es de otro Adelantar (revisión adversarial).",
+);
+check(
+  "si entre la fila y el fallo hubo otro cobro manual, la fila es de ese otro",
+  matchIntent(
+    [row(1, "2026-10-14T10:58:00Z")],
+    failedManual,
+    [{ id: 1, date: "2026-10-14T10:58:01Z", attempted_at: "2026-10-14T10:58:02Z", status: "completed", triggered_manually: "2026-10-14 10:58:02" }, failedManual],
+  ) === null,
+  "Un Adelantar que pasó y, minutos después, un «cobrar ya» de soporte que falla: no se toca el de soporte.",
 );
 
 console.log("\n── quién canceló ──\n");
@@ -178,6 +193,8 @@ const VERCEL = readFileSync("vercel.json", "utf8");
 const MIGRATION = readFileSync("database/migrations/2026-10-14_charge_now_attempts.sql", "utf8");
 const KLAVIYO = readFileSync("src/lib/klaviyo.ts", "utf8");
 const RESUME = readFileSync("src/app/api/subscription/resume/route.ts", "utf8");
+const CRON = readFileSync("src/app/api/cron/subscription-notices/route.ts", "utf8");
+const RECOVERY = readFileSync("src/lib/charge-now-recovery.ts", "utf8");
 const REACTIVATE = readFileSync("src/app/api/subscription/reactivate/route.ts", "utf8");
 
 check(
@@ -191,14 +208,40 @@ check(
   "Si no, el rechazo síncrono y el rescate del webhook moverían el mismo calendario a la vez.",
 );
 check(
+  "un timeout o un 5xx de Seal NO devuelve la fecha",
+  /const explicitRejection = err instanceof SealApiError && err\.status >= 200 && err\.status < 500;/.test(CHARGE) &&
+    /let syncOwned = explicitRejection;/.test(CHARGE),
+  "Seal puede haber cobrado y contestado tarde: devolver la fecha de antes le cobraría dos veces.",
+);
+check(
+  "no deja lanzar un Adelantar con otro en curso, y lo mira antes del lock",
+  CHARGE.indexOf("hasOpenChargeNowIntent(") > 0 &&
+    CHARGE.indexOf("hasOpenChargeNowIntent(") < CHARGE.indexOf('.from("charge_now_locks")'),
+  "Con un cobro en el aire, otro encima puede cobrar dos veces; y si se mira después del lock, el 409 lo deja puesto.",
+);
+check(
   "el webhook de Seal rescata en subscription.updated, en segundo plano",
   /hasRecentManualFailure\(sub\)[\s\S]{0,200}after\(\(\) => runAsBackgroundJob\(\(\) => handleManualChargeFailureSafe\(sub\)\)\)/.test(SEAL),
   "Es el único aviso que manda Seal tras un Adelantar rechazado.",
 );
 check(
-  "el cron diario está programado",
-  /"\/api\/cron\/subscription-notices"/.test(VERCEL) && /"45 8 \* \* \*"/.test(VERCEL),
-  "Es la red del rescate y el que manda los avisos de baja.",
+  "el cron diario está programado y corre con el plazo largo",
+  /"\/api\/cron\/subscription-notices"/.test(VERCEL) &&
+    /"45 8 \* \* \*"/.test(VERCEL) &&
+    /runAsBackgroundJob\(\(\) => sweepChargeNowAttempts/.test(CRON) &&
+    /runAsBackgroundJob\(\(\) => runCancelNotices/.test(CRON),
+  "Es la red del rescate y el que manda los avisos de baja; con el plazo de 6 s de las rutas, un Seal lento lo cortaría.",
+);
+check(
+  "un rescate que falla a medias vuelve a la cola, y el cron recoge los atascados",
+  /catch \(err\) \{\s*await releaseClaim\(intent\.id\);\s*throw err;/.test(RECOVERY) &&
+    /\.eq\("status", "handling"\)\s*\.lt\("handled_at"/.test(RECOVERY),
+  "Sin esto la fila se quedaba en handling para siempre y el cliente, sin caja.",
+);
+check(
+  "el rescate toma el mismo cerrojo que charge-now",
+  /recoverClaimed[\s\S]*\.from\("charge_now_locks"\)\s*\.insert/.test(RECOVERY),
+  "Sin él, un Adelantar que entra durante el rescate dejaría el siguiente cobro para mañana a quien acaba de pagar.",
 );
 check(
   "la tabla nueva con RLS y el cerrojo de un intento por fila",

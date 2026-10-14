@@ -67,9 +67,20 @@ export interface RawBillingAttempt {
 /** Con estos NO se reintenta: es el antifraude de la pasarela. Seal usa las dos grafías. */
 export const NO_RETRY_ERROR_CODES = new Set(["FRAUD__SUSPECTED", "FRAUD_SUSPECTED"]);
 
-/** Ventana para casar un intento fallido con la fila que escribió charge-now. */
+/**
+ * Ventana para casar un intento fallido con la fila que escribió charge-now. La
+ * fila se escribe SIEMPRE antes de llamar a Seal, así que por delante solo se
+ * admite el desfase de reloj entre los dos servidores: una fila escrita minutos
+ * después del intento es de OTRO Adelantar (revisión adversarial, 14-oct).
+ */
 const MATCH_BEFORE_MS = 10 * 60 * 1000;
-const MATCH_AFTER_MS = 3 * 60 * 1000;
+const MATCH_AFTER_MS = 30 * 1000;
+const CLOCK_SKEW_MS = 5 * 1000;
+
+/** Un Adelantar sigue «en curso» este tiempo: charge-now no deja lanzar otro. */
+export const OPEN_INTENT_MS = 15 * 60 * 1000;
+/** Una fila en `handling` más vieja que esto es un rescate que murió a medias. */
+const STALE_HANDLING_MS = 15 * 60 * 1000;
 
 const H = 60 * 60 * 1000;
 
@@ -144,22 +155,61 @@ export interface ChargeNowIntentRow {
   status: string;
 }
 
-/** La fila de charge-now de este intento: la más reciente dentro de la ventana. */
+const isManual = (a: RawBillingAttempt) => !!(a.triggered_manually ?? "").trim();
+
+/**
+ * La fila de charge-now de este intento, o null si no es nuestro.
+ *
+ * La fila es la más reciente escrita ANTES del intento (con margen de reloj), y
+ * solo si este intento es el PRIMER cobro manual desde que se escribió: si hay
+ * otro cobro manual entre la fila y el fallo, la fila es de ese otro (p. ej. un
+ * Adelantar que pasó y, minutos después, un «cobrar ya» de soporte que falla).
+ */
 export function matchIntent(
   rows: ChargeNowIntentRow[],
   failed: RawBillingAttempt,
+  attempts: RawBillingAttempt[] = [],
 ): ChargeNowIntentRow | null {
   // `date` del intento manual = la hora en que se pidió el cobro (unos ms después
   // de escribir la fila); `attempted_at`, cuando la pasarela lo procesó.
   const t = Date.parse(failed.date || failed.attempted_at || "");
   if (!Number.isFinite(t)) return null;
-  const inWindow = rows
+  const row = rows
     .filter((r) => {
       const at = Date.parse(r.requested_at);
       return at >= t - MATCH_BEFORE_MS && at <= t + MATCH_AFTER_MS;
     })
-    .sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at));
-  return inWindow[0] ?? null;
+    .sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at))[0];
+  if (!row) return null;
+  const at = Date.parse(row.requested_at);
+  const otherBetween = attempts.some((a) => {
+    if (String(a.id) === String(failed.id) || !isManual(a)) return false;
+    const d = Date.parse(a.date || a.attempted_at || "");
+    return Number.isFinite(d) && d >= at - CLOCK_SKEW_MS && d < t;
+  });
+  return otherBetween ? null : row;
+}
+
+/** ¿Hay un Adelantar de esta sub aún en curso? charge-now contesta 409 si lo hay. */
+export async function hasOpenChargeNowIntent(sealSubscriptionId: string, now = Date.now()): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from("charge_now_attempts")
+      .select("id")
+      .eq("seal_subscription_id", sealSubscriptionId)
+      .in("status", ["requested", "handling"])
+      .gte("requested_at", new Date(now - OPEN_INTENT_MS).toISOString())
+      .limit(1);
+    if (error) throw new Error(error.message);
+    return (data ?? []).length > 0;
+  } catch (err) {
+    // Fail-open, como el lock de charge-now: esto solo AÑADE protección.
+    console.error("[charge-now-recovery] no se pudo mirar si hay un Adelantar en curso", {
+      sealSubscriptionId,
+      msg: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 // ─── Escrituras ─────────────────────────────────────────────────────────────
@@ -215,6 +265,16 @@ export async function claimChargeNowIntent(
   return (data ?? []).length > 0;
 }
 
+/** Devuelve a la cola una fila que este proceso reclamó y no pudo terminar. */
+async function releaseClaim(id: number): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .from("charge_now_attempts")
+    .update({ status: "requested", handled_at: null })
+    .eq("id", id)
+    .eq("status", "handling");
+  if (error) console.error("[charge-now-recovery] no se pudo devolver la fila a la cola", { id, msg: error.message });
+}
+
 async function finishIntent(id: number, status: string, extra: Record<string, unknown> = {}): Promise<void> {
   const { error } = await supabaseAdmin()
     .from("charge_now_attempts")
@@ -226,7 +286,7 @@ async function finishIntent(id: number, status: string, extra: Record<string, un
 // ─── El rescate ─────────────────────────────────────────────────────────────
 
 export type RecoveryOutcome =
-  | { kind: "not_ours" | "already_handled" | "superseded" | "not_active" }
+  | { kind: "not_ours" | "already_handled" | "superseded" | "not_active" | "busy" }
   | { kind: "retry_scheduled" | "date_restored"; targetDate: string; moved: number }
   | { kind: "would_retry" | "would_restore"; targetDate: string }
   | { kind: "unhandled"; reason: string };
@@ -251,7 +311,7 @@ export async function handleManualChargeFailure(
 
   const out: RecoveryOutcome[] = [];
   for (const f of failed) {
-    const intent = matchIntent(rows, f);
+    const intent = matchIntent(rows, f, attemptsOf(subFromEvent));
     if (!intent) {
       out.push({ kind: "not_ours" });
       continue;
@@ -290,9 +350,48 @@ export async function handleManualChargeFailure(
       out.push({ kind: "already_handled" });
       continue;
     }
-    out.push(await recover(intent, f, errorCode, now));
+    out.push(await recoverClaimed(intent, f, errorCode, now));
   }
   return out;
+}
+
+/**
+ * Con la fila ya reclamada: toma el cerrojo de la sub (el mismo de charge-now, que
+ * contesta 409 mientras exista) y rescata. Si algo lanza, la fila vuelve a la cola
+ * para que la siguiente entrega del webhook o el cron lo reintenten; sin esto se
+ * quedaba en `handling` para siempre y el cliente, sin caja.
+ */
+async function recoverClaimed(
+  intent: ChargeNowIntentRow,
+  f: RawBillingAttempt,
+  errorCode: string | null,
+  now: number,
+): Promise<RecoveryOutcome> {
+  const sb = supabaseAdmin();
+  const subId = Number(intent.seal_subscription_id);
+  // Sin cerrojo, un Adelantar que entrara entre la relectura y el movimiento del
+  // calendario dejaría el siguiente cobro para mañana a quien acaba de pagar.
+  await sb
+    .from("charge_now_locks")
+    .delete()
+    .eq("seal_subscription_id", subId)
+    .lt("created_at", new Date(Date.now() - 120_000).toISOString());
+  const { error: lockErr } = await sb
+    .from("charge_now_locks")
+    .insert({ seal_subscription_id: subId, customer_id: intent.customer_id });
+  if (lockErr && (lockErr as { code?: string }).code === "23505") {
+    // Hay un Adelantar entrando ahora mismo: se deja para la siguiente pasada.
+    await releaseClaim(intent.id);
+    return { kind: "busy" };
+  }
+  try {
+    return await recover(intent, f, errorCode, now);
+  } catch (err) {
+    await releaseClaim(intent.id);
+    throw err;
+  } finally {
+    if (!lockErr) await sb.from("charge_now_locks").delete().eq("seal_subscription_id", subId);
+  }
 }
 
 async function recover(
@@ -442,7 +541,18 @@ export async function sweepChargeNowAttempts(
   opts: { dryRun?: boolean; now?: number } = {},
 ): Promise<ChargeNowSweepTally> {
   const now = opts.now ?? Date.now();
-  const { data, error } = await supabaseAdmin()
+  const sb = supabaseAdmin();
+  // Rescates que murieron a medias (Vercel cortó la función, Seal no contestó…):
+  // vuelven a la cola antes de leerla.
+  if (!opts.dryRun) {
+    const { error: staleErr } = await sb
+      .from("charge_now_attempts")
+      .update({ status: "requested", handled_at: null })
+      .eq("status", "handling")
+      .lt("handled_at", new Date(now - STALE_HANDLING_MS).toISOString());
+    if (staleErr) console.error("[charge-now-recovery] no se pudieron recuperar los handling viejos", staleErr.message);
+  }
+  const { data, error } = await sb
     .from("charge_now_attempts")
     .select("id, seal_subscription_id, customer_id, pre_charge_date, requested_at, status")
     .eq("status", "requested")
@@ -454,35 +564,45 @@ export async function sweepChargeNowAttempts(
   const tally: ChargeNowSweepTally = { open: rows.length, succeeded: 0, expired: 0, handled: 0, outcomes: [] };
 
   for (const row of rows) {
-    const age = now - Date.parse(row.requested_at);
-    if (age > 72 * H) {
-      if (!opts.dryRun) await finishIntent(row.id, "expired", { note: "sin resolver en 72 h" });
-      tally.expired++;
-      continue;
-    }
-    const s = await seal.getSubscriptionById(Number(row.seal_subscription_id)).catch(() => null);
-    if (!s) continue;
-    const mineAttempt = attemptsOf(s)
-      .filter((a) => (a.triggered_manually ?? "").trim() && a.triggered_manually !== "attempt_now")
-      .find((a) => matchIntent([row], a)?.id === row.id);
-    if (!mineAttempt) {
-      // Seal no llegó a crear el cobro (rechazo síncrono que no se marcó, o
-      // «ya hay un cobro en curso»). Pasadas 2 h no hay nada que esperar.
-      if (age > 2 * H) {
-        if (!opts.dryRun) await finishIntent(row.id, "expired", { note: "Seal no tiene ese cobro manual" });
+    // Una fila que falla no corta el repaso de las demás.
+    try {
+      const age = now - Date.parse(row.requested_at);
+      if (age > 72 * H) {
+        if (!opts.dryRun) await finishIntent(row.id, "expired", { note: "sin resolver en 72 h" });
         tally.expired++;
+        continue;
       }
-      continue;
-    }
-    if (mineAttempt.status === "completed") {
-      if (!opts.dryRun) await finishIntent(row.id, "succeeded");
-      tally.succeeded++;
-      continue;
-    }
-    if (mineAttempt.status === "error") {
-      const outcomes = await handleManualChargeFailure(s, { maxAgeHours: 72, now, dryRun: opts.dryRun });
-      tally.handled++;
-      tally.outcomes.push(...outcomes.map((o) => `${row.seal_subscription_id}:${o.kind}`));
+      const s = await seal.getSubscriptionById(Number(row.seal_subscription_id)).catch(() => null);
+      if (!s) continue;
+      const all = attemptsOf(s);
+      const mineAttempt = all
+        .filter((a) => isManual(a) && a.triggered_manually !== "attempt_now")
+        .find((a) => matchIntent([row], a, all)?.id === row.id);
+      if (!mineAttempt) {
+        // Seal no llegó a crear el cobro (no le llegó la llamada, o «ya hay un
+        // cobro en curso»). Pasadas 2 h no hay nada que esperar.
+        if (age > 2 * H) {
+          if (!opts.dryRun) await finishIntent(row.id, "expired", { note: "Seal no tiene ese cobro manual" });
+          tally.expired++;
+        }
+        continue;
+      }
+      if (mineAttempt.status === "completed") {
+        if (!opts.dryRun) await finishIntent(row.id, "succeeded");
+        tally.succeeded++;
+        continue;
+      }
+      if (mineAttempt.status === "error") {
+        const outcomes = await handleManualChargeFailure(s, { maxAgeHours: 72, now, dryRun: opts.dryRun });
+        tally.handled++;
+        tally.outcomes.push(...outcomes.map((o) => `${row.seal_subscription_id}:${o.kind}`));
+      }
+    } catch (err) {
+      tally.outcomes.push(`${row.seal_subscription_id}:error`);
+      console.error("[charge-now-recovery] repaso: fila con error", {
+        id: row.id,
+        msg: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   return tally;

@@ -1,6 +1,6 @@
 import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
-import { claimChargeNowIntent, recordChargeNowIntent } from "@/lib/charge-now-recovery";
+import { claimChargeNowIntent, hasOpenChargeNowIntent, recordChargeNowIntent } from "@/lib/charge-now-recovery";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -9,6 +9,7 @@ import {
   isChargeAlreadyScheduledError,
   normalizeFrequency,
   seal,
+  SealApiError,
   type SealSubscription,
 } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -86,6 +87,18 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     throw new ApiHttpError(400, "cutoff_passed", "Next order already ships within 24h");
   }
 
+  // Un Adelantar de esta sub aún en curso (2026-10-14): o se está cobrando, o la
+  // tarjeta lo acaba de rechazar y el webhook lo está rescatando, o Seal no
+  // contestó y aún no sabemos si cobró. Lanzar otro encima puede cobrar dos
+  // veces. Antes del lock a propósito: aquí aún no hay nada que soltar.
+  if (await hasOpenChargeNowIntent(String(sub.id))) {
+    throw new ApiHttpError(
+      409,
+      "charge_already_scheduled",
+      "A charge for this subscription is already being processed. Try again in a few minutes.",
+    );
+  }
+
   // Idempotency mutex: acquire a per-subscription lock BEFORE calling Seal so
   // two near-simultaneous charge-now requests can't both reach Seal and
   // double-charge. FAIL-OPEN — any lock-infra error just proceeds (Seal's own
@@ -142,15 +155,40 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
   try {
     await seal.chargeNow(sub.id, { resetSchedule: true });
   } catch (err) {
-    // Rechazo SÍNCRONO: lo arregla este catch, como antes. Se marca la fila
-    // primero para que el rescate asíncrono no mueva el mismo calendario a la vez;
-    // si el webhook ya la había reclamado, decide él y aquí no se toca.
     const alreadyScheduled = isChargeAlreadyScheduledError(err);
-    let syncOwned = true;
-    if (intentId !== null) {
+    // Solo un rechazo EXPLÍCITO de Seal (success:false, o un 4xx) dice que el
+    // cobro no ha entrado. Un timeout o un 5xx no lo dice: Seal puede haber
+    // cobrado y contestado tarde, y devolver entonces la fecha de antes le
+    // cobraría dos veces (hoy y en esa fecha). En ese caso no se toca nada aquí:
+    // la fila sigue «requested» y deciden el webhook de Seal o el cron con lo que
+    // diga Seal (revisión adversarial, 14-oct). Antes del 14-oct este catch
+    // devolvía la fecha con CUALQUIER error.
+    const explicitRejection = err instanceof SealApiError && err.status >= 200 && err.status < 500;
+    let syncOwned = explicitRejection;
+    if (explicitRejection && intentId !== null) {
+      // Se marca la fila antes de mover nada, para que el rescate asíncrono no
+      // mueva el mismo calendario a la vez; si el webhook ya la había reclamado,
+      // decide él y aquí no se toca.
       syncOwned = await claimChargeNowIntent(intentId, alreadyScheduled ? "superseded" : "sync_failed").catch(
         () => true,
       );
+    }
+    if (!explicitRejection) {
+      console.warn("[charge-now] respuesta ambigua de Seal; el calendario lo decide el rescate asíncrono", {
+        sealSubscriptionId: sub.id,
+        msg: err instanceof Error ? err.message : String(err),
+      });
+      if (intentId === null) {
+        // Sin fila no hay rescate asíncrono: que lo mire una persona.
+        alertSlackError({
+          path: "/api/subscription/charge-now",
+          code: "charge_now_ambiguous_no_intent",
+          msg:
+            `sub ${sub.id}: Seal no contestó claro al Adelantar y no se pudo guardar la fila de ` +
+            `rescate. Mirar en Seal si cobró; si no, el próximo cobro puede haberse ido un ciclo.`,
+          customerId: ctx.customerId,
+        });
+      }
     }
     // El cobro no ha entrado, pero el calendario YA está reanclado. Devolverlo a su
     // sitio antes de propagar el error: pullCadenceBackTo solo mueve hacia atrás y

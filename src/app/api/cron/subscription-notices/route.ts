@@ -3,6 +3,7 @@ import { alertSlackErrorAwaited } from "@/lib/alert";
 import { runCancelNotices } from "@/lib/cancel-notice";
 import { sweepChargeNowAttempts } from "@/lib/charge-now-recovery";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
+import { runAsBackgroundJob } from "@/lib/http-timeout";
 
 /**
  * GET /apps/portal/api/cron/subscription-notices
@@ -32,9 +33,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
   const dryRun = req.nextUrl.searchParams.get("dry_run") === "1";
 
+  // runAsBackgroundJob: sin proxy esperando al otro lado, los clientes de Seal
+  // usan su plazo largo y no el de 6 s de las rutas del portal.
   let chargeNow: unknown;
   try {
-    chargeNow = await sweepChargeNowAttempts({ dryRun });
+    chargeNow = await runAsBackgroundJob(() => sweepChargeNowAttempts({ dryRun }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     chargeNow = { error: msg };
@@ -47,7 +50,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   let cancels: unknown;
   try {
-    cancels = await runCancelNotices({ dryRun });
+    cancels = await runAsBackgroundJob(() => runCancelNotices({ dryRun }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     cancels = { error: msg };
