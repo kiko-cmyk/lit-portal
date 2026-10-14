@@ -8,16 +8,13 @@ import { SignOutPill } from "@/components/SwitchAccount";
 import { LangMenu, LangToggle, useLang, useLangValue } from "@/lib/i18n";
 import { COLLECTION_ENABLED } from "@/lib/portal-link";
 import { activeRoute, portalHref, type PortalRoute } from "@/lib/portal-link";
-import type { ReactNode } from "react";
 
 /**
- * Bottom navigation — Phase 1 MVP has 3 slots: Hub / Collection / Account.
+ * Navegación del portal. En ESCRITORIO, la cápsula de la cabecera (TopNav). En
+ * móvil ya no hay barra fija abajo (Juan 2026-10-14): las mismas pestañas van en
+ * el menú de `MobileHeader`, como en litsalt.com.
  *
- * Collection is shown BLURRED in Phase 1 and is `inactive: true` — visible in
- * the nav so customers know it's coming but rendered as a muted, non-clickable
- * label with a "SOON" suffix. Drops + The World are NOT in Phase 1 nav.
- *
- * Per locked decision 2026-05-06 and refresh 2026-05-18.
+ * La Colección va oculta mientras la función no exista (COLLECTION_ENABLED).
  */
 const ITEMS: {
   route: PortalRoute;
@@ -38,119 +35,6 @@ const VISIBLE_ITEMS = ITEMS.filter(
   (it) => it.route !== "collection" || COLLECTION_ENABLED,
 );
 
-/** Line icons for the mobile bottom nav (20px, stroke = currentColor). */
-const NAV_ICONS: Record<string, ReactNode> = {
-  home: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 8l-9-5-9 5 9 5 9-5z" />
-      <path d="M3 8v8l9 5 9-5V8" />
-    </svg>
-  ),
-  account: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="8" r="4" />
-      <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
-    </svg>
-  ),
-  collection: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="4" width="7" height="7" rx="1.5" />
-      <rect x="13" y="4" width="7" height="7" rx="1.5" />
-      <rect x="4" y="13" width="7" height="7" rx="1.5" />
-      <rect x="13" y="13" width="7" height="7" rx="1.5" />
-    </svg>
-  ),
-};
-
-export function BottomNav() {
-  const pathname = usePathname();
-  const lang = useLangValue();
-  const t = useLang();
-  const { accountOnly, hasSubscription } = useSubscriptionSwitch();
-  // Match the active route against the user-visible slug in EITHER locale —
-  // usePathname returns the localized slug (mi-lit / cuenta / coleccion), not
-  // the canonical EN one, so a plain "=== canonical" check never matched for
-  // Spanish users and nothing was ever highlighted.
-  const current = activeRoute(pathname);
-  // Wholesale mode has a single destination, so there is nothing to navigate:
-  // the bar would be one tab pointing at the page you are already on. Dropped
-  // whole, and the header carries CERRAR SESIÓN instead (Juan 2026-07-29).
-  // Nobody gets stranded on the order detail: it has its own "← Cuenta" link.
-  if (accountOnly) return null;
-  return (
-    <nav
-      // fixed (not sticky) so it stays anchored to the bottom of the viewport
-      // even on short pages like the no-subscription state. Estilo PRE: icono
-      // por pestaña, activo en círculo amarillo (mismo lenguaje que la pastilla
-      // activa del header desktop).
-      // Opaca y hasta el borde de abajo, zona de la barra de inicio incluida
-      // (`--nav-pb`): Juan 2026-10-13, «que nada se vea detrás».
-      className={`fixed bottom-0 left-0 right-0 z-40 grid ${VISIBLE_ITEMS.length === 2 ? "grid-cols-2" : "grid-cols-3"} border-t border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-3.5 pt-1.5 pb-[var(--nav-pb)] md:hidden`}
-      aria-label="Primary"
-    >
-      {VISIBLE_ITEMS.map((it) => {
-        const active = current === it.route;
-        const icon = NAV_ICONS[it.route];
-        // Suscripción apagada para quien no tiene ninguna (Juan 2026-09-22).
-        // Mismo tratamiento que la Colección — gris y sin pulsar — pero SIN
-        // "Pronto": ahí no hay nada esperando a estrenarse, simplemente no es
-        // suya. Lo que la enciende es suscribirse, y de eso ya habla el banner
-        // de Cuenta.
-        const locked = it.route === "home" && !hasSubscription;
-        if (it.inactive || locked) {
-          return (
-            <span
-              key={it.route}
-              aria-disabled
-              className="flex cursor-not-allowed flex-col items-center justify-center gap-1 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[color:var(--color-warm-gray)]/50"
-              title={
-                it.inactive
-                  ? t({ en: "Coming soon", es: "Próximamente" })
-                  : t({
-                      en: "Subscribe to unlock",
-                      es: "Suscríbete para activarlo",
-                    })
-              }
-            >
-              <span className="flex h-8 w-8 items-center justify-center">{icon}</span>
-              <span className="flex items-center gap-1">
-                {t({ en: it.en, es: it.es })}
-                {it.inactive && (
-                  <span className="text-[7px] font-extrabold tracking-[0.18em] text-[color:var(--color-warm-gray)]/60">
-                    {t({ en: "Soon", es: "Pronto" })}
-                  </span>
-                )}
-              </span>
-            </span>
-          );
-        }
-        return (
-          <Link
-            key={it.route}
-            href={portalHref(lang, it.route)}
-            aria-current={active ? "page" : undefined}
-            className={`flex flex-col items-center justify-center gap-1 py-1 text-[9px] uppercase tracking-[0.12em] cursor-pointer transition-colors ${
-              active
-                ? "font-black text-[color:var(--color-lit-grey)]"
-                : "font-semibold text-[color:var(--color-warm-gray)]/55 hover:text-[color:var(--color-lit-grey)]"
-            }`}
-          >
-            <span
-              className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
-                active
-                  ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
-                  : "text-[color:var(--color-warm-gray)]/70"
-              }`}
-            >
-              {icon}
-            </span>
-            <span>{t({ en: it.en, es: it.es })}</span>
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
 
 /**
  * Top nav for desktop — shown only on md+. Logo on left, nav links horizontal.

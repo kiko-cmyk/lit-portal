@@ -2,13 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState, use } from "react";
-import { BottomNav, TopNav } from "@/components/BottomNav";
-import { CustomerChip } from "@/components/CustomerChip";
+import { TopNav } from "@/components/BottomNav";
+import { MobileHeader } from "@/components/MobileHeader";
 import { LoginScreen } from "@/components/LoginScreen";
-import { Logo } from "@/components/Logo";
-import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
-import { SubSwitchPill } from "@/components/SubSwitchPill";
-import { SignOutPill, SwitchAccountLink } from "@/components/SwitchAccount";
+import { SwitchAccountLink } from "@/components/SwitchAccount";
 import { api, ApiClientError } from "@/lib/api-client";
 import { T, useLang, useLangValue, usePageTitle } from "@/lib/i18n";
 import { portalHref } from "@/lib/portal-link";
@@ -317,34 +314,20 @@ function Frame({
   children: React.ReactNode;
   customer: CustomerProfile | null;
 }) {
-  const { accountOnly } = useSubscriptionSwitch();
   return (
     <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-[calc(1.25rem+var(--safe-top))] pb-3 backdrop-blur-md md:hidden">
-        <Logo />
-        {/* Multi-sub switch + min-w-0 overflow guard, mirroring the Hub and
-            Account mobile headers (audit 2026-07-08: the pill was missing
-            here, so a multi-sub customer on mobile couldn't switch subs from
-            the order detail). The Frame wraps loading/error/loaded alike, so
-            every state gets the same header. */}
-        <div className="flex min-w-0 items-center gap-2.5">
-          <SubSwitchPill />
-          {customer && <CustomerChip name={customer.name} />}
-          {/* Wholesale: same header as Cuenta, since the tab bar is gone there
-              too. Getting back is the "← Cuenta" link above the order number. */}
-          {accountOnly && <SignOutPill />}
-        </div>
-      </header>
+      {/* Cabecera móvil (Juan 2026-10-14): menú, logo e iniciales, como la de
+          litsalt.com. Fija: nunca se esconde al hacer scroll (Juan 2026-05-19). */}
+      <MobileHeader name={customer?.name} />
 
       <main
-        className={`flex-1 pt-[calc(88px+var(--safe-top))] ${accountOnly ? "pb-[calc(3rem+env(safe-area-inset-bottom,0px))]" : "pb-[calc(76px+var(--nav-pb))]"} md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12`}
+        className={`flex-1 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12`}
       >
         {children}
       </main>
 
-      <BottomNav />
     </div>
   );
 }

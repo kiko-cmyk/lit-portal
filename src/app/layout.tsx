@@ -31,7 +31,7 @@ const VERCEL_ORIGIN =
  * todo, que nada se vea detrás»). Sin él, en iPhone la barra fija de abajo se
  * queda por encima de la zona de la barra de inicio y por debajo asoma la
  * página. Con él la página llega al borde, y lo que va pegado a un borde se
- * aparta de las zonas seguras con `--safe-top` / `--nav-pb` (globals.css).
+ * aparta de las zonas seguras con `--safe-top` / `--safe-bottom` (globals.css).
  */
 export const viewport: Viewport = {
   width: "device-width",

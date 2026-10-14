@@ -27,7 +27,7 @@ import { portalHref } from "@/lib/portal-link";
  * exactly today's behaviour, so a failure here is never a regression.
  */
 
-function useSwitchAccount(): { busy: boolean; go: () => void } {
+export function useSwitchAccount(): { busy: boolean; go: () => void } {
   const lang = useLangValue();
   const [busy, setBusy] = useState(false);
 
