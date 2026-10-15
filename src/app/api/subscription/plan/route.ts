@@ -484,6 +484,12 @@ const patchPlan = async (
    * we get here, so we don't fail the request: we tell #incidents, because with
    * no intent nothing holds the schedule to the date the customer was shown.
    */
+  // La fecha que dejó guardada el armado tras el intervalo (fase 1, #148) y si ya avisó
+  // de que no pudo. Si la escritura final falla pero la fase 1 entró, la intención EXISTE:
+  // no hay que avisar de «nada sujeta la fecha» ni perder la fecha prometida. Y si la fase 1
+  // ya avisó, la final no repite el aviso en otro canal.
+  let intentArmedDate: string | null = null;
+  let intentUnarmedAlerted = false;
   async function recordReanchorIntent(preserveYYYYMMDD: string, phase: "verified" | "unverified"): Promise<string | null> {
     try {
       // Fuera del deadline si ya no queda presupuesto (#123, 2-oct): es la red del
@@ -497,7 +503,9 @@ const patchPlan = async (
       return preserveDate;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log("reanchor-intent-write-failed", { msg, phase, preserveYYYYMMDD, reanchorMode });
+      log("reanchor-intent-write-failed", { msg, phase, preserveYYYYMMDD, reanchorMode, armedBefore: intentArmedDate });
+      if (intentArmedDate) return intentArmedDate;
+      if (intentUnarmedAlerted) return null;
       after(() =>
         runWithoutRequestDeadline(() =>
           alertSlackNoticeAwaited({
@@ -1006,12 +1014,12 @@ const patchPlan = async (
   // later, so the fallback below keeps the date the customer already has: the
   // next charge never goes backwards.
   //
-  // The cycle we subtract is the LIVE one from Seal, not `currentFrequency`: on
-  // the fast path that comes from the FE's cached dashboard, and a stale tab is
-  // one cycle off. The bot moves a customer 2mo → 3mo (next 4-Nov) while their
-  // tab still says 2mo; they ask for 4mo; 4-Nov − 2mo + 4mo = 4-Jan, a full cycle
-  // late, instead of the 4-Dec a fresh screen shows. (Review of PR #122.) Narrow
-  // on purpose: the rest of the route keeps its existing frequency semantics.
+  // The cycle we subtract is the LIVE one from Seal. A stale tab is one cycle off:
+  // the bot moves a customer 2mo → 3mo (next 4-Nov) while their tab still says 2mo;
+  // they ask for 4mo; 4-Nov − 2mo + 4mo = 4-Jan, a full cycle late, instead of the
+  // 4-Dec a fresh screen shows. (Review of PR #122.) Since #148 `currentFrequency`
+  // itself is read from Seal on both paths, so `liveFrequency` and `currentFrequency`
+  // agree; what still signals a stale tab is the FE's `body.currentFrequency`.
   //
   // No pending attempt (Seal still regenerating after another change) means no
   // date to space from. Silently falling back to "preserve" would save the OLD
@@ -1021,8 +1029,10 @@ const patchPlan = async (
     ? normalizeFrequency(preMutationSub.delivery_interval)
     : currentFrequency;
   if (reanchorMode === "fromNext" && planChanged) {
-    if (liveFrequency !== currentFrequency) {
-      log("stale-current-frequency", { fromBody: currentFrequency, live: liveFrequency });
+    // Desde el #148 `currentFrequency` ya sale de Seal en las dos rutas, así que la señal de
+    // pestaña vieja es lo que mandó el FRONT (body.currentFrequency) frente a la viva.
+    if (body.currentFrequency && body.currentFrequency !== liveFrequency) {
+      log("stale-current-frequency", { fromBody: body.currentFrequency, live: liveFrequency });
     }
     if (!nextAttemptDate) {
       throw new ApiHttpError(
@@ -1304,11 +1314,13 @@ const patchPlan = async (
           writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD),
         );
         log("reanchor-intent-armed-after-interval", { preserveDate, reanchorMode, attempt });
+        intentArmedDate = preserveDate;
         return;
       } catch (e) {
         log("reanchor-intent-write-failed", { msg: String(e), attempt });
       }
     }
+    intentUnarmedAlerted = true;
     await alertSlackErrorAwaited({
       path: "/api/subscription/plan",
       code: `reanchor_intent_unarmed:${sealSubscriptionId}`,
@@ -2333,9 +2345,15 @@ const patchPlan = async (
   // Solo si cambió la frecuencia (14-oct-2026): sin cambio de intervalo Seal no regenera el
   // calendario y escribir aquí la fecha viva podía PISAR una intención pendiente de un cambio
   // anterior con la fecha ya adelantada.
+  // Lo que se promete es lo que de verdad queda guardado, igual que en la salida verificada:
+  // `writeReanchorIntent` nunca rebaja una pendiente (puede ser posterior), y si no se pudo
+  // guardar no se promete nada (el front recarga el estado real).
+  let unverifiedPromise: string | null | undefined = effectivePreserveYYYYMMDD;
   if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
-    if (await recordReanchorIntent(effectivePreserveYYYYMMDD, "unverified")) {
-      log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
+    const armedDate = await recordReanchorIntent(effectivePreserveYYYYMMDD, "unverified");
+    unverifiedPromise = armedDate;
+    if (armedDate) {
+      log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, armedDate, verifyOutcome });
     }
   }
   // No hemos podido leer Seal de vuelta (timeout, error o null), así que NO sabemos
@@ -2379,7 +2397,7 @@ const patchPlan = async (
     currentLines,
     expectedInterval,
     ctx.customerId,
-    effectivePreserveYYYYMMDD,
+    unverifiedPromise,
   );
   } // fin de applyPlanChange
 };
