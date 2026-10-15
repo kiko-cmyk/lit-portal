@@ -45,7 +45,19 @@ CSP failures are usually **silent** (white screen / `Refused to load …` in the
 
 ## (d) Feature-flag kill switch (cache-first reads, Lote 4)
 
-The cache-first subscription read is behind `SUBSCRIPTION_CACHE_FIRST` = `off` | `shadow` | `on`. To disable instantly **without a redeploy**: Vercel → Settings → Environment Variables → set `SUBSCRIPTION_CACHE_FIRST=off` → it takes effect on the next request. The code also falls back to the full Seal scan on any cache-path error, so the worst case is "slow", never "wrong".
+The cache-first subscription read is behind `SUBSCRIPTION_CACHE_FIRST` = `off` | `shadow` | `on`. To disable it: Vercel → Settings → Environment Variables → set `SUBSCRIPTION_CACHE_FIRST=off` → **Redeploy** the current production deployment. (Correction 2026-10-10: Vercel does NOT apply an env change to existing deployments, so "takes effect on the next request" was wrong. A redeploy without a code change is enough, and takes a couple of minutes.) The code also falls back to the full Seal scan on any cache-path error, so the worst case is "slow", never "wrong".
+
+## (e) Referidos «Trae a alguien» (fase 0, 2026-10-10)
+
+From fastest to heaviest. None of them loses a reward that was already earned.
+
+1. **Friend side, instant, no deploy:** Shopify admin → Discounts → «Referidos · Amigo 10 €» → set an end date of *now*. Every personal code stops working at checkout at once. Do NOT delete the discount: the codes hang from it.
+2. **Hide the card / stop issuing codes:** `REFERRALS=off` + Redeploy. Orders that still arrive with a code keep being recorded and qualified (their friend already got the 10 €).
+3. **Stop applying rewards in Seal:** `REFERRAL_REWARDS=off` + Redeploy. Queued rewards wait; consuming, detaching and revoking keep running, so nothing already applied is left behind.
+4. **Emergency, a reward is discounting wrong:** first `REFERRAL_REWARDS=off` + Redeploy (otherwise the next daily pass re-applies), then `npx tsx scripts/referral-admin.ts detach-all --apply` removes every applied `LITREF-…` code from Seal and puts those rewards back in the queue. A code that is applied but not visible is marked `failed` instead of re-queued, for a human to check in Seal.
+5. **Reverting the code to a deploy before fase 0:** run step 4 FIRST. The old code does not know `LITREF` codes and would leave any applied one recurring on every charge.
+
+The migration is additive; leave the tables in place.
 
 ## After any restore — reconcile
 

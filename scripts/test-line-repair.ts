@@ -12,6 +12,7 @@
 import {
   classifyLineState,
   discountedItemIds,
+  planDiscountForRemoval,
   planLineRepair,
   sealWriteDefinitelyRejected,
   snapshotAsTargets,
@@ -39,6 +40,8 @@ const SL30 = "63887092154717";
 const W30 = "63887092459165";
 const P30 = "65046790537565";
 const PACK4_4L = "65636234625373";
+const PACK4_1L2W1P = "65753050775901";
+const PACK4_1L3W = "65636234723677";
 
 const line = (itemId: number, variantId: string, quantity: number, unitPrice: string, boxes = quantity): SubscriptionLine => ({
   itemId,
@@ -136,6 +139,89 @@ const target = (variantId: string, quantity: number, unitPriceCents: number, box
   } as unknown as SealSubscription;
   eq(discountedItemIds(sub, [29545587]), [29545587], "14345379: la línea a quitar lleva descuento");
   eq(discountedItemIds({ items: [{ id: 1 }] } as unknown as SealSubscription, [1]), [], "sin descuento no se marca");
+}
+
+// ── 15950195 (7-oct): add sin remove con LITSTAY15 en las dos líneas ──────────────
+// La ruta repone el 15% antes de pasar el caso al cron y Seal lo enseña en TODAS las
+// líneas. Hasta el 8-oct el cron se negaba a quitar la vieja (72 intentos, caducada).
+{
+  const snapshot = [line(32286784, PACK4_1L2W1P, 1, "85.05", 4)];
+  const desired = [target(PACK4_1L3W, 1, 8505, 4)];
+  const live = [snapshot[0], line(33532774, PACK4_1L3W, 1, "85.05", 4)];
+  const plan = planLineRepair(live, snapshot, desired);
+  eq(plan.kind, "converge", "15950195: converge");
+  if (plan.kind === "converge") {
+    eq(plan.towards, "target", "15950195: se queda con lo que pidió (1L3W)");
+    eq(plan.removes, [32286784], "15950195: quita el pack viejo");
+    eq(plan.edits, [], "15950195: sin edits");
+  }
+  const STAY = { id: "faf45e5d-72d3-4d07-baf8-0fd8edb2288e", code: "LITSTAY15" };
+  const sub = {
+    items: [
+      { id: 32286784, discount_codes: [STAY] },
+      { id: 33532774, discount_codes: [STAY] },
+    ],
+  } as unknown as SealSubscription;
+  const RET = { kind: "retention" as const, code: "LITSTAY15" };
+  eq(
+    planDiscountForRemoval(sub, [32286784], [RET]),
+    { kind: "tracked", codes: [{ kind: "retention", code: "LITSTAY15", ids: [STAY.id] }] },
+    "15950195: el 15% que seguimos se suelta y se repone",
+  );
+  eq(
+    planDiscountForRemoval(sub, [32286784], [{ kind: "retention", code: "litstay15 " }]).kind,
+    "tracked",
+    "el código se compara sin mayúsculas ni espacios",
+  );
+  eq(
+    planDiscountForRemoval(sub, [32286784], []),
+    { kind: "foreign", itemIds: [32286784] },
+    "sin fila de retención viva: para una persona",
+  );
+  eq(
+    planDiscountForRemoval(sub, [32286784], [{ kind: "retention", code: "WELCOME10" }]).kind,
+    "foreign",
+    "el código de la línea no es el que seguimos: para una persona",
+  );
+  const twoCodes = {
+    items: [{ id: 1, discount_codes: [STAY, { id: "x", code: "OTRO" }] }, { id: 2, discount_codes: [STAY] }],
+  } as unknown as SealSubscription;
+  eq(planDiscountForRemoval(twoCodes, [1], [RET]).kind, "foreign", "la retención y otro código juntos: para una persona");
+  const noUuid = { items: [{ id: 1, discount_codes: [{ code: "LITSTAY15" }] }] } as unknown as SealSubscription;
+  eq(planDiscountForRemoval(noUuid, [1], [RET]).kind, "foreign", "sin UUID no se puede soltar: para una persona");
+  eq(
+    planDiscountForRemoval({ items: [{ id: 1 }, { id: 2, discount_codes: [STAY] }] } as unknown as SealSubscription, [1], [RET]),
+    { kind: "clear" },
+    "la línea a quitar no lleva código: se quita sin más",
+  );
+
+  // Crédito Discovery de la primera renovación (9-oct-2026): mismo trato que el 15%.
+  const DS = { id: "95fe36c7-775a-46f2-be11-588b19f5ff0d", code: "LIT-M6653GZE" };
+  const DIS = { kind: "discovery" as const, code: "LIT-M6653GZE" };
+  const dsSub = {
+    items: [{ id: 1, discount_codes: [DS] }, { id: 2, discount_codes: [DS] }],
+  } as unknown as SealSubscription;
+  eq(
+    planDiscountForRemoval(dsSub, [1], [DIS]),
+    { kind: "tracked", codes: [{ kind: "discovery", code: "LIT-M6653GZE", ids: [DS.id] }] },
+    "crédito Discovery seguido: se suelta y se repone (ya no deja la reparación parada)",
+  );
+  const both = {
+    items: [{ id: 1, discount_codes: [STAY, DS] }, { id: 2, discount_codes: [STAY, DS] }],
+  } as unknown as SealSubscription;
+  const bothPlan = planDiscountForRemoval(both, [1], [RET, DIS]);
+  eq(bothPlan.kind, "tracked", "15% y Discovery juntos, los dos seguidos: se sueltan los dos");
+  eq(
+    bothPlan.kind === "tracked" ? bothPlan.codes.map((c) => c.kind).sort() : [],
+    ["discovery", "retention"],
+    "y se reponen los dos, cada uno con su lógica",
+  );
+  eq(planDiscountForRemoval(both, [1], [RET]).kind, "foreign", "si el Discovery no está seguido (sin fila viva): para una persona");
+  eq(
+    planDiscountForRemoval({ items: [{ id: 1, discount_codes: [DS, { id: "x", code: "OTRO" }] }] } as unknown as SealSubscription, [1], [DIS]).kind,
+    "foreign",
+    "Discovery y otro código juntos: para una persona",
+  );
 }
 
 // ── 13416998 (1-oct): el remove entró aunque la ruta lo dio por fallido ──────────

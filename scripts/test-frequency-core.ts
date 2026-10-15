@@ -41,7 +41,8 @@ import {
   writeReanchorIntent,
 } from "@/lib/frequency-core";
 import { longerFrequencies } from "@/lib/plan-options";
-import type { SealSubscription } from "@/lib/seal";
+import { SealApiError, type SealSubscription } from "@/lib/seal";
+import { UpstreamTimeoutError } from "@/lib/http-timeout";
 import type { Frequency } from "@/lib/types";
 
 let failures = 0;
@@ -106,6 +107,9 @@ function day(offsetDays: number): string {
 
 function fakeDeps(o: {
   editFails?: number;
+  /** Cómo falla el edit: un NO explícito de Seal (por defecto) o un timeout nuestro, que no
+   *  dice si entró (14-oct-2026). */
+  editError?: "rejected" | "timeout";
   readBack?: FrequencyChangeDeps["readBack"];
   intentFails?: boolean;
 } = {}) {
@@ -116,7 +120,8 @@ function fakeDeps(o: {
       calls.edits.push(edits);
       if (editFails > 0) {
         editFails--;
-        throw new Error("Seal edit rejected: busy");
+        if (o.editError === "timeout") throw new UpstreamTimeoutError("seal", "/subscription", 6000);
+        throw new SealApiError(200, "Seal edit rejected: busy");
       }
     },
     readBack: o.readBack ?? (async () => sub({ delivery_interval: "2 months" })),
@@ -191,6 +196,19 @@ const run = async () => {
     const { deps, calls } = fakeDeps({ editFails: 2 });
     await rejects("dos fallos del edit son frequency_change_failed", changeFrequencyOnly(base, deps), "frequency_change_failed");
     check("y no se escribe intención ni se da por verificado", calls.intents.length === 0 && calls.audits.join(",") === "intent,edit_failed", calls.audits.join(","));
+  }
+
+  // Un timeout NO es "no se ha tocado nada" (14-oct-2026): se mira antes de decidir.
+  {
+    const { deps, calls } = fakeDeps({ editFails: 2, editError: "timeout", readBack: async () => sub({ delivery_interval: "45 days" }) });
+    await rejects("dos timeouts y Seal sigue con la vieja: frequency_unverified", changeFrequencyOnly(base, deps), "frequency_unverified");
+    check("y sin intención (podría mover la fecha de un cambio que no entró)", calls.intents.length === 0 && calls.audits.join(",") === "intent,edit_unknown", calls.audits.join(","));
+  }
+  {
+    const { deps, calls } = fakeDeps({ editFails: 2, editError: "timeout" });
+    const r = await changeFrequencyOnly(base, deps);
+    check("dos timeouts pero Seal ya enseña la nueva: el cambio está hecho", r.changed && r.frequency === "2mo");
+    check("y la fecha se protege igual", calls.intents.length === 1 && r.reanchor === "intent_written", `${calls.intents.length} ${r.reanchor}`);
   }
 
   {
@@ -353,29 +371,74 @@ const run = async () => {
   // `fetchDeadline`. Si `writeReanchorIntent` no lo mira, el `502
   // reanchor_intent_failed` del bot no salta nunca y el plan route promete la fecha
   // sin nada que la sujete.
-  const fakeDb = (error: { message: string } | null) => {
+  // La forma real de la llamada: primero LEE la intención pendiente (`select … eq … eq …
+  // eq … maybeSingle`, #148) y después hace el upsert. El doble responde a las dos.
+  const fakeDb = (o: {
+    error?: { message: string } | null;
+    readError?: { message: string } | null;
+    pending?: string | null;
+  } = {}) => {
     const upserts: Record<string, unknown>[] = [];
+    const filters: Array<[string, unknown]> = [];
     const db = {
-      from: (table: string) => ({
-        upsert: async (row: Record<string, unknown>) => {
-          upserts.push({ table, ...row });
-          return { error };
-        },
-      }),
+      from: (table: string) => {
+        const query = {
+          select: () => query,
+          eq: (col: string, val: unknown) => {
+            filters.push([col, val]);
+            return query;
+          },
+          maybeSingle: async () => ({
+            data: o.pending ? { preserve_date: o.pending } : null,
+            error: o.readError ?? null,
+          }),
+          upsert: async (row: Record<string, unknown>) => {
+            upserts.push({ table, ...row });
+            return { error: o.error ?? null };
+          },
+        };
+        return query;
+      },
     } as unknown as Parameters<typeof writeReanchorIntent>[3];
-    return { db, upserts };
+    return { db, upserts, filters };
   };
   {
-    const { db, upserts } = fakeDb(null);
-    await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    const { db, upserts, filters } = fakeDb();
+    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
     check(
       "writeReanchorIntent escribe la fila pendiente con la fecha",
       upserts.length === 1 && upserts[0].table === "subscription_reanchor_intents" &&
-        upserts[0].preserve_date === "2026-11-04" && upserts[0].status === "pending",
+        upserts[0].preserve_date === "2026-11-04" && upserts[0].status === "pending" &&
+        r.preserveDate === "2026-11-04",
+    );
+    check(
+      "y antes busca SOLO la pendiente de ese cliente y esa sub",
+      JSON.stringify(filters) ===
+        JSON.stringify([["customer_id", "27136755892573"], ["seal_subscription_id", "12320700"], ["status", "pending"]]),
+      JSON.stringify(filters),
     );
   }
   {
-    const { db } = fakeDb({ message: "AbortError: fetch deadline exceeded" });
+    // #148: una intención pendiente solo empuja hacia delante. Si ya hay una POSTERIOR,
+    // se queda la posterior, y es la que se devuelve para prometerla.
+    const { db, upserts } = fakeDb({ pending: "2026-12-04" });
+    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    check(
+      "nunca rebaja una pendiente posterior, y devuelve la que queda guardada",
+      upserts[0].preserve_date === "2026-12-04" && r.preserveDate === "2026-12-04",
+      `${upserts[0].preserve_date} / ${r.preserveDate}`,
+    );
+  }
+  {
+    const { db, upserts } = fakeDb({ pending: "2026-10-20" });
+    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    check(
+      "una pendiente ANTERIOR la pisa la nueva",
+      upserts[0].preserve_date === "2026-11-04" && r.preserveDate === "2026-11-04",
+    );
+  }
+  {
+    const { db } = fakeDb({ error: { message: "AbortError: fetch deadline exceeded" } });
     let lanzo = false;
     try {
       await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
@@ -383,6 +446,16 @@ const run = async () => {
       lanzo = String(err).includes("fetch deadline exceeded");
     }
     check("writeReanchorIntent LANZA cuando Supabase devuelve { error } (antes se lo tragaba)", lanzo);
+  }
+  {
+    const { db, upserts } = fakeDb({ readError: { message: "connection reset" } });
+    let lanzo = false;
+    try {
+      await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    } catch (err) {
+      lanzo = String(err).includes("connection reset");
+    }
+    check("y también LANZA si no puede leer la pendiente, sin escribir a ciegas", lanzo && upserts.length === 0);
   }
 
   if (failures) {

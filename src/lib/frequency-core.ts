@@ -35,6 +35,8 @@
 import { ApiHttpError } from "@/lib/api-helpers";
 import { spacedFromNext } from "@/lib/cadence";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { runWithoutRequestDeadline } from "@/lib/http-timeout";
+import { sealWriteDefinitelyRejected } from "@/lib/line-repair";
 import { FREQUENCY_DAYS, longerFrequencies } from "@/lib/plan-options";
 import {
   getNextBillingAttempt,
@@ -175,13 +177,19 @@ export function assertLonger(current: Frequency, target: Frequency): void {
  * rematen el trabajo cuando Seal termine de regenerar el calendario. Una intención
  * viva por (cliente, suscripción); la siguiente la sobrescribe.
  *
- * LANZA si no se ha escrito. supabase-js no lanza por sí solo: devuelve `{ error }`,
- * también cuando salta el timeout de `fetchDeadline`. Hasta el 2026-10-05 este
+ * LANZA si no se ha guardado. supabase-js no lanza por sí solo: devuelve `{ error }`,
+ * también cuando salta el timeout de `fetchDeadline`. Hasta octubre de 2026 este
  * `error` no se miraba, así que una intención que no se escribía pasaba por escrita:
  * el plan route anotaba `reanchor-intent-recorded` y devolvía la fecha como hecha, y
  * el `502 reanchor_intent_failed` de la ruta del bot no podía saltar nunca (revisión
- * de Kiko del PR #122). Con `fromNext` la intención es lo único que sujeta la fecha
- * prometida, así que quien llama TIENE que enterarse.
+ * de Kiko del PR #122; arreglado en paralelo en el #148). Con `fromNext` la intención
+ * es lo único que sujeta la fecha prometida, así que quien llama TIENE que enterarse.
+ *
+ * NUNCA REBAJA una fecha prometida que siga pendiente (14-oct-2026). La fecha a
+ * conservar sale del primer cobro VIVO de Seal; si el cliente vuelve a cambiar el plan
+ * entre la regeneración y el re-anclaje, ese cobro vivo ya es el adelantado, y la
+ * intención nueva pisaba la buena con él. Una intención pendiente solo empuja hacia
+ * delante, así que la fecha que vale es la mayor de las dos, y es la que se devuelve.
  *
  * `db` solo existe para los tests.
  */
@@ -190,7 +198,18 @@ export async function writeReanchorIntent(
   sealSubscriptionId: number,
   preserveYYYYMMDD: string,
   db: Pick<ReturnType<typeof supabaseAdmin>, "from"> = supabaseAdmin(),
-): Promise<void> {
+): Promise<{ preserveDate: string }> {
+  const { data: existing, error: readErr } = await db
+    .from("subscription_reanchor_intents")
+    .select("preserve_date")
+    .eq("customer_id", customerId)
+    .eq("seal_subscription_id", String(sealSubscriptionId))
+    .eq("status", "pending")
+    .maybeSingle();
+  if (readErr) throw new Error(`reanchor intent read failed for sub ${sealSubscriptionId}: ${readErr.message}`);
+  const pendingDate = existing?.preserve_date ? String(existing.preserve_date).slice(0, 10) : null;
+  const preserveDate = pendingDate && pendingDate > preserveYYYYMMDD ? pendingDate : preserveYYYYMMDD;
+
   const nowIso = new Date().toISOString();
   const { error } = await db
     .from("subscription_reanchor_intents")
@@ -198,7 +217,7 @@ export async function writeReanchorIntent(
       {
         customer_id: customerId,
         seal_subscription_id: String(sealSubscriptionId),
-        preserve_date: preserveYYYYMMDD,
+        preserve_date: preserveDate,
         status: "pending",
         attempts: 0,
         created_at: nowIso,
@@ -209,8 +228,38 @@ export async function writeReanchorIntent(
       { onConflict: "customer_id,seal_subscription_id" },
     );
   if (error) {
-    throw new Error(`reanchor intent not written for sub ${sealSubscriptionId} → ${preserveYYYYMMDD}: ${error.message}`);
+    throw new Error(`reanchor intent not written for sub ${sealSubscriptionId} → ${preserveDate}: ${error.message}`);
   }
+  return { preserveDate };
+}
+
+/** Cuánto tiene que vivir una intención antes de dar por bueno "el primer cobro ya está
+ *  justo en la fecha prometida". Ver `reanchorConverged`. */
+export const REANCHOR_SETTLE_MS = 5 * 60_000;
+
+/**
+ * ¿Ha convergido el re-anclaje? Lo usan los tres que lo aplican (webhook de Seal,
+ * `hub/dashboard` y `reanchor-drain`), para que decidan lo mismo.
+ *
+ * Por qué no basta `primer cobro >= fecha prometida` (14-oct-2026): la fecha prometida
+ * ES el primer cobro del calendario VIEJO. Una lectura de Seal atrasada, tomada justo
+ * después del cambio de intervalo y antes de que Seal borre y regenere, cumple la
+ * condición al milímetro, y la intención se borraba antes de la regeneración, que luego
+ * adelantaba el cobro sin nadie que lo corrigiera. Así que la igualdad exacta solo cuenta
+ * cuando la intención ya tiene unos minutos: para entonces Seal ha regenerado (30 s a
+ * 4,5 min, medido en la sub de prueba) y una igualdad es de verdad nuestro re-anclaje.
+ * Esperar de más no cuesta nada: mientras tanto el Hub ya enseña la fecha prometida.
+ */
+export function reanchorConverged(
+  firstPendingYYYYMMDD: string,
+  preserveYYYYMMDD: string,
+  intentCreatedAtIso: string | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (firstPendingYYYYMMDD > preserveYYYYMMDD) return true;
+  if (firstPendingYYYYMMDD < preserveYYYYMMDD) return false;
+  const created = intentCreatedAtIso ? new Date(intentCreatedAtIso).getTime() : NaN;
+  return Number.isFinite(created) && now - created >= REANCHOR_SETTLE_MS;
 }
 
 export interface FrequencyAuditRow {
@@ -242,7 +291,7 @@ export interface FrequencyChangeDeps {
   editSubscription: (id: number, edits: Record<string, unknown>) => Promise<void>;
   readBack: (id: number, signal: AbortSignal) => Promise<SealSubscription | null>;
   writeAudit: (row: FrequencyAuditRow) => Promise<void>;
-  writeReanchorIntent: (customerId: string, id: number, preserveYYYYMMDD: string) => Promise<void>;
+  writeReanchorIntent: (customerId: string, id: number, preserveYYYYMMDD: string) => Promise<unknown>;
   sleep: (ms: number) => Promise<void>;
 }
 
@@ -251,7 +300,11 @@ export function defaultFrequencyChangeDeps(): FrequencyChangeDeps {
     editSubscription: (id, edits) => seal.editSubscription(id, edits),
     readBack: (id, signal) => seal.getSubscriptionById(id, signal),
     writeAudit: writeFrequencyAudit,
-    writeReanchorIntent,
+    // Fuera del deadline de la petición (14-oct-2026): se escribe al final, cuando el
+    // presupuesto puede estar gastado, y desde que `writeReanchorIntent` lanza ante un fallo,
+    // una escritura cortada a 0 ms hacía fallar un cambio de frecuencia que sí había entrado.
+    writeReanchorIntent: (customerId, id, preserve) =>
+      runWithoutRequestDeadline(() => writeReanchorIntent(customerId, id, preserve)),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }
@@ -384,10 +437,25 @@ export async function changeFrequencyOnly(
       log("seal-edit-interval-ok", { interval: expectedInterval, attempt: 2 });
     } catch (e2) {
       const msg = e2 instanceof Error ? e2.message : String(e2);
-      log("seal-edit-interval-failed-twice", { msg });
-      await audit("edit_failed");
-      // Nada más se ha tocado: la suscripción sigue como estaba.
-      throw new ApiHttpError(502, "frequency_change_failed", `Frequency change rejected by Seal: ${msg}`);
+      log("seal-edit-interval-failed-twice", { msg, rejected: sealWriteDefinitelyRejected(e2) });
+      if (sealWriteDefinitelyRejected(e2)) {
+        await audit("edit_failed");
+        // Seal dijo que no: nada más se ha tocado, la suscripción sigue como estaba.
+        throw new ApiHttpError(502, "frequency_change_failed", `Frequency change rejected by Seal: ${msg}`);
+      }
+      // UN TIMEOUT NO ES "NO SE HA TOCADO NADA" (14-oct-2026). Seal sigue procesando aunque
+      // cortemos, y si el intervalo entró, Seal regenera el calendario sin nadie que conserve
+      // la fecha prometida: el cobro se adelanta. Se mira antes de decidir.
+      const seen = await deps.readBack(id, AbortSignal.timeout(6_000)).catch(() => null);
+      if (!seen || normalizeFrequency(seen.delivery_interval) !== target) {
+        await audit("edit_unknown");
+        throw new ApiHttpError(
+          502,
+          "frequency_unverified",
+          `Frequency change outcome unknown (${msg}); Seal does not show it yet`,
+        );
+      }
+      log("seal-edit-interval-landed-anyway", { interval: seen.delivery_interval });
     }
   }
 

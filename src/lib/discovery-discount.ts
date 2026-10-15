@@ -7,42 +7,24 @@
  * cumple. Se emite desde el webhook `orders/paid` (ver el webhook de Shopify),
  * no desde una sesión de cliente.
  *
- * Es el gemelo de `survey-discount.ts` y comparte con él la colección, el
- * formato de código y casi toda la configuración. Lo que cambia, y por qué:
+ * Desde el 2026-10-14 cada código va DENTRO del descuento padre «Cupón
+ * Discovery Set · 4,99€», no como un descuento suelto por cliente (Juan: ordenar
+ * el admin como los de referidos). El padre pone el importe, la colección, el
+ * «solo primer cobro», el «una vez por cliente», el código suelto sin segmento
+ * de clientes y, sobre todo, `appliesOnOneTimePurchase: false`: la diferencia
+ * con el del perfilado que sostiene la campaña entera (si valiera en compra
+ * única, el cliente se lo gastaría en un one-shot y no convertiría a nadie). La
+ * caducidad y el «un solo uso» los lleva el portal. Ver `lib/coupon-parent.ts`.
  *
- *   - 4,99 € en vez de 5,00 €: es el precio exacto del Discovery Set, porque
- *     esto es una devolución, no un descuento redondo.
- *   - `appliesOnOneTimePurchase: FALSE`. Ver abajo, es la diferencia que
- *     sostiene la campaña entera.
- *   - El título lleva el prefijo `Discovery`, que es por donde los busca (o los
- *     buscará) el cron de limpieza.
- *
- * ── El aviso que nos ahorra un mes de depuración (Kiko) ──
- *
- * `customerSelection: { all: true }`, NUNCA un segmento de clientes. Restringir
- * por cliente es lo que dejó los cupones de GoAffPro con CERO redenciones
- * durante meses sin un solo error en ningún log: Shopify rechaza el código de
- * quien paga sin estar logueado, y entre compradores antiguos ese grupo es
- * enorme. Aquí el riesgo es todavía mayor que en el perfilado: quien compra el
- * Discovery Set es, por definición, alguien que aún no es cliente de caja y que
- * muy probablemente pagó como invitado.
- *
- * El código va suelto y la unicidad la garantizamos NOSOTROS: se emite una vez
- * por cliente y se guarda en `discovery_set_coupons`, cuya PK es el cliente.
- *
- * DEUDA CONOCIDA: `customerSelection` está deprecado y Shopify pide `context`.
- * No se migra aquí a propósito, por lo mismo que no se migra en el perfilado:
- * es EXACTAMENTE el campo que dejó los cupones de GoAffPro sin canjear durante
- * meses, y cambiarlo de paso, en el commit que estrena otra campaña, es cómo se
- * repite esa historia. Cuando toque, se migra solo y se verifica con un
- * checkout real sin sesión.
+ * La unicidad la garantizamos NOSOTROS: se emite una vez por cliente y se
+ * guarda en `discovery_set_coupons`, cuya PK es el cliente.
  */
 
-import { shopifyAdmin } from "@/lib/shopify-admin";
+import { addCouponCode, DISCOVERY_COUPON_PARENT_GID } from "@/lib/coupon-parent";
 
 /**
- * El precio del Discovery Set, que es lo que se devuelve. En euros porque la
- * mutación toma un decimal, no céntimos.
+ * El precio del Discovery Set, que es lo que se devuelve. En euros y en texto,
+ * como lo toma Shopify: con este importe se creó el descuento padre.
  *
  * Si algún día cambia el precio del Set, cambia aquí y en Shopify: el importe
  * viaja al email como propiedad del evento (`discount_value`), así que no hay
@@ -58,29 +40,22 @@ export const DISCOVERY_DISCOUNT_VALUE_EUR = Number(DISCOUNT_AMOUNT_EUR);
 export const DISCOVERY_DISCOUNT_DAYS = 30;
 
 /**
- * Colección "Cupones - solo cajas LIT (tecnica, no publicar)", la MISMA que usa
- * el cupón del perfilado.
+ * Las dos promesas del Discovery Set (columna `mode` de `discovery_set_coupons`):
  *
- * Automática por título (contiene "Daily Hydration" o "Hydration Pack"), así
- * que son las 10 cajas: 4 sabores × suscripción y compra única, más los dos
- * packs de 4. Lo que importa aquí es lo que deja FUERA: el propio Discovery
- * Set, que no está en la colección, así que el cupón no puede gastarse en otro
- * Discovery Set. También quedan fuera botella, calcetines, hoodie y wholesale.
- *
- * Contiene los "- Compra única", pero no es un agujero: con
- * `appliesOnOneTimePurchase: false` el descuento no aplica sobre ellos de todas
- * formas. Mantener una segunda colección casi idéntica costaría más de lo que
- * aporta y sería una cosa más que se desincroniza cuando entre un sabor nuevo.
- *
- * Verificado contra Shopify el 2026-09-24: 10 productos, los esperados, sin
- * Discovery Set.
+ *   - "checkout": la de siempre. Código por email, válido 30 días, que el cliente
+ *     canjea él en el checkout de una suscripción nueva.
+ *   - "renewal": compró el Set Y una suscripción en el MISMO pedido (decisión de
+ *     Juan, 2026-10-09, tras el pedido #11724). El código no se le manda: el
+ *     portal lo aplica a esa suscripción en Seal y se descuenta de la primera
+ *     renovación. Ver `lib/discovery-renewal-credit.ts`.
  */
-const COUPON_COLLECTION_GID = "gid://shopify/Collection/726625812829";
+export type DiscoveryCouponMode = "checkout" | "renewal";
 
 export interface IssuedDiscount {
   code: string;
   issuedAt: string;
-  expiresAt: string;
+  /** null en modo "renewal": ese código no caduca (ver issueDiscoveryDiscount). */
+  expiresAt: string | null;
 }
 
 /**
@@ -102,86 +77,38 @@ function generateCode(): string {
 }
 
 /**
- * Crea el descuento en Shopify y devuelve el código.
+ * Da de alta el código DENTRO del descuento padre y lo devuelve.
  *
- * Lanza si Shopify falla o devuelve userErrors. El llamante (el webhook) lo
+ * Lanza si Shopify falla o no confirma el código. El llamante (el webhook) lo
  * captura, avisa por Slack y NO dispara el evento de Klaviyo: el primer email
  * lleva el código en el cuerpo, así que sin código el correo sale roto y es
  * peor que no mandarlo.
  */
-export async function issueDiscoveryDiscount(customerId: string): Promise<IssuedDiscount> {
+export async function issueDiscoveryDiscount(
+  customerId: string,
+  mode: DiscoveryCouponMode = "checkout",
+): Promise<IssuedDiscount> {
   const code = generateCode();
   const now = new Date();
-  const endsAt = new Date(now.getTime() + DISCOVERY_DISCOUNT_DAYS * 24 * 60 * 60 * 1000);
+  // En modo "renewal" el código NO caduca, y es a propósito. La primera
+  // renovación de una sub de 45 días, 2, 3 o 6 meses (o una con un skip) cae
+  // más allá de los 30 días: un código que se borrara a los 30 días no llegaría
+  // a ese cobro. No es un agujero: el código no se enseña a nadie, se borra en
+  // cuanto se usa y solo vale en cajas con suscripción. El cron solo lo quita
+  // cuando la renovación ya se ha cobrado o se ha anulado.
+  const endsAt =
+    mode === "renewal"
+      ? null
+      : new Date(now.getTime() + DISCOVERY_DISCOUNT_DAYS * 24 * 60 * 60 * 1000);
 
-  const data = await shopifyAdmin.graphql<{
-    discountCodeBasicCreate: {
-      codeDiscountNode: { id: string } | null;
-      userErrors: Array<{ field: string[] | null; message: string; code: string | null }>;
-    };
-  }>(
-    `mutation createDiscoveryDiscount($basicCodeDiscount: DiscountCodeBasicInput!) {
-      discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
-        codeDiscountNode { id }
-        userErrors { field message code }
-      }
-    }`,
-    {
-      basicCodeDiscount: {
-        // El título es lo que ve el equipo en el admin, y el prefijo `Discovery`
-        // es además el filtro por el que los encuentra el cron de limpieza.
-        // Lleva el customerId para poder reconciliar a mano un cupón con quien
-        // lo generó.
-        title: `Discovery ${code} (${customerId})`,
-        code,
-        startsAt: now.toISOString(),
-        endsAt: endsAt.toISOString(),
-        // Ver el docstring del módulo: NUNCA un segmento.
-        customerSelection: { all: true },
-        customerGets: {
-          value: { discountAmount: { amount: DISCOUNT_AMOUNT_EUR, appliesOnEachItem: false } },
-          items: { collections: { add: [COUPON_COLLECTION_GID] } },
-          // ── La diferencia con el cupón del perfilado, y es deliberada ──
-          //
-          // SOLO suscripción. El email promete devolver los 4,99 € "cuando
-          // pidas tu caja con envíos programados", y la campaña existe para
-          // convertir a quien probó el Set en suscriptor. Si el cupón valiera
-          // en compra única, el cliente se lo gastaría en un one-shot y la
-          // campaña no convertiría a nadie: habríamos regalado 4,99 € por una
-          // venta que ya iba a ocurrir.
-          appliesOnOneTimePurchase: false,
-          // FALSE por defecto en Shopify, así que va explícito. Omitirlo es lo
-          // que hizo rebotar los primeros cupones del perfilado con "no es
-          // válido para los artículos de tu carrito", y aquí sería fatal: con
-          // one-time ya en false, un `appliesOnSubscription` implícito dejaría
-          // un cupón que no sirve para NADA, en ningún carrito.
-          appliesOnSubscription: true,
-        },
-        // Solo el PRIMER cobro de la suscripción. Sin esto, 4,99 € menos en
-        // cada entrega para siempre, que convierte un cupón de captación en un
-        // descuento permanente sobre el ticket.
-        recurringCycleLimit: 1,
-        // Sin mínimo de compra: la colección ya lo resuelve, porque lo más
-        // barato que contiene son 28,35 €.
-        appliesOncePerCustomer: true,
-        usageLimit: 1,
-      },
-    },
-  );
-
-  const res = data.discountCodeBasicCreate;
-  if (res.userErrors?.length) {
-    throw new Error(
-      `discountCodeBasicCreate: ${res.userErrors.map((e) => `${e.code ?? ""} ${e.message}`).join("; ")}`,
-    );
-  }
-  if (!res.codeDiscountNode) {
-    throw new Error("discountCodeBasicCreate devolvió codeDiscountNode null sin userErrors");
-  }
+  // `customerId` ya no va en Shopify (antes iba en el título de cada descuento
+  // suelto): la reconciliación está en `discovery_set_coupons`.
+  void customerId;
+  await addCouponCode(DISCOVERY_COUPON_PARENT_GID, code);
 
   return {
     code,
     issuedAt: now.toISOString(),
-    expiresAt: endsAt.toISOString(),
+    expiresAt: endsAt ? endsAt.toISOString() : null,
   };
 }

@@ -66,3 +66,24 @@ export function frequencyLabel(
 export const FREQUENCY_OPTIONS: { value: Frequency; en: string; es: string }[] = (
   Object.entries(LABELS) as [Frequency, { en: string; es: string }][]
 ).map(([value, labels]) => ({ value, ...labels }));
+
+/**
+ * La frecuencia partida en cifra y unidad («5mo» → 5 meses, «45d» → 45 días),
+ * para las cifras del rediseño lp2 («5 · Meses entre envíos»).
+ */
+export function frequencyParts(f: Frequency): { n: number; unit: "days" | "months" } {
+  const m = /^(\d+)(d|mo)$/.exec(f);
+  if (!m) return { n: 1, unit: "months" };
+  return { n: Number(m[1]), unit: m[2] === "d" ? "days" : "months" };
+}
+
+/** «Meses entre envíos» / «Mes entre envíos» / «Días entre envíos». */
+export function frequencyBetweenLabel(f: Frequency, lang: Lang): string {
+  const { n, unit } = frequencyParts(f);
+  if (lang === "es") {
+    if (unit === "days") return "Días entre envíos";
+    return n === 1 ? "Mes entre envíos" : "Meses entre envíos";
+  }
+  if (unit === "days") return "Days between deliveries";
+  return n === 1 ? "Month between deliveries" : "Months between deliveries";
+}

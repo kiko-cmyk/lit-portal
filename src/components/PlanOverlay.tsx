@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
-import { T, useLang } from "@/lib/i18n";
+import { Lp2Sheet, SheetDoneMark, SheetTitle } from "@/components/Lp2Sheet";
+import { formatEuro } from "@/lib/format-price";
+import { T, useLang, useLangValue } from "@/lib/i18n";
 import { compositionLabel, resplitOnBoxChange } from "@/lib/mix";
 import { BOX_OPTIONS, FREQUENCIES } from "@/lib/plan-options";
 import { DEFAULT_FLAVOR, flavorKeyForVariant } from "@/lib/seal-plans";
@@ -54,6 +56,7 @@ export function PlanOverlay({
    *  save button stays locked until the customer reloads (incident 2026-09-04). */
   const [uncertain, setUncertain] = useState(false);
   const t = useLang();
+  const lang = useLangValue();
 
   useEffect(() => {
     // Price the customer's current flavor (identical across flavors today, but
@@ -205,7 +208,44 @@ export function PlanOverlay({
             es: "No pudimos aplicar tu plan. Escríbenos y lo hacemos por ti.",
           }),
         );
-      } else if (err.code === "variant_change_failed" || err.code === "seal_edit_items_failed") {
+      } else if (err.code === "seal_busy") {
+        // Rechazado ANTES de tocar nada (14-oct-2026): Seal seguía procesando un cambio
+        // reciente de esta sub, y escribir encima es como se pierden los cambios.
+        setError(
+          t({
+            en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+            es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+          }),
+        );
+      } else if (err.code === "change_unconfirmed") {
+        // Seal aceptó el cambio pero no lo enseña: no sabemos si entrará. Ni "reintenta" ni
+        // "listo": que mire en unos minutos (14-oct-2026).
+        setUncertain(true);
+        setError(
+          t({
+            en: "We couldn't confirm your change. Reload the page in a few minutes to see how your plan ended up and, if it didn't change, try again.",
+            es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo ha quedado tu plan y, si no ha cambiado, vuelve a pedirlo.",
+          }),
+        );
+      } else if (err.code === "frequency_change_failed") {
+        setError(
+          t({
+            en: "We couldn't change the frequency and nothing was changed. Try again in a few minutes.",
+            es: "No hemos podido cambiar la frecuencia y no se ha cambiado nada. Inténtalo de nuevo en unos minutos.",
+          }),
+        );
+      } else if (err.code === "variant_change_failed_after_interval") {
+        setError(
+          t({
+            en: "We changed the frequency, but not the boxes. Try again in a few minutes to change them.",
+            es: "Hemos cambiado la frecuencia, pero no las cajas. Inténtalo de nuevo en unos minutos para cambiarlas.",
+          }),
+        );
+      } else if (
+        err.code === "variant_change_failed" ||
+        err.code === "seal_edit_items_failed" ||
+        err.code === "seal_add_items_failed"
+      ) {
         setError(
           t({
             en: "Couldn't change the number of boxes. Try again in a moment.",
@@ -222,6 +262,28 @@ export function PlanOverlay({
           t({
             en: "Your change didn't finish applying cleanly. We'll sort it out within a few minutes and you won't be overcharged. Reload the page then to see how your plan ended up.",
             es: "Tu cambio no ha terminado de aplicarse bien. En unos minutos lo dejamos en orden y no se te cobrará de más. Recarga la página entonces para ver cómo ha quedado tu plan.",
+          }),
+        );
+      } else if (err.code === "plan_change_in_progress" || err.code === "referral_reward_busy") {
+        // Rechazado ANTES de tocar nada: otro cambio con el cerrojo tomado (un doble
+        // clic, o el cron poniendo los 10 € de un referido), o ese descuento que hay
+        // que retirar primero. No hay nada a medias: se reintenta en unos segundos.
+        setError(
+          t({
+            en: "We're finishing another update to your subscription. Wait a moment and try again.",
+            es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+          }),
+        );
+      } else if (err.code === "change_applying") {
+        // ESTE cambio entró a medias y el cron lo termina en minutos (14-oct-2026): se le dice
+        // qué plan va a ver y que no lo repita. Con el mensaje de `change_in_progress` ("tu
+        // último cambio… vuelve a intentarlo") Juan no supo qué había pasado con el suyo.
+        setUncertain(true);
+        const freq = FREQUENCIES.find((f) => f.value === frequency);
+        setError(
+          t({
+            en: `Your new plan, ${boxCount} ${boxCount === 1 ? "box" : "boxes"} ${freq?.en.toLowerCase() ?? ""}, is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to save it again.`,
+            es: `Tu plan nuevo, ${boxCount} ${boxCount === 1 ? "caja" : "cajas"} ${freq?.es.toLowerCase() ?? ""}, se está terminando de aplicar. En unos minutos lo verás en tu suscripción y no se te cobrará de más. No hace falta que lo vuelvas a guardar.`,
           }),
         );
       } else if (err.code === "change_in_progress") {
@@ -260,33 +322,16 @@ export function PlanOverlay({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
-      onClick={busy ? undefined : onClose}
-    >
-      <div
-        className="zone-cream relative mx-auto w-full max-w-lg rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={busy}
-          aria-label="Close"
-          className="absolute right-4 top-4 text-2xl opacity-60 disabled:opacity-30"
-        >
-          ×
-        </button>
+    <Lp2Sheet onClose={onClose} busy={busy} size="lg">
 
         {done ? (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
-              <T en="Plan updated" es="Plan actualizado" />
-            </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
+            <SheetDoneMark />
+            <p className="lp2-eyebrow mt-5">
               <T en="All set" es="Listo" />
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
+            </p>
+            <SheetTitle thin={t({ en: "Plan", es: "Plan" })} bold={t({ en: "updated", es: "actualizado" })} />
+            <p className="lp2-text mt-3">
               <T
                 en={`Your new plan: ${boxCount} ${boxCount === 1 ? "box" : "boxes"}, every ${FREQUENCIES.find((f) => f.value === frequency)?.en.replace("Every ", "").toLowerCase()}.`}
                 es={`Tu plan nuevo: ${boxCount} ${boxCount === 1 ? "caja" : "cajas"}, ${FREQUENCIES.find((f) => f.value === frequency)?.es.toLowerCase()}.`}
@@ -295,36 +340,31 @@ export function PlanOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="lp2-cta lp2-cta--still mt-7"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>
           </>
         ) : (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
+            <p className="lp2-eyebrow">
               <T en="Change subscription" es="Cambiar suscripción" />
-            </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-none text-[color:var(--color-lit-grey)]">
-              <T en="My plan" es="Mi plan" />
-            </h1>
+            </p>
+            <SheetTitle thin={t({ en: "Your", es: "Tu" })} bold={t({ en: "plan", es: "plan" })} />
 
             {/* Box count picker */}
             <div className="mt-6">
-              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] mb-3">
+              <span className="lp2-label">
                 <T en="Boxes per shipment" es="Cajas por envío" />
-              </div>
+              </span>
               <div className="grid grid-cols-6 gap-2">
                 {BOX_OPTIONS.map((n) => (
                   <button
                     key={n}
                     type="button"
                     onClick={() => setBoxCount(n)}
-                    className={`rounded-[14px] py-3 text-sm font-black ${
-                      boxCount === n
-                        ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                        : "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] text-[color:var(--color-warm-gray)]"
-                    }`}
+                    aria-pressed={boxCount === n}
+                    className={`lp2-option py-3 text-[18px] ${boxCount === n ? "is-on" : ""}`}
                   >
                     {n}
                   </button>
@@ -341,12 +381,12 @@ export function PlanOverlay({
                 selector, `atCatalog` se volvía true (displayPrice pasa a ser newPrice)
                 y volvía a ver "la 4ª GRATIS" sobre una subida real. (3-sep-2026) */}
             {boxCount === 3 && (boxesChanged || atCatalog) && !leavingBetterRate && (
-              <div className="mt-4 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-bold-yellow)]/25 px-5 py-4">
-                <p className="text-xs font-bold text-[color:var(--color-lit-grey)]">
+              <div className="lp2-notice mt-4 px-5 py-4">
+                <p className="m-0 font-semibold">
                   {pricing ? (
                     <T
-                      en={`Add 1 more box and it's FREE: 4 boxes for €${pricing.perBox[3].toFixed(2)} (the price of 3).`}
-                      es={`Añade 1 caja más y te sale GRATIS: 4 cajas por €${pricing.perBox[3].toFixed(2)} (el precio de 3).`}
+                      en={`Add 1 more box and it's FREE: 4 boxes for ${formatEuro(Math.round(pricing.perBox[3] * 100), "en")} (the price of 3).`}
+                      es={`Añade 1 caja más y te sale GRATIS: 4 cajas por ${formatEuro(Math.round(pricing.perBox[3] * 100), "es")} (el precio de 3).`}
                     />
                   ) : (
                     <T
@@ -358,7 +398,7 @@ export function PlanOverlay({
                 <button
                   type="button"
                   onClick={() => setBoxCount(4)}
-                  className="mt-2 rounded-full border border-[color:var(--color-lit-grey)] px-4 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+                  className="mt-3 cursor-pointer rounded-full bg-[#2F343D] px-4 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-bold-yellow)]"
                 >
                   <T en="Take 4" es="Llevarme 4" />
                 </button>
@@ -369,14 +409,14 @@ export function PlanOverlay({
                 The server never rebalances a mix on its own, so what's shown here is
                 literally what gets sent. */}
             {projectedMix && (
-              <div className="mt-5 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-5 py-4">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+              <div className="lp2-card mt-5 px-5 py-4">
+                <span className="lp2-label">
                   <T en="Your mix" es="Tu mezcla" />
-                </div>
-                <div className="mt-1 font-display text-lg font-black uppercase leading-tight text-[color:var(--color-lit-grey)]">
+                </span>
+                <div className="lp2-figure text-[20px] leading-tight">
                   {compositionLabel(projectedMix)}
                 </div>
-                <p className="mt-2 text-[11px] opacity-60">
+                <p className="mt-2 mb-0 text-[12px] leading-[1.45] text-[#5E6168]">
                   {mixCollapses ? (
                     <T
                       en={`With ${boxCount} box${boxCount > 1 ? "es" : ""} we'll keep ${compositionLabel(projectedMix)}.`}
@@ -394,13 +434,13 @@ export function PlanOverlay({
 
             {/* Frequency picker */}
             <div className="mt-5">
-              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] mb-3">
+              <span className="lp2-label">
                 <T en="Frequency" es="Frecuencia" />
-              </div>
+              </span>
               <select
                 value={frequency}
                 onChange={(e) => setFrequency(e.target.value as Frequency)}
-                className="w-full rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]"
+                className="lp2-field font-semibold"
               >
                 {FREQUENCIES.map((f) => (
                   <option key={f.value} value={f.value}>
@@ -412,29 +452,29 @@ export function PlanOverlay({
 
             {/* Price preview */}
             {pricing && newPrice !== null && (
-              <div className="mt-5 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:rounded-[22px]">
+              <div className="lp2-card mt-5">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+                  <span className="lp2-label mb-0">
                     <T en="Per shipment" es="Por envío" />
-                  </div>
+                  </span>
                   {boxCount === 4 && showsFreeBoxPerks && (
-                    <span className="rounded-full bg-[color:var(--color-bold-yellow)] px-3 py-1 text-[9px] font-black uppercase tracking-[0.15em] text-[color:var(--color-lit-grey)]">
+                    <span className="lp2-pill">
                       <T en="PACK 3+1 · 1 FREE BOX" es="PACK 3+1 · 1 CAJA GRATIS" />
                     </span>
                   )}
                 </div>
-                <div className="mt-1 flex items-baseline gap-3">
-                  <span className="font-display text-4xl font-black text-[color:var(--color-lit-grey)]">
-                    €{(displayPrice ?? newPrice).toFixed(2)}
+                <div className="mt-2 flex items-baseline gap-3">
+                  <span className="lp2-figure text-[38px]">
+                    {formatEuro(Math.round((displayPrice ?? newPrice) * 100), lang)}
                   </span>
                   {newCompare && showsFreeBoxPerks && displayPrice !== null && newCompare > displayPrice && (
-                    <span className="text-sm line-through text-[color:var(--color-warm-gray)]">
-                      €{newCompare.toFixed(2)}
+                    <span className="text-[15px] text-[#8C8E87] line-through">
+                      {formatEuro(Math.round(newCompare * 100), lang)}
                     </span>
                   )}
                 </div>
                 {boxCount === 4 && showsFreeBoxPerks && (
-                  <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
+                  <p className="mt-1.5 mb-0 text-[12px] text-[#5E6168]">
                     <T
                       en="You pay for 3 boxes and the fourth ships free."
                       es="Pagas 3 cajas y la cuarta te la enviamos gratis."
@@ -445,10 +485,13 @@ export function PlanOverlay({
                   currentPrice !== null &&
                   newPrice !== null &&
                   Math.abs(newPrice - currentPrice) > 0.004 && (
-                  <div className="mt-1 text-[11px] uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
-                    <T en="Now you pay" es="Ahora pagas" /> €{currentPrice.toFixed(2)} {" "}
-                    {newPrice > currentPrice ? "↑" : "↓"} €
-                    {Math.abs(newPrice - currentPrice).toFixed(2)}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8C8E87]">
+                    <T en="Now you pay" es="Ahora pagas" /> {formatEuro(Math.round(currentPrice * 100), lang)}
+                    <span aria-hidden>·</span>
+                    <span className={newPrice > currentPrice ? "text-[#2F343D]" : "text-[#547862]"}>
+                      {newPrice > currentPrice ? "+" : "−"}
+                      {formatEuro(Math.round(Math.abs(newPrice - currentPrice) * 100), lang)}
+                    </span>
                   </div>
                 )}
 
@@ -463,15 +506,15 @@ export function PlanOverlay({
                   newPrice !== null &&
                   boxCount < subscription.boxCount &&
                   Math.abs(newPrice - currentPrice) <= 0.004 && (
-                  <div className="mt-2 rounded-[14px] bg-[color:var(--color-bold-yellow)]/20 px-4 py-3 text-[11px] leading-relaxed text-[color:var(--color-lit-grey)]">
+                  <div className="lp2-notice mt-3">
                     <T
-                      en={`Heads up: ${boxCount} boxes costs the same as ${subscription.boxCount}, €${newPrice.toFixed(2)}. You would get one box less for the same price, so going back up to ${subscription.boxCount} is the better deal.`}
-                      es={`Ojo: ${boxCount} cajas cuestan lo mismo que ${subscription.boxCount}, ${newPrice.toFixed(2)} €. Recibirías una caja menos por el mismo precio, así que te sale mejor quedarte en ${subscription.boxCount}.`}
+                      en={`Heads up: ${boxCount} boxes costs the same as ${subscription.boxCount}, ${formatEuro(Math.round(newPrice * 100), "en")}. You would get one box less for the same price, so going back up to ${subscription.boxCount} is the better deal.`}
+                      es={`Ojo: ${boxCount} cajas cuestan lo mismo que ${subscription.boxCount}, ${formatEuro(Math.round(newPrice * 100), "es")}. Recibirías una caja menos por el mismo precio, así que te sale mejor quedarte en ${subscription.boxCount}.`}
                     />
                   </div>
                 )}
                 {boxCount >= 5 && showsFreeBoxPerks && (
-                  <p className="mt-1 text-[11px] text-[color:var(--color-warm-gray)]">
+                  <p className="mt-1.5 mb-0 text-[12px] text-[#5E6168]">
                     <T
                       en="Includes the 3+1 pack (1 free box in every shipment)."
                       es="Incluye el pack 3+1 (1 caja gratis en cada envío)."
@@ -482,16 +525,14 @@ export function PlanOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-[14px] bg-red-50 px-4 py-3 text-xs text-red-700">
-                {error}
-              </div>
+              <div className="lp2-notice lp2-notice--error mt-4">{error}</div>
             )}
 
             <button
               type="button"
               onClick={handleConfirm}
               disabled={!hasChange || busy || uncertain}
-              className="mt-6 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="lp2-cta mt-6"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
@@ -504,13 +545,12 @@ export function PlanOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)] underline"
+              className="lp2-link mt-4"
             >
               <T en="Cancel" es="Cancelar" />
             </button>
           </>
         )}
-      </div>
-    </div>
+    </Lp2Sheet>
   );
 }

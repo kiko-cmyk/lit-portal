@@ -7,13 +7,18 @@
  * Salty Lemon", que es exactamente el bug que el registro arregla.
  *
  * Comprueba:
- *   1. Las 5 variantes del pack de SUSCRIPCIÓN existen, con el SKU del registro,
- *      todas al mismo precio (85,05) y `requiresSellingPlan: true`.
+ *   1. Las 15 variantes del pack de SUSCRIPCIÓN existen, con el SKU del registro,
+ *      todas al mismo precio (85,05 hasta el 6-oct-2026; 113,40 de compra única
+ *      desde que el -25% vive en los planes) y `requiresSellingPlan: true`.
  *   2. El producto está en los 8 selling plans canónicos de Seal (una línea
  *      añadida a un producto fuera del plan aterriza como one-time y desaparece
  *      tras el primer envío).
  *   3. Las 5 variantes del pack de COMPRA ÚNICA existen con los mismos SKUs.
  *   4. La variante de 1 caja de cada sabor comparte precio (la escalera 1-3 = n×caja).
+ *   5. La escalera de SUSCRIPCIÓN que de verdad usa el portal, por sabor: precio de
+ *      la variante × (1 − % de los 8 planes), con las mismas guardas que producción
+ *      (pricing-core). Antes y después del cambio del 6-oct-2026 tiene que decir
+ *      caja 28,35 y pack 85,05; es lo primero que hay que mirar tras el cambio.
  *
  * Uso:
  *   npx tsx scripts/verify-pack-setup.ts
@@ -24,6 +29,7 @@
 
 import { resolve } from "node:path";
 import { config } from "dotenv";
+import { ladderFromProducts, PRICING_QUERY, type ShopifyPricingProduct } from "../src/lib/pricing-core";
 import {
   ALL_FLAVORS,
   PACK4_OT_PRODUCT_ID,
@@ -137,6 +143,51 @@ async function main() {
   }
   if (oneBoxPrices.size <= 1) ok("todos los sabores comparten el precio de 1 caja");
   else fail(`precios de 1 caja desalineados entre sabores: ${[...oneBoxPrices].join(", ")}`);
+
+  // ── 5. Escalera de suscripción efectiva (la que lee y escribe el portal) ──
+  console.log(`\n=== escalera de suscripción (variante × (1 − % del plan)) ===`);
+  const eur = (c: number) => (c / 100).toFixed(2).replace(".", ",");
+  const ladders = new Set<string>();
+  for (const f of ALL_FLAVORS) {
+    const res = await fetch(`https://${STORE}/admin/api/${ADMIN_API_VERSION}/graphql.json`, {
+      method: "POST",
+      headers: { "X-Shopify-Access-Token": ADMIN_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: PRICING_QUERY,
+        variables: {
+          flavorId: `gid://shopify/Product/${f.productId}`,
+          packId: `gid://shopify/Product/${PACK4_PRODUCT_ID}`,
+        },
+      }),
+    });
+    const json = (await res.json()) as {
+      data?: { flavor: ShopifyPricingProduct | null; pack: ShopifyPricingProduct | null };
+      errors?: unknown;
+    };
+    if (!res.ok || json.errors || !json.data) {
+      fail(`${f.key}: Admin GraphQL ${res.status} ${JSON.stringify(json.errors ?? "")}`);
+      continue;
+    }
+    try {
+      const l = ladderFromProducts({
+        label: f.key,
+        oneBoxVariantId: f.variantByBoxCount[1],
+        flavorProduct: json.data.flavor,
+        packProduct: json.data.pack,
+        warn: (m) => console.log(`  ! ${m}`),
+      });
+      ok(
+        `${f.key}: planes al ${l.planPercentage}% · caja ${eur(l.rawOneBoxCents)} → ${eur(l.prices.oneBoxCents)} ` +
+          `(tacha ${eur(l.oneBoxCompareCents)}) · pack ${eur(l.rawPack4Cents)} → ${eur(l.prices.pack4Cents)} ` +
+          `(tacha ${eur(l.pack4CompareCents)})`,
+      );
+      ladders.add(`${l.prices.oneBoxCents}/${l.prices.pack4Cents}`);
+    } catch (e) {
+      fail(`${f.key}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (ladders.size === 1) ok(`todos los sabores dan la misma escalera de suscripción (${[...ladders][0]}c)`);
+  else if (ladders.size > 1) fail(`escalera de suscripción distinta entre sabores: ${[...ladders].join(", ")}`);
 
   console.log(`\n${"=".repeat(60)}`);
   if (failures) { console.log(`FALLOS: ${failures}`); process.exit(1); }

@@ -28,6 +28,19 @@ if (!["state", "variant", "revert", "to45d", "to1mo"].includes(action)) {
   process.exit(1);
 }
 
+// OBSOLETO PARA ESCRIBIR (6-oct-2026). Este script copia el `price` de la variante de
+// Shopify a una línea RECURRENTE de Seal. Desde que el -25% vive en los planes de venta,
+// ese precio es el de COMPRA ÚNICA (SL30 = 37,80): escribiría 37,80 a un suscriptor.
+// Además usa la escalera vieja (SL60), que es de solo lectura desde el 22-ago. El precio
+// de suscripción sale de src/lib/pricing.ts (getLadderPricesForWrite). Solo `state`.
+if (action !== "state") {
+  console.error(
+    "test-plan-change-juan: las acciones de escritura están desactivadas desde el 6-oct-2026 " +
+      "(escribirían el precio de compra única de la variante en una línea de suscripción). Solo `state`.",
+  );
+  process.exit(1);
+}
+
 async function fetchSealPage(page) {
   const url = `${SEAL_BASE}/subscriptions?with-items=true&with-billing-attempts=true&page=${page}`;
   const r = await fetch(url, { headers: { "X-Seal-Token": SEAL_TOKEN } });

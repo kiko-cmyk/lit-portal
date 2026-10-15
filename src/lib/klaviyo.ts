@@ -33,6 +33,11 @@ export type KlaviyoEvent =
   // plantillas leen `event.discount_code` y `event.discount_expires_label`
   // literalmente. Cambiarlo aquí obliga a editar los cinco emails.
   | "Discovery Set Purchased"
+  // Discovery Set + suscripción en el MISMO pedido (2026-10-09): en vez del
+  // código, los 4,99 € se aplican a su primera renovación en Seal. Sale cuando
+  // el crédito ya está puesto (lib/discovery-renewal-credit). Sin flow colgado
+  // todavía: existe para poder montar el aviso al cliente sin tocar código.
+  | "Discovery Set Renewal Credit"
   | "tier_unlocked"
   | "reward_claimed"
   | "winback_d14"
@@ -65,7 +70,35 @@ export type KlaviyoEvent =
   // without it, the "last chance" email 48 h later goes to people who solved the
   // problem the same day, which is the fastest way to make a rescued customer
   // regret coming back.
-  | "payment_method_updated";
+  | "payment_method_updated"
+  // Referidos, fase 0 (2026-10-10). Los dos van a QUIEN INVITA y NUNCA llevan
+  // datos del amigo (ni nombre ni email): decirle a alguien que una persona
+  // concreta ha comprado es dar un dato personal de esa persona sin su permiso.
+  //
+  // referral_friend_joined: un amigo pagó con su código y cualificó. Lo dispara la
+  // cualificación (lib/referral-reward.ts) con uniqueId por conversión, así que un
+  // reintento no repite el email.
+  | "referral_friend_joined"
+  // referral_reward_applied: el cron acaba de poner los 10 € en su próximo cobro
+  // (se aplican 1-48 h antes). Sirve para un aviso «tu entrega de mañana llega con
+  // 10 € menos»; el flow es opcional.
+  | "referral_reward_applied"
+  // referral_shared: copió su código o lo compartió desde Mi LIT. Solo el canal
+  // (copy | whatsapp | native), para medir qué parte de la base comparte.
+  | "referral_shared"
+  // Un «Adelantar» que la tarjeta rechazó después de que Seal lo aceptara
+  // (2026-10-14, lib/charge-now-recovery.ts). Sale cuando el calendario ya está
+  // arreglado: `outcome` dice si se reintenta mañana (`retry_tomorrow`) o si el
+  // pedido se queda en su fecha porque lo bloqueó el antifraude (`date_kept`).
+  // Seal no manda billing_attempt/failed para un cobro manual, así que sin esto
+  // el único aviso era el email de Seal.
+  | "charge_now_failed"
+  // Bajas que NO pasan por el portal (2026-10-14, lib/cancel-notice.ts), al día
+  // siguiente y solo si siguen canceladas. Eventos propios y no
+  // `subscription_cancelled`: el portal no deja reactivar estas bajas, y el
+  // email de ese flow lleva «Reactivar mis pedidos» al portal.
+  | "subscription_cancelled_unpaid"
+  | "subscription_cancelled_support";
 
 // Transient-failure retry budget. Klaviyo throttles /events/ (429) and can 5xx
 // under load; without a retry a single hiccup on a high-volume day (e.g. the

@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { awardDrops, DROPS_AMOUNTS, TIER_THRESHOLD } from "@/lib/drops";
 import { compositionLabel, shortLabel } from "@/lib/mix";
@@ -12,9 +12,14 @@ import { klaviyo } from "@/lib/klaviyo";
 import { alertSlackErrorAwaited } from "@/lib/alert";
 import {
   DISCOVERY_DISCOUNT_VALUE_EUR,
+  type DiscoveryCouponMode,
   issueDiscoveryDiscount,
   type IssuedDiscount,
 } from "@/lib/discovery-discount";
+import { consumeCampaignCouponsSafe, isCampaignCouponCode } from "@/lib/coupon-parent";
+import { applyDiscoveryRenewalCreditForOrder } from "@/lib/discovery-renewal-credit";
+import { runAsBackgroundJob } from "@/lib/http-timeout";
+import { processOrderPaidFollowUp, recordOrderPaid } from "@/lib/referral-reward";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { formatShipDateEs } from "@/lib/ship-date-label";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -100,11 +105,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Without this, the retry hit the (provider,event_id) PK, returned
     // dedup:true, and the event (drops, confirmation/tier emails) was lost
     // forever. Replaying a FAILED handler is safe: box_shipped is idempotent
-    // via drops_events.dedup_key; referral is gated by referral_conversions
-    // unique (a retry won't double-award — note the pre-existing under-award
-    // edge if the award throws after the conversion row commits); and
-    // confirmation_sent is the LAST side effect in handleOrdersPaid, so any
-    // throw happens before it and it fires exactly once across attempts;
+    // via drops_events.dedup_key; the referral step and the Discovery coupon
+    // run AFTER confirmation_sent, each in its own try/catch that never
+    // rethrows (a referral is also idempotent by referral_conversions'
+    // unique converted_order_id); so confirmation_sent fires exactly once
+    // across attempts;
     // tier_unlocked is gated by the pre-award snapshot. Only delete our own
     // un-processed reservation. NOTE: the processed_at mark is OUTSIDE this
     // try on purpose (below) — a failure to MARK must not trigger a replay,
@@ -148,11 +153,17 @@ function verifyShopifyHmac(rawBody: string, hmacHeader: string | null): boolean 
 
 interface ShopifyOrderPayload {
   id?: number;
+  name?: string;
   order_number?: number;
   customer?: { id: number; email?: string; first_name?: string };
   email?: string;
   total_price?: string;
   currency?: string;
+  /** `web`, `shopify_draft_order`… y `subscription_contract*` en las renovaciones de Seal. */
+  source_name?: string | null;
+  total_discounts?: string | null;
+  /** Los códigos que se usaron en el checkout. Es lo que atribuye un referido. */
+  discount_codes?: Array<{ code?: string | null; amount?: string; type?: string }> | null;
   note_attributes?: Array<{ name: string; value: string }>;
   line_items?: Array<{
     title: string;
@@ -176,43 +187,16 @@ interface ShopifyFulfillmentPayload {
 }
 
 async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
-  // 1. Referral attribution
-  const refAttr = payload.note_attributes?.find((a) => a.name === "ref" || a.name === "referral_code");
-  if (refAttr?.value) {
-    const sb = supabaseAdmin();
-    const { data: codeRow } = await sb
-      .from("referral_codes")
-      .select("customer_id")
-      .eq("code", refAttr.value.toUpperCase())
-      .maybeSingle();
-    if (codeRow && payload.id) {
-      const { error: convErr } = await sb.from("referral_conversions").insert({
-        referrer_customer_id: codeRow.customer_id,
-        converted_order_id: String(payload.id),
-        drops_awarded: 250,
-      });
-      if (!convErr) {
-        await awardDrops(codeRow.customer_id, "referral_converted", 250, {
-          orderId: payload.id,
-          code: refAttr.value,
-        });
-        // Notify referrer via Klaviyo (resolve their email from their customer ID)
-        const referrerEmail = await shopifyAdmin
-          .getCustomerEmail(codeRow.customer_id)
-          .catch(() => null);
-        if (referrerEmail) {
-          await klaviyo
-            .trackEvent("referral_converted" as never, referrerEmail, {
-              orderId: payload.id,
-              dropsAwarded: 250,
-            })
-            .catch(() => null);
-        }
-      }
-    }
-  }
+  // (La atribución de referidos que vivía aquí, por `note_attributes.ref`, se
+  // quitó el 2026-10-10: nunca se disparó en producción, compartía el `?ref=` de
+  // GoAffPro y daba 250 Drops a cualquier pedido sin ninguna guarda. Los
+  // referidos van ahora por el código del pedido, en el paso 3 de abajo.)
 
-  // 2. Confirmation email trigger — fires Klaviyo event with plan details
+  // Lo usa el cupón del Discovery Set (paso 2): si el mismo pedido trae una
+  // suscripción, los 4,99 € van a su renovación en vez de a un código.
+  let orderHasSubscription = false;
+
+  // 1. Confirmation email trigger — fires Klaviyo event with plan details
   const email = payload.customer?.email ?? payload.email;
   if (email && payload.line_items && payload.line_items.length > 0) {
     // The orders/paid payload does NOT carry selling-plan info, same as
@@ -252,6 +236,7 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
     // vs one-time purchases without parsing plan_label (e.g. the
     // "Área personal - Bienvenida" welcome triggers on is_subscription = true).
     const isSubscription = resolved.some((li) => li.selling_plan_allocation);
+    orderHasSubscription = isSubscription;
     // AWAIT: on Vercel the function can freeze once the response is sent, so a
     // fire-and-forget trackEvent (and the confirmation/welcome email it drives)
     // could be dropped after processed_at is marked, with no retry. Awaiting
@@ -281,20 +266,67 @@ async function handleOrdersPaid(payload: ShopifyOrderPayload): Promise<void> {
       .catch((err) => console.warn("[orders/paid] confirmation_sent klaviyo failed:", err));
   }
 
-  // 3. Cupón del LIT Discovery Set.
+  // 2. Cupón del LIT Discovery Set.
   //
-  // VA EL ÚLTIMO y en su propio try/catch, a propósito. Todo lo de arriba
-  // (referidos, drops, confirmation_sent) ya ha corrido y ha hecho su trabajo;
-  // si la emisión del cupón lanzara, el catch del POST borraría la reserva de
+  // Después de confirmation_sent y en su propio try/catch, a propósito. Todo lo
+  // de arriba (confirmation_sent) ya ha corrido y ha hecho su trabajo; si la
+  // emisión del cupón lanzara, el catch del POST borraría la reserva de
   // `webhook_log` y Shopify reintentaría el evento ENTERO, duplicando lo demás.
   // Un cupón sin emitir se recupera a mano desde la alerta de Slack; un
   // confirmation_sent duplicado es un segundo email al cliente.
   try {
-    await maybeIssueDiscoveryCoupon(payload);
+    await maybeIssueDiscoveryCoupon(payload, orderHasSubscription);
   } catch (err) {
     // No debería llegar aquí (la función se traga sus propios fallos y avisa),
     // pero si aparece un camino nuevo que lanza, NO se propaga.
     console.error("[orders/paid] cupón Discovery falló fuera de su guarda:", err);
+  }
+
+  // 3. Referidos «Trae a alguien» (2026-10-10).
+  //
+  // Mismo patrón que el cupón: al final y sin propagar NUNCA, por lo mismo. En
+  // línea solo se REGISTRA la conversión si el pedido trae un código de amigo
+  // (una lectura y un insert idempotente por pedido). Lo caro (cualificar al
+  // amigo contra Shopify y Seal, procesar una renovación con un código nuestro,
+  // reservar el código de un suscriptor nuevo) va en `after()`: corre cuando
+  // Shopify ya tiene su 200, así que no acerca la respuesta a sus 5 s. Lo que
+  // se pierda DESPUÉS de registrar lo recoge el cron `referral-sweep`.
+  //
+  // `runAsBackgroundJob` dentro del `after()`: ahí no hay ningún cliente ni App
+  // Proxy esperando la respuesta, que es justo el caso para el que existe el
+  // presupuesto largo de Seal.
+  try {
+    const followUp = await recordOrderPaid(payload);
+    if (followUp.needsFollowUp) {
+      after(() => runAsBackgroundJob(() => processOrderPaidFollowUp(followUp)));
+    }
+  } catch (err) {
+    // Si falla el REGISTRO, no queda fila que el cron pueda recoger: o se ve
+    // aquí, o quien invitó pierde su premio sin que nadie lo sepa.
+    console.error("[orders/paid] registro de referido falló:", err);
+    const codes = (payload.discount_codes ?? []).map((d) => d.code).filter(Boolean).join(", ");
+    await alertSlackErrorAwaited({
+      path: "/api/webhooks/shopify",
+      code: `referral_record_failed:${payload.id ?? "?"}`,
+      msg: `No se pudo registrar el referido del pedido ${payload.name ?? payload.id} (códigos: ${codes || "ninguno"}): ${err instanceof Error ? err.message : String(err)}. Revisar a mano.`,
+      customerId: payload.customer?.id ? String(payload.customer.id) : undefined,
+    });
+  }
+
+  // 4. Cupones de campaña (perfilado y Discovery Set): un solo uso.
+  //
+  // Desde el 2026-10-14 viven DENTRO de su descuento padre (`lib/coupon-parent`),
+  // donde Shopify solo deja un límite de usos para el padre entero. El «un solo
+  // uso» de cada código lo pone esto: el código usado se borra del padre en
+  // cuanto entra el pedido pagado. En `after()` y sin propagar nunca, por lo
+  // mismo que los pasos de arriba; si falla, avisa, y el cron
+  // `survey-discount-cleanup` lo borra igualmente por su uso.
+  const campaignCodes = (payload.discount_codes ?? [])
+    .map((d) => d.code ?? "")
+    .filter((c) => isCampaignCouponCode(c));
+  if (campaignCodes.length) {
+    const label = payload.name ?? String(payload.id ?? "?");
+    after(() => runAsBackgroundJob(() => consumeCampaignCouponsSafe(campaignCodes, label)));
   }
 }
 
@@ -315,8 +347,18 @@ const DISCOVERY_VARIANT_ID = "65812401652061";
  *
  * Nunca lanza. Todos sus fallos terminan en un aviso de Slack, porque un throw
  * aquí replayaría el webhook entero (ver el comentario de la llamada).
+ *
+ * Dos promesas según el pedido (decisión de Juan, 2026-10-09, pedido #11724):
+ *   - Discovery Set SOLO → código por email para su futura suscripción
+ *     (`mode = 'checkout'`) y el flow de cinco emails.
+ *   - Discovery Set + suscripción en el MISMO pedido → ni código ni flow: los
+ *     4,99 € se descuentan de la primera renovación de esa sub
+ *     (`mode = 'renewal'`, ver lib/discovery-renewal-credit).
  */
-async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<void> {
+async function maybeIssueDiscoveryCoupon(
+  payload: ShopifyOrderPayload,
+  orderHasSubscription: boolean,
+): Promise<void> {
   // ── 1. ¿Lleva el Discovery Set? ────────────────────────────────────────────
   //
   // Se miran SKU y variante, y basta con que cuadre uno. No es cinturón y
@@ -407,10 +449,19 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
   // FAIL-CLOSED: si Seal no contesta se asume que SÍ tiene suscripción y no se
   // emite. Perder un cupón recuperable a mano es preferible a regalárselo a
   // quien ya paga.
+  //
+  // La sub que nace de ESTE pedido no cuenta como "ya era suscriptor": es
+  // precisamente la conversión. Seal guarda el pedido de origen en `order_id`;
+  // según quién llegue antes, aquí puede estar ya o no (en el #11724 no estaba),
+  // y sin esta exclusión el mismo pedido daría o no crédito según la carrera.
+  const orderId = String(payload.id ?? "");
   let hadLiveSubscription: boolean;
+  let sealHasSubFromThisOrder = false;
   try {
     const subs = await seal.getSubscriptionsByEmail(email);
+    sealHasSubFromThisOrder = subs.some((sub) => orderId !== "" && String(sub.order_id ?? "") === orderId);
     hadLiveSubscription = subs.some((sub) => {
+      if (orderId !== "" && String(sub.order_id ?? "") === orderId) return false;
       const status = mapToSubscription(sub, customerId).status;
       // `paused` y `reactivating` CUENTAN como viva: una sub pausada sigue
       // siendo cliente de suscripción y no hay nada que convertir.
@@ -423,10 +474,19 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
 
   if (hadLiveSubscription) return;
 
+  // ── 3b. ¿Se suscribió en el MISMO pedido? ──────────────────────────────────
+  //
+  // Dos señales, basta una: las líneas del pedido (selling plan, leídas por la
+  // Admin API en el paso 1) o una sub de Seal nacida de este pedido. La segunda
+  // cubre el caso en que la relectura de líneas falló y volvió al body, que no
+  // trae selling plan.
+  const mode: DiscoveryCouponMode =
+    orderHasSubscription || sealHasSubFromThisOrder ? "renewal" : "checkout";
+
   // ── 4. Emitir ──────────────────────────────────────────────────────────────
   let discount: IssuedDiscount;
   try {
-    discount = await issueDiscoveryDiscount(customerId);
+    discount = await issueDiscoveryDiscount(customerId, mode);
   } catch (err) {
     // El fallo más probable el día del despliegue es que la app no tenga el
     // scope `write_discounts`, y saldría en TODOS los pedidos a la vez. Por eso
@@ -447,12 +507,17 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
   // Este orden importa. Si se guardara después del evento y la escritura
   // fallara, el cliente tendría su email con el código y nosotros ninguna fila:
   // su siguiente Discovery Set le emitiría un SEGUNDO cupón.
+  //
+  // La rama 'checkout' NO escribe las columnas de la migración del 2026-10-09
+  // (`mode` y `status` tienen default / NULL): así sigue funcionando aunque el
+  // código llegue a producción antes que la migración.
   const { error: saveErr } = await sb.from("discovery_set_coupons").insert({
     customer_id: customerId,
-    order_id: String(payload.id ?? ""),
+    order_id: orderId,
     discount_code: discount.code,
     discount_issued_at: discount.issuedAt,
     discount_expires_at: discount.expiresAt,
+    ...(mode === "renewal" ? { mode: "renewal", status: "pending_apply" } : {}),
   });
 
   if (saveErr) {
@@ -474,6 +539,23 @@ async function maybeIssueDiscoveryCoupon(payload: ShopifyOrderPayload): Promise<
       msg: `Cupón ${discount.code} CREADO en Shopify pero no guardado (${saveErr.message}). El cliente NO ha sido avisado: repartir a mano.`,
       customerId,
     });
+    return;
+  }
+
+  // ── 5b. Suscrito en el mismo pedido: crédito en la renovación ──────────────
+  //
+  // Ni código ni flow de cinco emails (le pediría suscribirse a quien ya lo
+  // está). Se intenta aplicar ya; lo normal es que Seal aún no tenga la sub
+  // ("no-sub-yet") y lo haga el webhook de Seal en cuanto la cree, con el cron
+  // diario de red. Nunca lanza: la fila ya está guardada y los otros dos
+  // caminos la recogen.
+  if (mode === "renewal") {
+    try {
+      const result = await applyDiscoveryRenewalCreditForOrder(orderId, email);
+      console.log(`[orders/paid] crédito Discovery en renovación para ${customerId}: ${result}`);
+    } catch (err) {
+      console.warn("[orders/paid] crédito Discovery: Seal no contestó, lo recoge el webhook de Seal o el cron", err);
+    }
     return;
   }
 

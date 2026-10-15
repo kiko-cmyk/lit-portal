@@ -1,6 +1,8 @@
 "use client";
 
-import { T } from "@/lib/i18n";
+import Link from "next/link";
+import { T, useLangValue } from "@/lib/i18n";
+import { portalHref } from "@/lib/portal-link";
 
 interface ReactivateCardProps {
   /**
@@ -8,8 +10,11 @@ interface ReactivateCardProps {
    * `paused` is the resume state: no hold, no Drops countdown, different copy.
    * Pauses only ever came from Seal's own portal, so a paused customer has no
    * idea our portal exists — the copy has to make the way back obvious.
+   * `unpaid` (2026-10-14): Seal la canceló porque no pudo cobrar. No eligió
+   * irse, así que el texto le dice qué pasó, que la caja se cobra mañana al
+   * reactivar y dónde cambiar la tarjeta.
    */
-  variant?: "cancelled" | "paused";
+  variant?: "cancelled" | "paused" | "unpaid";
   dropsHeld?: number;
   dropsHeldDays?: number;
   cardsKept?: number;
@@ -43,6 +48,8 @@ export function ReactivateCard({
   error,
 }: ReactivateCardProps) {
   const paused = variant === "paused";
+  const unpaid = variant === "unpaid";
+  const lang = useLangValue();
   return (
     <section
       className="relative mx-6 mt-2 overflow-hidden rounded-[24px] px-6 py-7 text-center text-[#F2EEE1] md:mx-0"
@@ -56,6 +63,8 @@ export function ReactivateCard({
       <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-[color:var(--color-bold-yellow)]">
         {paused ? (
           <T en="Paused" es="En pausa" />
+        ) : unpaid ? (
+          <T en="Your last payment didn't go through" es="Tu último pago no pasó" />
         ) : (
           <T en="Come back any time" es="Vuelve cuando quieras" />
         )}
@@ -66,6 +75,12 @@ export function ReactivateCard({
             <T en="Pick it up" es="Reanúdala" />
             <br />
             <T en="whenever." es="cuando quieras." />
+          </>
+        ) : unpaid ? (
+          <>
+            <T en="Get your" es="Recupera" />
+            <br />
+            <T en="LIT back." es="tu LIT." />
           </>
         ) : (
           <>
@@ -83,7 +98,19 @@ export function ReactivateCard({
           />
         </p>
       )}
-      {!paused && (dropsHeld !== undefined || cardsKept !== undefined) && (
+      {unpaid && (
+        <p className="mt-2.5 text-[13px] leading-[1.5] text-[#b3ab98]">
+          <T
+            en="That's why your subscription was cancelled. Reactivate it and we'll charge your box tomorrow. If your card has changed, update it today in "
+            es="Por eso se canceló tu suscripción. Reactívala y cobramos tu caja mañana. Si tu tarjeta ha cambiado, actualízala hoy en "
+          />
+          <Link href={portalHref(lang, "account")} className="font-bold text-[#F2EEE1] underline underline-offset-2">
+            <T en="Account" es="Cuenta" />
+          </Link>
+          .
+        </p>
+      )}
+      {!paused && !unpaid && (dropsHeld !== undefined || cardsKept !== undefined) && (
         <p className="mt-2.5 text-[13px] leading-[1.5] text-[#b3ab98]">
           {dropsHeld !== undefined && dropsHeldDays !== undefined && (
             <>

@@ -9,6 +9,7 @@ import {
   getSelectedSubscription,
   setSelectedSubscription,
 } from "@/lib/api-client";
+import { Lp2Loader } from "@/components/Lp2Loader";
 import { SubscriptionChooser } from "@/components/SubscriptionChooser";
 import { useLangValue } from "@/lib/i18n";
 import { activeRoute, portalHref } from "@/lib/portal-link";
@@ -166,17 +167,10 @@ async function loadSubs(): Promise<{
   throw lastErr;
 }
 
+// La misma espera que ven Suscripción y Cuenta mientras cargan (lp2,
+// 2026-10-13): así no hay salto entre la entrada y la página.
 function GateSplash() {
-  return (
-    <div className="zone-cream flex min-h-screen items-center justify-center bg-[color:var(--color-brisky-cream)]">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="https://litsalt.com/cdn/shop/t/31/assets/lit-logo-dark-indigo.png"
-        alt="LIT"
-        className="h-7 w-auto animate-pulse opacity-50"
-      />
-    </div>
-  );
+  return <Lp2Loader fullScreen />;
 }
 
 /**

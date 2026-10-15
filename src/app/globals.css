@@ -60,6 +60,15 @@
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* Zonas seguras del iPhone (viewport-fit=cover en layout.tsx): el hueco del
+   borde de arriba y el de la barra de inicio de abajo (0 fuera del iPhone). La
+   cabecera móvil se aparta con --safe-top y el final de cada página, con
+   --safe-bottom (desde el 2026-10-14 ya no hay barra fija abajo). */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 :root {
   /* Default text + bg for the portal — overridden per page color zone */
   --background: var(--color-brisky-cream);
@@ -123,6 +132,308 @@ button:disabled,
 .zone-cream {
   --background: var(--color-brisky-cream);
   --foreground: var(--color-lit-grey);
+}
+/* Rediseño lp2 de Suscripción y Cuenta (Juan 2026-10-13): el crema de la landing
+   «No es cansancio», más claro que el beige PRE, para que las tarjetas
+   (#F8F9F2) floten sin bordes gruesos. Solo lo usan esas dos pantallas. */
+.zone-lp2 {
+  --background: #EFEEE5;
+  --foreground: #2F343D;
+}
+/* ─── Popups del rediseño lp2 (Juan 2026-10-13: «que todo tenga un sentido de
+   diseño»). Piezas con nombre para los overlays (adelantar, plan, saltar,
+   sabor, dirección, encuesta y cancelación), en `@layer components` para que
+   cualquier utilidad de Tailwind puesta al lado gane (márgenes, anchos…).
+   Claro = hoja crema; `.lp2-dark` las da la vuelta para la cancelación, que va
+   en el oscuro de la landing (#262A32). */
+@layer components {
+  .lp2-eyebrow {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #8c8e87;
+  }
+  .lp2-text {
+    font-size: 14.5px;
+    line-height: 1.55;
+    color: #5e6168;
+  }
+  .lp2-label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #8c8e87;
+  }
+  .lp2-card {
+    border-radius: 20px;
+    border: 1px solid rgba(47, 52, 61, 0.07);
+    background: #ffffff;
+    padding: 20px;
+    box-shadow: 0 12px 26px -18px rgba(40, 34, 20, 0.35);
+  }
+  .lp2-figure {
+    font-family: var(--font-display);
+    font-weight: 600;
+    text-transform: uppercase;
+    line-height: 1;
+    letter-spacing: 0.005em;
+    color: #2f343d;
+  }
+  .lp2-cta {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border-radius: 9999px;
+    background: #2f343d;
+    color: #f2f1ea;
+    padding: 15px 20px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform 0.15s ease-out, opacity 0.15s;
+  }
+  .lp2-cta::after {
+    content: "";
+    width: 16px;
+    height: 16px;
+    flex: none;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23EBEE62' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3Cpath d='M13 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  .lp2-cta:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+  .lp2-cta:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* Sin flecha: «Volver», «Cerrar»… donde no se avanza a ningún sitio. */
+  .lp2-cta--still::after {
+    display: none;
+  }
+  .lp2-ghost {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 9999px;
+    border: 1px solid rgba(47, 52, 61, 0.2);
+    background: transparent;
+    color: #2f343d;
+    padding: 14px 20px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .lp2-ghost:hover:not(:disabled) {
+    border-color: rgba(47, 52, 61, 0.45);
+  }
+  .lp2-ghost:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .lp2-link {
+    display: block;
+    width: 100%;
+    text-align: center;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #5e6168;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    cursor: pointer;
+  }
+  .lp2-link:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .lp2-option {
+    border-radius: 14px;
+    border: 1px solid rgba(47, 52, 61, 0.12);
+    background: #ffffff;
+    color: #2f343d;
+    font-family: var(--font-display);
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s ease-out, border-color 0.15s;
+  }
+  .lp2-option:hover:not(:disabled) {
+    border-color: rgba(47, 52, 61, 0.35);
+  }
+  .lp2-option.is-on {
+    border-color: #2f343d;
+    background: #2f343d;
+    color: #ebee62;
+  }
+  .lp2-choice {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(47, 52, 61, 0.12);
+    background: rgba(255, 255, 255, 0.7);
+    padding: 14px 16px;
+    text-align: left;
+    font-size: 14px;
+    color: #2f343d;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+  }
+  .lp2-choice:hover {
+    border-color: rgba(47, 52, 61, 0.3);
+  }
+  .lp2-choice.is-on {
+    border-color: #2f343d;
+    background: #ffffff;
+    box-shadow: 0 10px 22px -16px rgba(40, 34, 20, 0.45);
+  }
+  .lp2-field {
+    width: 100%;
+    border-radius: 14px;
+    border: 1px solid rgba(47, 52, 61, 0.14);
+    background: #ffffff;
+    padding: 12px 16px;
+    font-size: 14px;
+    color: #2f343d;
+  }
+  .lp2-field:focus {
+    outline: none;
+    border-color: #2f343d;
+    box-shadow: 0 0 0 3px rgba(235, 238, 98, 0.45);
+  }
+  .lp2-field::placeholder {
+    color: #8c8e87;
+  }
+  .lp2-notice {
+    border-radius: 14px;
+    padding: 12px 16px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #2f343d;
+    background: rgba(235, 238, 98, 0.3);
+  }
+  .lp2-notice--error {
+    background: rgba(155, 61, 61, 0.1);
+    color: #9b3d3d;
+  }
+  .lp2-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 9999px;
+    background: #ebee62;
+    color: #2f343d;
+    padding: 5px 10px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  /* Versión oscura (cancelación). */
+  .lp2-dark .lp2-eyebrow,
+  .lp2-dark .lp2-label {
+    color: rgba(242, 241, 234, 0.55);
+  }
+  .lp2-dark .lp2-text {
+    color: rgba(242, 241, 234, 0.72);
+  }
+  .lp2-dark .lp2-card {
+    border-color: rgba(242, 241, 234, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: none;
+  }
+  .lp2-dark .lp2-figure {
+    color: #f2f1ea;
+  }
+  .lp2-dark .lp2-cta {
+    background: #ebee62;
+    color: #1a1c22;
+  }
+  .lp2-dark .lp2-cta::after {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231A1C22' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3Cpath d='M13 6l6 6-6 6'/%3E%3C/svg%3E");
+  }
+  .lp2-dark .lp2-ghost {
+    border-color: rgba(242, 241, 234, 0.25);
+    color: #f2f1ea;
+  }
+  .lp2-dark .lp2-ghost:hover:not(:disabled) {
+    border-color: rgba(242, 241, 234, 0.55);
+  }
+  .lp2-dark .lp2-link {
+    color: rgba(242, 241, 234, 0.6);
+  }
+  .lp2-dark .lp2-choice {
+    border-color: rgba(242, 241, 234, 0.14);
+    background: rgba(255, 255, 255, 0.04);
+    color: #f2f1ea;
+  }
+  .lp2-dark .lp2-choice:hover {
+    border-color: rgba(242, 241, 234, 0.35);
+  }
+  .lp2-dark .lp2-choice.is-on {
+    border-color: #ebee62;
+    background: rgba(235, 238, 98, 0.1);
+    box-shadow: none;
+  }
+  .lp2-dark .lp2-option {
+    border-color: rgba(242, 241, 234, 0.16);
+    background: rgba(255, 255, 255, 0.05);
+    color: #f2f1ea;
+  }
+  .lp2-dark .lp2-option.is-on {
+    border-color: #ebee62;
+    background: #ebee62;
+    color: #1a1c22;
+  }
+  .lp2-dark .lp2-field {
+    border-color: rgba(242, 241, 234, 0.18);
+    background: rgba(255, 255, 255, 0.06);
+    color: #f2f1ea;
+  }
+  .lp2-dark .lp2-field::placeholder {
+    color: rgba(242, 241, 234, 0.45);
+  }
+  .lp2-dark .lp2-notice {
+    background: rgba(235, 238, 98, 0.14);
+    color: #f2f1ea;
+  }
+  .lp2-dark .lp2-notice--error {
+    background: rgba(232, 165, 145, 0.14);
+    color: #e8a591;
+  }
+}
+
+/* Grano de los paneles de sabor, la misma receta que «Tres sabores» de la landing.
+   Va por DEBAJO de la caja (z-index -1 dentro de su propio contexto). */
+.lp2-grain {
+  isolation: isolate;
+}
+.lp2-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px;
+  opacity: 0.12;
+  mix-blend-mode: multiply;
 }
 .zone-retro {
   --background: var(--color-cream);
@@ -283,6 +594,47 @@ button:disabled,
   to   { transform: translateX(-50%); }
 }
 
+/* Banda de cierre del rediseño lp2 (Juan 2026-10-13: «esto se debe mover»):
+   las dos filas en sentidos opuestos, en bucle continuo. Cada fila lleva el
+   texto cuatro veces y se desplaza media fila, así que el empalme no se ve. */
+.lp2-band-row {
+  animation: marquee 60s linear infinite;
+}
+/* La fila calada mide el doble (nombres de sabor más largos): el doble de
+   tiempo para que las dos vayan a la misma velocidad. */
+.lp2-band-row--rev {
+  animation-direction: reverse;
+  animation-duration: 120s;
+}
+
+/* Menú móvil del portal (MobileHeader): el panel baja un poco y aparece, y el
+   velo de detrás se funde; como el menú de litsalt.com. */
+@keyframes lp2-menu-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes lp2-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.lp2-menu-in {
+  animation: lp2-menu-in 0.22s ease-out;
+}
+.lp2-fade-in {
+  animation: lp2-fade-in 0.22s ease-out;
+}
+
+/* Cargador del portal (Lp2Loader): tres puntos con los colores de los sabores
+   que se encienden por turnos. Con «reducir movimiento» se quedan quietos y
+   encendidos. */
+@keyframes lp2-dot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.45; }
+  40%           { transform: scale(1);   opacity: 1;    }
+}
+.lp2-loader-dot {
+  animation: lp2-dot 1.2s ease-in-out infinite;
+}
+
 /* Wax-seal slow spin — text around a circular path rotates 360deg over
    28s. The badge sits in the hero so the page has a tactile / printed
    element, not just type. */
@@ -334,7 +686,11 @@ button:disabled,
 @media (prefers-reduced-motion: reduce) {
   .mesh-bg::before,
   .cover-rise,
-  .char-rise {
+  .char-rise,
+  .lp2-band-row,
+  .lp2-loader-dot,
+  .lp2-menu-in,
+  .lp2-fade-in {
     animation: none;
   }
   .reveal {

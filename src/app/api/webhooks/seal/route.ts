@@ -1,9 +1,16 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { alertSlackError, alertSlackNotice } from "@/lib/alert";
+import { handleManualChargeFailureSafe, hasRecentManualFailure } from "@/lib/charge-now-recovery";
+import { applyFollowupSafe } from "@/lib/reactivation";
+import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
+import { reanchorConverged } from "@/lib/frequency-core";
+import { tryWithPlanLock } from "@/lib/plan-lock";
 import { klaviyo } from "@/lib/klaviyo";
+import { discoveryRenewalCreditOnSealEvent } from "@/lib/discovery-renewal-credit";
+import { consumeReferralRewardsForSub } from "@/lib/referral-reward";
 import { consumeRetentionDiscountIfCharged } from "@/lib/retention-discount";
 import {
   getNextBillingAttempt,
@@ -118,6 +125,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "subscription.created":
         await syncSubscription(sub);
         await applyReanchorIfPending(sub);
+        // Discovery Set + suscripción en el mismo pedido: este es el momento en
+        // que por fin existe la sub a la que aplicar los 4,99 € (en orders/paid
+        // Seal aún no la tenía). Nunca lanza; el cron diario es la red.
+        await discoveryRenewalCreditOnSealEvent(sub);
         break;
       case "subscription.updated":
         await syncSubscription(sub);
@@ -132,6 +143,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // daily cron sweep is the guaranteed backstop, so a transient failure must
         // never fail the whole webhook.
         await consumeRetentionDiscountSafe(sub);
+        // Mismo trato para el crédito del Discovery Set: aplica si seguía
+        // pendiente y lo retira tras su cobro. Nunca lanza.
+        await discoveryRenewalCreditOnSealEvent(sub);
+        // Lo mismo para los 10 € de un referido (2026-10-10): si ya hay pedido de
+        // renovación con el código, se retira. Solo CONSUME, nunca aplica (aplicar
+        // es cosa del cron), y nunca lanza: el cron es el respaldo.
+        await consumeReferralRewardsForSub(sub);
+        // Un «Adelantar» que la tarjeta rechazó (2026-10-14). Para un cobro manual
+        // Seal NO manda billing_attempt/failed, pero este update llega 1-3 min
+        // después con el intento fallido dentro. El rescate (reintentar mañana o
+        // devolver la fecha) mueve varios cobros, así que va en segundo plano;
+        // el cron diario subscription-notices es la red si esto no llega a correr.
+        if (hasRecentManualFailure(sub)) {
+          after(() => runAsBackgroundJob(() => handleManualChargeFailureSafe(sub)));
+        }
+        // Tras reactivar o reanudar desde el portal, Seal regenera el calendario
+        // 27-170 s después y lo trae este update: es cuando se trae a mañana el
+        // cobro de quien volvió tras un impago y sale el aviso con la fecha buena
+        // (lib/reactivation.ts). Sin apunte pendiente es una lectura y nada más.
+        after(() => runAsBackgroundJob(() => applyFollowupSafe(sub)));
         break;
       case "subscription.cancelled":
       case "subscription.expired":
@@ -159,6 +190,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // en ninguna parte, ~987 €/mes") sigue siendo verdad de aquel julio, y se
         // resolvió construyendo la cola. El aviso se quedó encendido detrás.
         //
+        // ✅ DECIDIDO 2026-10-14 (Juan): estas bajas SÍ reciben email, además de la
+        // llamada. No sale de aquí sino del cron diario subscription-notices
+        // (lib/cancel-notice.ts), que espera a que soporte haya podido deshacer
+        // la baja y relee Seal antes de avisar. Lo de abajo queda como historia.
+        //
         // 🔶 PENDIENTE DE DECIDIR (Kiko): la tabla `cancellations` NO se escribe
         // desde aquí, así que estas bajas no entran en el win-back automático de
         // `api/cron/winback` (d14/d30). NO lo he cableado a propósito: la CS
@@ -183,6 +219,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // signal that the customer fixed the card we just emailed them about.
       case "subscription.resumed":
       case "subscription.reactivated":
+        await syncSubscription(sub);
+        // Una sub que vuelve a estar activa puede ser donde esperan los 10 € de un
+        // referido (2026-10-10): el cron la vuelve a mirar en su pasada siguiente
+        // en vez de dentro de días. Solo adelanta la mirada; nunca aplica.
+        await consumeReferralRewardsForSub(sub);
+        // Seguimiento de una reactivación o reanudación desde el portal: espera a
+        // que Seal regenere el calendario (lib/reactivation.ts).
+        after(() => runAsBackgroundJob(() => applyFollowupSafe(sub)));
+        break;
       case "subscription.shipping_address_updated":
         await syncSubscription(sub);
         break;
@@ -222,6 +267,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // today". It is now: 74 delivered between 2026-07-22 and 2026-07-27.)
         await syncSubscription(sub);
         await consumeRetentionDiscountSafe(sub);
+        // Retira el crédito del Discovery Set tras la renovación que lo cobró.
+        await discoveryRenewalCreditOnSealEvent(sub);
+        await consumeReferralRewardsForSub(sub);
         break;
       }
       case "billing_attempt.failed": {
@@ -235,6 +283,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // clicks through immediately sees current state, and keep the trigger
         // last so a Klaviyo problem can't cost us the cache update.
         await syncSubscription(sub);
+        // Por si Seal algún día SÍ manda este topic para un cobro manual: el
+        // rescate del Adelantar ignora los cobros programados (no tienen
+        // triggered_manually), así que aquí no hace nada en el caso normal.
+        if (hasRecentManualFailure(sub)) {
+          after(() => runAsBackgroundJob(() => handleManualChargeFailureSafe(sub)));
+        }
         // Seal calls the attempt `failed_billing_attempt` on this topic (and
         // `processed_billing_attempt` on the succeeded one). Verified against a
         // real payload 2026-07-29: { id, date, status: "error", completed_at,
@@ -420,13 +474,29 @@ function safeEqual(a: string, b: string): boolean {
  * mid-regeneration snapshot).
  */
 async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): Promise<void> {
+  // NUNCA LANZA (14-oct-2026). Se llama a mitad del handler, y una excepción aquí se
+  // saltaba todo lo de después: el consumo del 15%, del crédito Discovery y de las
+  // recompensas de referidos, y el rescate del Adelantar. La reserva del evento ya está
+  // hecha, así que la reentrega de Seal se deduplicaba y eso quedaba para los crons
+  // diarios. Lo que no se haga aquí lo remata `reanchor-drain`.
+  try {
+    await applyReanchorIfPendingUnsafe(subFromEvent);
+  } catch (e) {
+    console.error("[seal-webhook] reanchor failed (lo remata reanchor-drain)", {
+      sealSubId: subFromEvent?.id,
+      msg: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | null): Promise<void> {
   const sealSubId = subFromEvent?.id;
   if (!sealSubId) return;
 
   const sb = supabaseAdmin();
   const { data: intent } = await sb
     .from("subscription_reanchor_intents")
-    .select("customer_id, preserve_date, status")
+    .select("customer_id, preserve_date, status, created_at")
     .eq("seal_subscription_id", String(sealSubId))
     .eq("status", "pending")
     .maybeSingle();
@@ -486,11 +556,19 @@ async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): P
     // Converged: the next charge is on/after the preserved date and the whole
     // cadence was shifted with it. Done — clear the intent. (This is also the
     // re-entry after our own reschedules fire another subscription/updated.)
+    //
+    // Salvo la igualdad exacta con una intención recién armada: puede ser el calendario
+    // VIEJO en una lectura atrasada, ver `reanchorConverged`. Se deja para después.
+    if (!reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+      console.log("[seal-webhook] reanchor: igualdad con intención reciente, se espera", { sealSubId, preserve });
+      return;
+    }
     await sb
       .from("subscription_reanchor_intents")
       .delete()
       .eq("customer_id", intent.customer_id)
-      .eq("seal_subscription_id", String(sealSubId));
+      .eq("seal_subscription_id", String(sealSubId))
+      .eq("created_at", intent.created_at as string);
     console.log("[seal-webhook] reanchor converged", { sealSubId, preserve, nextCharge: firstDay });
     return;
   }
@@ -499,8 +577,18 @@ async function applyReanchorIfPending(subFromEvent?: SealSubscription | null): P
   // forward so the next charge lands on preserve and the new cadence runs from
   // there. reanchorCadence fires more subscription/updated events; on re-entry
   // firstDay === preserve, so we converge and clear the intent.
-  const moved = await seal.reanchorCadence(Number(sealSubId), preserve);
-  console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved, from: firstDay });
+  //
+  // Con el cerrojo de la sub (14-oct-2026): esas mismas re-entradas llegan MIENTRAS se
+  // mueve, ven el primer cobro sin mover todavía y lo volvían a desplazar todo. Si otro
+  // lo tiene, se salta: ese otro lo está haciendo.
+  const res = await tryWithPlanLock(String(intent.customer_id), Number(sealSubId), "reanchor-webhook", () =>
+    seal.reanchorCadence(Number(sealSubId), preserve),
+  );
+  if (!res.ran) {
+    console.log("[seal-webhook] reanchor: otro tiene el cerrojo, se salta", { sealSubId, reason: res.reason });
+    return;
+  }
+  console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved: res.value, from: firstDay });
 }
 
 /** Seal's attempt object on billing_attempt/* payloads. Verified 2026-07-29. */

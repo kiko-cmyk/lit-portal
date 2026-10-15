@@ -1,8 +1,10 @@
 "use client";
 
+import { skipErrorMessage } from "@/lib/skip-messages";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { addCycle, spacedFromNext } from "@/lib/cadence";
+import { Lp2Sheet, SheetDoneMark, SheetTitle } from "@/components/Lp2Sheet";
 import { T, useLang } from "@/lib/i18n";
 import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
 import type {
@@ -261,6 +263,31 @@ export function SkipOverlay({
                 en: "The service is taking longer than usual. Wait a moment and try again.",
                 es: "El servicio está tardando más de lo normal. Espera un momento e inténtalo de nuevo.",
               })
+            : code === "plan_change_in_progress" || code === "referral_reward_busy"
+              ? t({
+                  en: "We're finishing another update to your subscription. Wait a moment and try again.",
+                  es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+                })
+            : code === "seal_busy"
+              ? t({
+                  en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+                  es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+                })
+            : code === "change_unconfirmed"
+              ? t({
+                  en: "We couldn't confirm your change. Reload the page in a few minutes to see how your plan ended up and, if it didn't change, try again.",
+                  es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo ha quedado tu plan y, si no ha cambiado, vuelve a pedirlo.",
+                })
+            : code === "frequency_change_failed"
+              ? t({
+                  en: "We couldn't change the frequency and nothing was changed. Try again in a few minutes.",
+                  es: "No hemos podido cambiar la frecuencia y no se ha cambiado nada. Inténtalo de nuevo en unos minutos.",
+                })
+            : code === "change_applying"
+              ? t({
+                  en: "Your change is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to do it again.",
+                  es: "Tu cambio se está terminando de aplicar. En unos minutos lo verás en tu suscripción y no se te cobrará de más. No hace falta que lo repitas.",
+                })
             : code === "change_in_progress"
               ? t({
                   en: "We're still finishing your last change. Wait a few minutes, reload the page and try again.",
@@ -291,6 +318,9 @@ export function SkipOverlay({
           sealSubscriptionId: subscription.sealSubscriptionId,
           reason,
           freeText: freeText || undefined,
+          // El envío que se le enseñó (14-oct-2026): el servidor salta ESE y, si ya estaba
+          // saltado (un intento anterior que entró sin respuesta), no salta otro.
+          expectedNextShipDate: subscription.nextShipDate,
         }),
       });
       setDoneSkip(res);
@@ -298,56 +328,35 @@ export function SkipOverlay({
       setStep("done-skip");
     } catch (e) {
       const code = (e as { code?: string }).code;
-      setError(
-        code === "already_charged" || code === "no_pending_attempt"
-          ? t({
-              en: "This order is already being processed and can't be skipped.",
-              es: "Este pedido ya se está procesando y no se puede saltar.",
-            })
-          : t({
-              en: "Couldn't skip. Try again or contact us.",
-              es: "No se pudo saltar. Inténtalo de nuevo o escríbenos.",
-            }),
-      );
+      const status = (e as { status?: number }).status;
+      setError(skipErrorMessage(code, status, t));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end bg-[#0F0E1A]/70 backdrop-blur-sm sm:items-center"
-      onClick={busy ? undefined : onClose}
-    >
-      <div
-        className="zone-cream relative mx-auto max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-[28px] bg-[color:var(--color-brisky-cream)] px-7 pt-10 pb-8 sm:rounded-[28px]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={busy}
-          aria-label="Close"
-          className="absolute right-4 top-4 text-2xl opacity-60 disabled:opacity-30"
-        >
-          ×
-        </button>
-        {dryRun && (
-          <div className="absolute left-4 top-4 rounded-full bg-[color:var(--color-lit-grey)] px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-[color:var(--color-bold-yellow)]">
+    <Lp2Sheet
+      onClose={onClose}
+      busy={busy}
+      size="lg"
+      corner={
+        dryRun ? (
+          <span className="lp2-pill bg-[#2F343D] text-[color:var(--color-bold-yellow)]">
             <T en="Simulation" es="Simulación" />
-          </div>
-        )}
+          </span>
+        ) : undefined
+      }
+    >
 
         {/* ───────── Step: reason ───────── */}
         {step === "reason" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
+            <div className="lp2-eyebrow">
               <T en="Skip next order" es="Saltar próximo pedido" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
-              <T en="Sure you want to skip?" es="¿Seguro que quieres saltar?" />
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
+            <SheetTitle className="mt-2" text={t({ en: "Sure you want to skip?", es: "¿Seguro que quieres saltar?" })} />
+            <p className="lp2-text mt-3">
               <T
                 en="Tell us why, and we'll suggest something better than losing a shipment."
                 es="Cuéntanos por qué y te proponemos algo mejor que perder un envío."
@@ -360,16 +369,19 @@ export function SkipOverlay({
                   <button
                     type="button"
                     onClick={() => setReason(r.value)}
-                    className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm ${
-                      reason === r.value
-                        ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15"
-                        : "border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)]"
-                    }`}
+                    className={`lp2-choice ${reason === r.value ? "is-on" : ""}`}
                   >
                     <span>{t({ en: r.en, es: r.es })}</span>
-                    {reason === r.value && (
-                      <span className="text-[color:var(--color-bold-yellow)]">●</span>
-                    )}
+                    {/* La marca se ve también vacía, como en la encuesta y la
+                        cancelación: se sabe de entrada que se elige una. */}
+                    <span
+                      aria-hidden
+                      className={`h-4 w-4 flex-none rounded-full ${
+                        reason === r.value
+                          ? "bg-[color:var(--color-bold-yellow)] shadow-[0_0_0_2px_#2F343D]"
+                          : "border-[1.5px] border-[#2F343D]/25"
+                      }`}
+                    />
                   </button>
                 </li>
               ))}
@@ -380,7 +392,7 @@ export function SkipOverlay({
                 onChange={(e) => setFreeText(e.target.value)}
                 placeholder={t({ en: "Tell us what happened", es: "Cuéntanos qué ha pasado" })}
                 rows={2}
-                className="mt-3 w-full rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-3 text-sm placeholder:opacity-40"
+                className="lp2-field mt-3"
               />
             )}
 
@@ -388,14 +400,14 @@ export function SkipOverlay({
               type="button"
               disabled={!reason || (reason === "other" && !freeText.trim())}
               onClick={handleContinueFromReason}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-bold-yellow)] disabled:opacity-40"
+              className="lp2-cta mt-7"
             >
               <T en="Continue" es="Continuar" />
             </button>
             <button
               type="button"
               onClick={() => setStep("confirm")}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+              className="lp2-link mt-4"
             >
               <T en="Skip anyway" es="Saltar igualmente" />
             </button>
@@ -405,10 +417,8 @@ export function SkipOverlay({
         {/* ───────── Step: offer ───────── */}
         {step === "offer" && (
           <>
-            <h1 className="font-display text-3xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
-              {t(offerCopy)}
-            </h1>
-            <p className="mt-3 text-xs uppercase tracking-[0.15em] text-[color:var(--color-warm-gray)]">
+            <SheetTitle size="sm" className="" text={t(offerCopy)} />
+            <p className="mt-3 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8C8E87]">
               <T en="Now" es="Ahora" />:{" "}
               {t({
                 en: `${subscription.boxCount} ${subscription.boxCount === 1 ? "box" : "boxes"}, every ${freqLabel(subscription.frequency)}`,
@@ -418,13 +428,13 @@ export function SkipOverlay({
 
             {freqOptions.length > 1 && (
               <div className="mt-5">
-                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+                <div className="lp2-eyebrow mb-2">
                   <T en="New frequency" es="Nueva frecuencia" />
                 </div>
                 <select
                   value={offerFreq}
                   onChange={(e) => setOfferFreq(e.target.value as Frequency)}
-                  className="w-full rounded-[14px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em]"
+                  className="lp2-field"
                 >
                   {freqOptions.map((f) => (
                     <option key={f} value={f}>
@@ -440,25 +450,25 @@ export function SkipOverlay({
 
             {/* Preview of the next order date */}
             {currentShip && (
-              <div className="mt-4 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)]">
+              <div className="lp2-card mt-4">
                 {freqChanged && offerNewShip ? (
                   <>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+                    <div className="lp2-eyebrow">
                       <T en="Your next order moves to" es="Tu próximo pedido pasa al" />
                     </div>
-                    <div className="mt-1 font-display text-xl font-black uppercase">
+                    <div className="lp2-figure mt-1 text-[22px]">
                       {fmt(offerNewShip)}
                     </div>
-                    <div className="mt-1 text-[11px] uppercase tracking-[0.12em] opacity-50 line-through">
+                    <div className="mt-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[#8C8E87] line-through">
                       {fmt(currentShip)}
                     </div>
                   </>
                 ) : (
                   <>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+                    <div className="lp2-eyebrow">
                       <T en="Next order date" es="Fecha de próximo pedido" />
                     </div>
-                    <div className="mt-1 font-display text-xl font-black uppercase">
+                    <div className="lp2-figure mt-1 text-[22px]">
                       {fmt(currentShip)}
                     </div>
                   </>
@@ -471,7 +481,7 @@ export function SkipOverlay({
                 inerte solo estorba en una pantalla de retención. */}
             {boxOptions.length > 1 && (
             <div className="mt-5">
-              <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+              <div className="lp2-eyebrow mb-2">
                 <T en="Boxes per shipment" es="Cajas por envío" />
               </div>
               <div className="grid grid-cols-6 gap-2">
@@ -480,18 +490,15 @@ export function SkipOverlay({
                     key={n}
                     type="button"
                     onClick={() => setOfferBoxes(n)}
-                    className={`rounded-[14px] py-3 text-sm font-black ${
-                      offerBoxes === n
-                        ? "bg-[color:var(--color-lit-grey)] text-[color:var(--color-bold-yellow)]"
-                        : "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] text-[color:var(--color-warm-gray)]"
-                    }`}
+                    aria-pressed={offerBoxes === n}
+                    className={`lp2-option py-3 text-[18px] ${offerBoxes === n ? "is-on" : ""}`}
                   >
                     {n}
                   </button>
                 ))}
               </div>
               {pricing && displayPrice !== null && (
-                <div className="mt-2 text-[11px] uppercase tracking-[0.12em] opacity-60">
+                <div className="mt-2 text-[11px] font-bold uppercase tracking-[0.12em] text-[#8C8E87]">
                   €{displayPrice.toFixed(2)} <T en="per shipment" es="por envío" />
                   {boxesChanged &&
                     currentPrice !== null &&
@@ -509,7 +516,7 @@ export function SkipOverlay({
                   una línea basta. Solo cuando lo mostrado es precio de catálogo:
                   a un legacy que paga menos no se le promete "gratis". */}
               {offerBoxes === 3 && (boxesChanged || atCatalog) && (
-                <div className="mt-1 text-[11px] opacity-60">
+                <div className="mt-1 text-[12px] text-[#5E6168]">
                   <T
                     en="Add 1 more box and it's free: 4 boxes for the price of 3."
                     es="Añade 1 caja más y te sale gratis: 4 cajas al precio de 3."
@@ -517,12 +524,12 @@ export function SkipOverlay({
                 </div>
               )}
               {offerBoxes === 4 && atCatalog && (
-                <div className="mt-1 text-[11px] opacity-60">
+                <div className="mt-1 text-[12px] text-[#5E6168]">
                   <T en="PACK 3+1 · 1 free box." es="PACK 3+1 · 1 caja gratis." />
                 </div>
               )}
               {offerBoxes >= 5 && atCatalog && (
-                <div className="mt-1 text-[11px] opacity-60">
+                <div className="mt-1 text-[12px] text-[#5E6168]">
                   <T
                     en="Includes the 3+1 pack (1 free box)."
                     es="Incluye el pack 3+1 (1 caja gratis)."
@@ -533,14 +540,14 @@ export function SkipOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]">{error}</div>
+              <div className="lp2-notice lp2-notice--error mt-4">{error}</div>
             )}
 
             <button
               type="button"
               disabled={!hasOfferChange || busy}
               onClick={handleAdjust}
-              className="mt-6 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+              className="lp2-cta mt-6"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
@@ -552,14 +559,14 @@ export function SkipOverlay({
               <button
                 type="button"
                 onClick={() => setStep("reason")}
-                className="text-[11px] uppercase tracking-[0.18em] opacity-50"
+                className="cursor-pointer text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#5E6168]"
               >
                 ← <T en="Back" es="Atrás" />
               </button>
               <button
                 type="button"
                 onClick={() => setStep("confirm")}
-                className="text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+                className="cursor-pointer text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#5E6168] underline underline-offset-4"
               >
                 <T en="Skip anyway" es="Saltar igualmente" />
               </button>
@@ -570,13 +577,11 @@ export function SkipOverlay({
         {/* ───────── Step: confirm skip ───────── */}
         {step === "confirm" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
+            <div className="lp2-eyebrow">
               <T en="Skip next order" es="Saltar próximo pedido" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1] text-[color:var(--color-lit-grey)]">
-              <T en="Need a break?" es="¿Necesitas una pausa?" />
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
+            <SheetTitle className="mt-2" text={t({ en: "Need a break?", es: "¿Necesitas una pausa?" })} />
+            <p className="lp2-text mt-3">
               <T
                 en="Your subscription will skip one cycle and we'll resume from there."
                 es="Tu suscripción se saltará un ciclo y retomaremos desde ahí."
@@ -584,20 +589,20 @@ export function SkipOverlay({
             </p>
 
             {currentShip && (
-              <div className="mt-6 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] p-5 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)]">
-                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
+              <div className="lp2-card mt-6">
+                <div className="lp2-eyebrow">
                   <T en="Next order date" es="Fecha de próximo pedido" />
                 </div>
-                <div className="mt-1 font-display text-xl font-black uppercase opacity-60">
+                <div className="lp2-figure mt-1 text-[22px] text-[#8C8E87]">
                   {fmt(currentShip)}
                 </div>
                 {skipShip && (
                   <>
-                    <div className="my-4 border-t border-[color:var(--color-lit-grey)]/10" />
-                    <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)]">
+                    <div className="my-4 border-t border-[#2F343D]/12" />
+                    <div className="lp2-eyebrow">
                       <T en="New next order date" es="Nueva fecha del próximo pedido" />
                     </div>
-                    <div className="mt-1 font-display text-xl font-black uppercase">
+                    <div className="lp2-figure mt-1 text-[22px]">
                       {fmt(skipShip)}
                     </div>
                   </>
@@ -606,21 +611,21 @@ export function SkipOverlay({
             )}
 
             {error && (
-              <div className="mt-4 rounded-[14px] bg-[color:var(--color-danger)]/10 px-4 py-3 text-xs text-[color:var(--color-danger)]">{error}</div>
+              <div className="lp2-notice lp2-notice--error mt-4">{error}</div>
             )}
 
             <button
               type="button"
               disabled={busy}
               onClick={handleSkip}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-lit-grey)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-brisky-cream)] disabled:opacity-50"
+              className="lp2-cta mt-7"
             >
               {busy ? <T en="Skipping…" es="Saltando…" /> : <T en="Confirm skip" es="Confirmar saltar" />}
             </button>
             <button
               type="button"
               onClick={() => setStep(offerAvailable ? "offer" : "reason")}
-              className="mt-2 w-full text-[11px] uppercase tracking-[0.18em] opacity-50 underline"
+              className="lp2-link mt-4"
             >
               {offerAvailable ? (
                 <T en="See the alternative" es="Ver la alternativa" />
@@ -634,17 +639,16 @@ export function SkipOverlay({
         {/* ───────── Done: skipped ───────── */}
         {step === "done-skip" && doneSkip && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
+            <SheetDoneMark />
+            <div className="lp2-eyebrow mt-5">
               <T en="Done" es="Listo" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1]">
-              <T en="Skipped" es="Saltado" />
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
+            <SheetTitle className="mt-2" text={t({ en: "Skipped", es: "Saltado" })} />
+            <p className="lp2-text mt-3">
               <T en="Your next box now ships on" es="Tu próxima caja sale el" />{" "}
               <strong>{fmt(new Date(doneSkip.newNextShipDate))}</strong>.
             </p>
-            <p className="mt-3 text-xs opacity-50">
+            <p className="mt-3 text-[12px] leading-[1.5] text-[#8C8E87]">
               <T
                 en="You can undo this until your new ship date approaches."
                 es="Puedes deshacer hasta que se acerque la nueva fecha."
@@ -653,7 +657,7 @@ export function SkipOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="lp2-cta lp2-cta--still mt-7"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>
@@ -663,13 +667,12 @@ export function SkipOverlay({
         {/* ───────── Done: adjusted ───────── */}
         {step === "done-adjust" && (
           <>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-[color:var(--color-warm-gray)]">
+            <SheetDoneMark />
+            <div className="lp2-eyebrow mt-5">
               <T en="Plan updated" es="Plan actualizado" />
             </div>
-            <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.1]">
-              <T en="All set" es="Listo" />
-            </h1>
-            <p className="mt-3 text-sm text-[color:var(--color-warm-gray)]">
+            <SheetTitle className="mt-2" text={t({ en: "All set", es: "Listo" })} />
+            <p className="lp2-text mt-3">
               {freqChanged && adjustedDate ? (
                 <>
                   <T
@@ -688,13 +691,12 @@ export function SkipOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="mt-7 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
+              className="lp2-cta lp2-cta--still mt-7"
             >
               <T en="Back to LIT" es="Volver a LIT" />
             </button>
           </>
         )}
-      </div>
-    </div>
+    </Lp2Sheet>
   );
 }

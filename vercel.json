@@ -42,12 +42,24 @@
       "schedule": "30 6 * * *"
     },
     {
+      "path": "/api/cron/discovery-renewal-credit-sweep",
+      "schedule": "45 6 * * *"
+    },
+    {
       "path": "/api/cron/profile-survey-sync",
       "schedule": "45 6 * * *"
     },
     {
+      "path": "/api/cron/referral-sweep",
+      "schedule": "50 6 * * *"
+    },
+    {
       "path": "/api/cron/survey-discount-cleanup",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/subscription-notices",
+      "schedule": "45 8 * * *"
     }
   ]
 }

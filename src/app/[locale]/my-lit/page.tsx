@@ -3,22 +3,22 @@
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BottomNav, TopNav } from "@/components/BottomNav";
+import { TopNav } from "@/components/BottomNav";
+import { MobileHeader } from "@/components/MobileHeader";
 import { CollectionMiniGrid } from "@/components/CollectionMiniGrid";
-import { CustomerChip } from "@/components/CustomerChip";
 import { DeliveryCalendar } from "@/components/DeliveryCalendar";
 import { LoginScreen } from "@/components/LoginScreen";
-import { Logo } from "@/components/Logo";
-import { Marquee } from "@/components/Marquee";
+import { BrandBand, CardTitle, Lp2Card } from "@/components/Lp2";
+import { Lp2Loader } from "@/components/Lp2Loader";
 import { NextBoxHero, type NextBoxHeroVariant } from "@/components/NextBoxHero";
-import { OrderHistory } from "@/components/OrderHistory";
 import {
+  DateChange,
   QAIcons,
   QuickActionButton,
 } from "@/components/QuickActionButton";
 import { ReactivateCard } from "@/components/ReactivateCard";
+import { ReferralCard } from "@/components/ReferralCard";
 import { SectionDivider } from "@/components/SectionDivider";
-import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { TierPill } from "@/components/TierPill";
 
 // Overlays are modal-only (rendered behind a click), so we code-split them out
@@ -36,6 +36,9 @@ import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-
 import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
 import { SUBSCRIBE_URL } from "@/lib/storefront-links";
 import { FREQUENCIES } from "@/lib/plan-options";
+import { flavorVisual } from "@/lib/flavor-visuals";
+import { formatEuro } from "@/lib/format-price";
+import { frequencyLabel } from "@/lib/frequency-label";
 import type {
   CustomerProfile,
   Frequency,
@@ -56,6 +59,14 @@ import type {
 // cases where Seal takes longer (memory: regenerate can take minutes).
 const POST_PLAN_RESYNC_MS = 60_000;
 const POST_PLAN_RESYNC_INTERVAL_MS = 5_000;
+// Tras reactivar o reanudar, Seal tarda 27-170 s en regenerar el calendario (medido
+// el 14-oct) y después el portal aún trae a mañana el cobro de quien volvió tras un
+// impago. El Hub sigue preguntando mientras el panel diga que hay algo pendiente.
+const POST_REACTIVATE_RESYNC_MS = 240_000;
+// Con un cambio de líneas que se está terminando de aplicar (14-oct-2026) el Hub sigue
+// mirando hasta que termine: el `after()` de la ruta suele cerrarlo en menos de un minuto
+// y el cron, como mucho, en unos minutos.
+const PENDING_CHANGE_RESYNC_MS = 10 * 60_000;
 
 export default function HubPage() {
   const [data, setData] = useState<HubDashboard | null>(null);
@@ -82,7 +93,6 @@ export default function HubPage() {
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const t = useLang();
   const lang = useLangValue();
-  const { canSwitch, openChooser } = useSubscriptionSwitch();
   usePageTitle({ en: "Subscription", es: "Suscripción" }); // browser tab title
 
   // Deep-link desde el email de recordatorio de renovación
@@ -156,6 +166,10 @@ export default function HubPage() {
         ) {
           setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
         }
+        // Un cambio que se está terminando de aplicar: se sigue mirando hasta que acabe.
+        if (fresh.subscription?.pendingChange && !fresh.subscription.pendingChange.stalled) {
+          setSyncingUntil(Date.now() + PENDING_CHANGE_RESYNC_MS);
+        }
       })
       .catch((e: ApiClientError) => setError(e.code));
     api<TimelineEntry[]>("/api/timeline?limit=4")
@@ -178,7 +192,8 @@ export default function HubPage() {
         const fresh = await api<HubDashboard>("/api/hub/dashboard");
         if (cancelled) return;
         setData(fresh);
-        if (fresh.reanchorPending !== true) {
+        // Se para cuando no queda ni re-anclaje ni cambio de líneas por terminar.
+        if (fresh.reanchorPending !== true && !fresh.subscription?.pendingChange) {
           setSyncingUntil(null);
           return;
         }
@@ -213,6 +228,9 @@ export default function HubPage() {
       // Refetch dashboard so the Hub flips out of post-cancel mode.
       const fresh = await api<HubDashboard>("/api/hub/dashboard");
       setData(fresh);
+      // El calendario lo regenera Seal después (y con un impago, el portal lo trae
+      // a mañana): «actualizando tu calendario» hasta que el panel lo dé por hecho.
+      setSyncingUntil(Date.now() + POST_REACTIVATE_RESYNC_MS);
     } catch (e) {
       const code = (e as { code?: string }).code;
       if (code === "reactivation_window_expired" || code === "second_cancel_no_reactivation") {
@@ -274,13 +292,13 @@ export default function HubPage() {
       // Seal regenerates billing_attempts asynchronously after a resume, so the
       // next-ship date can still be missing here. Kick off the same silent
       // re-poll a plan change uses instead of showing a blank hero.
-      if (!fresh.subscription?.nextShipDate) {
-        // Same tolerated impurity as the dropsHeldDays computation below: this
-        // runs inside an event handler, not during render, and the value is a
-        // wall-clock deadline for the poll loop.
-        // eslint-disable-next-line react-hooks/purity
-        setSyncingUntil(Date.now() + POST_PLAN_RESYNC_MS);
-      }
+      // Desde el 14-oct siempre: el aviso de confirmación también espera a ese
+      // calendario, y el panel dice «pendiente» hasta que sale.
+      // Same tolerated impurity as the dropsHeldDays computation below: this
+      // runs inside an event handler, not during render, and the value is a
+      // wall-clock deadline for the poll loop.
+      // eslint-disable-next-line react-hooks/purity
+      setSyncingUntil(Date.now() + POST_REACTIVATE_RESYNC_MS);
     } catch (e) {
       const code = (e as { code?: string }).code;
       console.error("[hub] resume failed", e);
@@ -429,6 +447,18 @@ export default function HubPage() {
 
   const collectionEarned = Math.min(4, Math.floor(timeline.length));
 
+  // «20 ene» de la próxima y de la siguiente: las tarjetas de «Gestiona tu plan»
+  // enseñan con ellas qué cambia al adelantar o al saltar.
+  const shortDate = (d: Date) =>
+    `${d.getDate()} ${d.toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { month: "short" }).replace(".", "")}`;
+  const nextLabel = nextShipDate ? shortDate(nextShipDate) : null;
+  const followingLabel = data.upcomingShipments[0]?.date
+    ? shortDate(new Date(data.upcomingShipments[0].date))
+    : null;
+  const boxesLabel = `${sub.boxCount} ${
+    sub.boxCount === 1 ? t({ en: "box", es: "caja" }) : t({ en: "boxes", es: "cajas" })
+  }`;
+
   // Days left of the 90-day drops hold (post-cancel only; null when there is
   // no hold). Display-only, re-derived on every render/refetch — sub-render
   // precision is irrelevant here, hence the tolerated impurity.
@@ -442,42 +472,19 @@ export default function HubPage() {
     : null;
 
   return (
-    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col overflow-x-clip bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
-          2026-05-19). z-40 sits above the BottomNav z-40 sibling, fine on
-          mobile because they don't overlap (top vs bottom). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
-        <Logo />
-        {/* min-w-0 lets the group shrink below its content on narrow phones
-            (≤390px with pill + toggle + chip + TierPill); the chip name and
-            the TierPill truncate under pressure instead of overflowing the
-            viewport (audit 2026-07-08). */}
-        <div className="flex min-w-0 items-center gap-2.5">
-          {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
-              tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
-              2026-07-06). */}
-          {canSwitch && (
-            <button
-              type="button"
-              onClick={openChooser}
-              className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
-              style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
-            >
-              {t({ en: "Switch", es: "Cambiar" })}
-            </button>
-          )}
-          {customer && <CustomerChip name={customer.name} />}
-          <TierPill
-            visible={drops.tierEarned}
-            tierEarnedAt={drops.tierEarnedAt ?? null}
-          />
-        </div>
-      </header>
+      {/* Cabecera móvil (Juan 2026-10-14): menú, logo e iniciales, como la de
+          litsalt.com. Fija: nunca se esconde al hacer scroll (Juan 2026-05-19). */}
+      <MobileHeader name={customer?.name} extra={<TierPill visible={drops.tierEarned} tierEarnedAt={drops.tierEarnedAt ?? null} />} />
 
-      <main className="flex-1 pt-[88px] pb-32 md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12">
+      {/* Abajo, 48 px bajo la banda, el mismo hueco que entre los referidos y
+          la banda (Juan 2026-10-13), más la zona de la barra de inicio del
+          iPhone. Ya no hay barra fija abajo (Juan 2026-10-14). */}
+      <main className="flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12">
         {showSyncingBanner && <SyncingBanner />}
+        {sub.pendingChange && <ChangeApplyingBanner sub={sub} />}
         {isPaused ? (
           <ReactivateCard
             variant="paused"
@@ -487,6 +494,7 @@ export default function HubPage() {
           />
         ) : isPostCancel ? (
           <ReactivateCard
+            variant={data.reactivationKind === "unpaid" ? "unpaid" : "cancelled"}
             dropsHeld={drops.balance}
             dropsHeldDays={dropsHeldDays ?? undefined}
             cardsKept={collectionEarned}
@@ -505,76 +513,135 @@ export default function HubPage() {
               onUndoSkip={justSkipped ? handleUndoSkip : undefined}
               boxCount={sub.boxCount}
               frequency={sub.frequency}
+              chargeTotalCents={sub.chargeTotalCents}
             />
 
-            <SectionDivider
-              title={t({
-                en: "Manage my subscription",
-                es: "Gestionar mi suscripción",
-              })}
-            />
-            <section className="mx-6 grid grid-cols-2 gap-2.5 md:mx-0 md:grid-cols-4">
-              <QuickActionButton
-                icon={QAIcons.ChargeNow}
-                label={t({ en: "Bring forward", es: "Adelantar pedido" })}
-                sub={t({ en: "Order now", es: "Hacer pedido ahora" })}
-                onClick={() => setShowChargeNow(true)}
-                disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.ChangePlan}
-                label={t({ en: "Change plan", es: "Cambiar plan" })}
-                sub={t({
-                  en: "Change boxes or frequency",
-                  es: "Cambiar cajas o frecuencia",
-                })}
-                onClick={() => setShowPlan(true)}
-                disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.Skip}
-                label={t({ en: "Skip next", es: "Saltar próximo" })}
-                sub={t({
-                  en: "Skip next order",
-                  es: "Saltar próximo pedido",
-                })}
-                onClick={() => setShowSkip(true)}
-                disabled={sub.withinCutoff}
-              />
-              <QuickActionButton
-                icon={QAIcons.Flavor}
-                label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
-                sub={
-                  // Pluralised by box count (Juan 2026-07-28). Deliberately does NOT name
-                  // the flavours: that copy goes stale the day a third flavour ships.
-                  sub.boxCount > 1
-                    ? t({ en: "Choose the flavor of your boxes", es: "Elige el sabor de tus cajas" })
-                    : t({ en: "Choose the flavor of your box", es: "Elige el sabor de tu caja" })
-                }
-                onClick={() => setShowFlavor(true)}
-                disabled={sub.withinCutoff}
-              />
-            </section>
+            <div className="mx-6 md:mx-0">
+              <Lp2Card>
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                  <CardTitle
+                    thin={t({ en: "Manage", es: "Gestiona" })}
+                    bold={t({ en: "your plan", es: "tu plan" })}
+                  />
+                  <p className="m-0 hidden text-[14.5px] text-[#5E6168] md:block">
+                    <T
+                      en="Bring forward, skip or change your LIT whenever you need."
+                      es="Adelanta, salta o cambia tu LIT cuando lo necesites."
+                    />
+                  </p>
+                </div>
+                {/* Cada tarjeta dice abajo qué cambia (Juan 2026-10-13: «las cards
+                    muy sosas»). Las fechas salen de la suscripción: la próxima y
+                    la siguiente de la cola de Seal, que es la que queda al saltar. */}
+                <section className="mt-4 grid grid-cols-2 gap-2.5 md:mt-[22px] md:gap-3 lg:grid-cols-4">
+                  <QuickActionButton
+                    icon={QAIcons.ChargeNow}
+                    label={t({ en: "Bring forward", es: "Adelantar envío" })}
+                    sub={
+                      nextLabel
+                        ? t({
+                            en: `Get it now, no need to wait for ${nextLabel}`,
+                            es: `Recíbelo ya, sin esperar al ${nextLabel}`,
+                          })
+                        : t({ en: "Order now", es: "Haz tu pedido ahora" })
+                    }
+                    state={nextLabel ? <DateChange from={nextLabel} to={t({ en: "Today", es: "Hoy" })} /> : undefined}
+                    onClick={() => setShowChargeNow(true)}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
+                  />
+                  <QuickActionButton
+                    icon={QAIcons.ChangePlan}
+                    label={t({ en: "Change plan", es: "Cambiar plan" })}
+                    sub={t({
+                      en: "Boxes or how often it arrives",
+                      es: "Cajas o cada cuánto te llega",
+                    })}
+                    state={
+                      <>
+                        <span className="md:hidden">
+                          {boxesLabel} · {frequencyLabel(sub.frequency, lang, { format: "short" })}
+                        </span>
+                        <span className="hidden md:inline">
+                          {boxesLabel} · {frequencyLabel(sub.frequency, lang, { format: "long" })}
+                        </span>
+                      </>
+                    }
+                    onClick={() => setShowPlan(true)}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
+                  />
+                  <QuickActionButton
+                    icon={QAIcons.Skip}
+                    label={t({ en: "Skip next", es: "Saltar próximo" })}
+                    sub={t({
+                      en: "Free, only the next delivery",
+                      es: "Sin coste, solo el próximo envío",
+                    })}
+                    state={
+                      nextLabel && followingLabel ? (
+                        <DateChange from={nextLabel} to={followingLabel} />
+                      ) : undefined
+                    }
+                    onClick={() => setShowSkip(true)}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
+                  />
+                  <QuickActionButton
+                    icon={QAIcons.Flavor}
+                    label={t({ en: "Switch flavor", es: "Cambiar sabor" })}
+                    sub={
+                      // Pluralised by box count (Juan 2026-07-28). Deliberately does NOT name
+                      // the flavours: that copy goes stale the day a third flavour ships.
+                      sub.boxCount > 1
+                        ? t({ en: "Choose the flavor of your boxes", es: "Elige el sabor de tus cajas" })
+                        : t({ en: "Choose the flavor of your box", es: "Elige el sabor de tu caja" })
+                    }
+                    // Los sabores en UNA fila también en móvil (Juan 2026-10-14):
+                    // en media tarjeta caben 3 con la caja a 18 px y menos aire.
+                    stateOneLine
+                    state={
+                      sub.composition?.length ? (
+                        <>
+                          {sub.composition.map((c, i) => (
+                            <span
+                              key={c.flavor}
+                              className={`inline-flex flex-none items-center gap-0.5 md:gap-1 ${i > 0 ? "ml-[3px] md:ml-2" : ""}`}
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={flavorVisual(c.flavor).box}
+                                alt=""
+                                className="h-auto w-[18px] md:w-[30px]"
+                              />
+                              {c.boxes}×
+                            </span>
+                          ))}
+                        </>
+                      ) : undefined
+                    }
+                    onClick={() => setShowFlavor(true)}
+                    disabled={sub.withinCutoff || !!sub.pendingChange}
+                  />
+                </section>
+              </Lp2Card>
+            </div>
 
-            <SectionDivider
-              title={t({ en: "Upcoming", es: "Próximos pedidos" })}
-            />
             <DeliveryCalendar
               nextShipDate={nextShipDate}
               upcoming={data.upcomingShipments}
+              frequency={sub.frequency}
             />
 
-            <SectionDivider
-              title={t({ en: "My orders", es: "Mis pedidos" })}
-            />
-            {/* 20 y no 10: desde que la lista se plega a 4 (OrderHistory), lo
-                que se pide de más no se pinta, solo espera detrás del
-                desplegable. Con 10 un suscriptor de un año veía "ver 6 más" y
-                se quedaba sin los otros seis sin que nada lo dijera. El API
-                topa en 50. */}
-            <OrderHistory limit={20} />
+            {/* Referidos, fase 0 (2026-10-10). Solo en esta rama (suscripción
+                activa): el programa es para quien está suscrito. Va debajo de
+                «Próximos pedidos» (Juan 2026-10-13), y también en Cuenta. La
+                tarjeta pide sus propios datos y no se pinta si el programa no
+                está abierto para este cliente (flag REFERRALS, B2B) o si algo
+                falla.
 
-            <Marquee />
+                «Mis pedidos» ya no está aquí (Juan 2026-10-13): los pedidos se
+                consultan en Cuenta, que tiene su propia lista. */}
+            <ReferralCard placement="hub" />
+
+            <BrandBand />
 
             {/* La Colección está oculta mientras la función no exista
                 (COLLECTION_ENABLED en lib/portal-link.ts). Este era el único enlace
@@ -592,7 +659,6 @@ export default function HubPage() {
         )}
       </main>
 
-      <BottomNav />
 
       {/* Overlays live outside the isPaused/isPostCancel branch, so they can open
           on top of the resume card. One route reaches them without a click: the
@@ -732,6 +798,60 @@ export default function HubPage() {
   );
 }
 
+/**
+ * Un cambio de plan que se está terminando de aplicar (14-oct-2026). Lo de la tarjeta ya es
+ * lo PEDIDO (el dashboard lo enmascara); esto dice por qué no se puede tocar nada todavía y
+ * que no se cobrará de más. Si se ha quedado a medias por algo que tiene que mirar una
+ * persona (`stalled`), se dice eso, sin prometer plazos.
+ */
+function ChangeApplyingBanner({ sub }: { sub: Subscription }) {
+  const lang = useLangValue();
+  const stalled = sub.pendingChange?.stalled === true;
+  const boxes = sub.boxCount;
+  const freqEs = frequencyLabel(sub.frequency, "es").toLowerCase();
+  const freqEn = frequencyLabel(sub.frequency, "en").toLowerCase();
+  const price = formatEuro(sub.chargeTotalCents, lang);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mx-6 mt-2 flex items-start gap-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-4 py-3 shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] md:mx-0"
+    >
+      <span
+        className="mt-[3px] inline-block h-3 w-3 flex-shrink-0 rounded-full bg-[color:var(--color-bold-yellow)]"
+        style={stalled ? undefined : { animation: "pulse-slot 1.4s ease-in-out infinite" }}
+      />
+      <div className="text-[12px] leading-[1.45] text-[color:var(--color-lit-grey)]">
+        {stalled ? (
+          lang === "es" ? (
+            <>
+              <strong className="font-extrabold">Estamos revisando tu último cambio.</strong> Se ha quedado a
+              medias y lo estamos mirando nosotros. No te cobraremos de más y te escribimos en cuanto esté.
+            </>
+          ) : (
+            <>
+              <strong className="font-extrabold">We’re reviewing your last change.</strong> It didn’t finish
+              applying and we’re on it. You won’t be overcharged, and we’ll write to you once it’s sorted.
+            </>
+          )
+        ) : lang === "es" ? (
+          <>
+            <strong className="font-extrabold">Estamos terminando de aplicar tu cambio.</strong> Tu plan nuevo,{" "}
+            {boxes} {boxes === 1 ? "caja" : "cajas"} {freqEs} por {price}, estará listo en unos minutos. No hace
+            falta que hagas nada y no te cobraremos de más.
+          </>
+        ) : (
+          <>
+            <strong className="font-extrabold">We’re finishing your change.</strong> Your new plan,{" "}
+            {boxes} {boxes === 1 ? "box" : "boxes"} {freqEn} for {price}, will be ready in a few minutes. You don’t
+            need to do anything and you won’t be overcharged.
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SyncingBanner() {
   const lang = useLangValue();
   return (
@@ -791,21 +911,16 @@ function EmptyState() {
 
 function ErrorState({ code }: { code: string }) {
   return (
-    <main className="zone-cream flex flex-1 flex-col items-center justify-center p-8 text-center">
-      <h1 className="text-2xl mb-3">
+    <main className="zone-lp2 flex flex-1 flex-col items-center justify-center bg-[#EFEEE5] p-8 text-center text-[#2F343D]">
+      <h1 className="m-0 font-display text-[28px] font-semibold uppercase leading-[0.98] tracking-[0.005em] md:text-[38px]">
         <T en="Something went wrong." es="Algo no fue bien." />
       </h1>
-      <p className="text-xs opacity-50">{code}</p>
+      <p className="mt-3 mb-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8C8E87]">{code}</p>
     </main>
   );
 }
 
+// La espera común del portal (lp2, 2026-10-13), la misma que la de la entrada.
 function LoadingState() {
-  return (
-    <main className="zone-cream flex flex-1 items-center justify-center">
-      <p className="text-xs uppercase tracking-[0.2em] opacity-50">
-        <T en="Loading…" es="Cargando…" />
-      </p>
-    </main>
-  );
+  return <Lp2Loader />;
 }

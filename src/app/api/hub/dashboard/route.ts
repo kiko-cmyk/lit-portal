@@ -1,10 +1,14 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
+import { reanchorConverged } from "@/lib/frequency-core";
+import { maskPendingLineRepair } from "@/lib/line-repair-runner";
+import { tryWithPlanLock } from "@/lib/plan-lock";
 import { langFromRequest } from "@/lib/request-lang";
 import { computePuzzleState, getActiveRewardForCustomer } from "@/lib/drops";
 import { getNextBillingAttempt, mapToSubscription, seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
+import { findExternalCancel, portalCancelEligible } from "@/lib/reactivation";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 import { supabaseAdmin } from "@/lib/supabase";
 import type {
@@ -46,6 +50,9 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
 
   // Fallback to the full scan on a cache miss (cold first load, or stale id).
   let sub: SealSubscription | null = fastSub;
+  // De qué baja viene la sub cancelada que se enseña para reactivar (2026-10-14):
+  // el Hub pinta la tarjeta de impago con su propio texto.
+  let reactivationKind: "portal" | "unpaid" | "support" | null = null;
   if (!sub && requestedSubId) {
     // Explicit selection not resolvable/owned → 404, don't silently show another sub.
     throw new ApiHttpError(404, "subscription_not_found", `No subscription ${requestedSubId}`);
@@ -82,17 +89,23 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     // /api/subscription/reactivate), surface the most recent cancelled sub;
     // mapStatus turns it into "expired" and the Hub renders the ReactivateCard.
     if (!sub) {
-      const HOLD_DAYS = 90;
-      const eligibleToReactivate =
-        (prefsRes?.cancel_count ?? 0) === 1 &&
-        !!prefsRes?.last_cancelled_at &&
-        Date.now() - new Date(prefsRes.last_cancelled_at as string).getTime() <=
-          HOLD_DAYS * 24 * 60 * 60 * 1000;
-      if (eligibleToReactivate) {
+      // Bajas por impago o por atención (2026-10-14): también se enseña la
+      // tarjeta de reactivar, y con impago con su propio texto (el último pago no
+      // pasó y la caja se cobra mañana). Se mira ANTES que la regla del portal,
+      // en el mismo orden que /api/subscription/reactivate: si no, alguien con una
+      // baja del portal reciente y luego un impago vería una tarjeta y la ruta
+      // haría otra cosa. Sin .catch: un Seal ocupado es un 503 que se reintenta,
+      // no la pantalla de «compra una suscripción» (revisión adversarial).
+      const external = await findExternalCancel(subsRes);
+      if (external) {
+        sub = external.sub;
+        reactivationKind = external.actor;
+      } else if (portalCancelEligible(prefsRes)) {
         sub =
           subsRes
             .filter((s) => s.status === "CANCELLED" || !!s.cancellation_scheduled_for)
             .sort((a, b) => b.order_placed.localeCompare(a.order_placed))[0] ?? null;
+        if (sub) reactivationKind = "portal";
       }
     }
   }
@@ -109,10 +122,12 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   // runs from there. This makes the fix work even without the Seal webhook /
   // sub-daily cron firing first. seal.reanchorCadence is idempotent.
   let reanchorPending = false;
+  // La fecha que se le prometió al cliente mientras Seal regenera o se re-ancla (14-oct-2026).
+  let promisedNextDate: string | null = null;
   try {
     const { data: intent } = await sb
       .from("subscription_reanchor_intents")
-      .select("preserve_date, seal_subscription_id")
+      .select("preserve_date, seal_subscription_id, created_at")
       .eq("customer_id", ctx.customerId)
       .eq("seal_subscription_id", String(sub.id))
       .eq("status", "pending")
@@ -121,35 +136,65 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
       const preserve = String(intent.preserve_date).slice(0, 10);
       const firstDay = getNextBillingAttempt(sub)?.date?.slice(0, 10) ?? null;
       if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
-        await sb
-          .from("subscription_reanchor_intents")
-          .delete()
-          .eq("customer_id", ctx.customerId)
-          .eq("seal_subscription_id", String(sub.id));
+        // Dentro del corte de 24h no se re-ancla, pero tampoco se borra desde aquí
+        // (14-oct-2026): el drain la borra AVISANDO a #incidents, y si el Hub llegaba
+        // antes, el aviso no salía nunca.
       } else if (firstDay && firstDay < preserve) {
-        await seal.reanchorCadence(Number(sub.id), preserve);
-        const refreshed = await seal.getSubscriptionById(Number(sub.id));
-        if (refreshed) sub = refreshed;
-        await sb
-          .from("subscription_reanchor_intents")
-          .delete()
-          .eq("customer_id", ctx.customerId)
-          .eq("seal_subscription_id", String(sub.id));
+        // Con el cerrojo de la sub, como el webhook y el drain (14-oct-2026). Sin borrar
+        // la intención: se cierra en una lectura posterior con `reanchorConverged`, sobre
+        // lo que Seal enseñe de verdad, no a ciegas tras mover.
+        const subId = Number(sub.id);
+        const res = await tryWithPlanLock(ctx.customerId, subId, "reanchor-dashboard", () =>
+          seal.reanchorCadence(subId, preserve),
+        );
+        if (res.ran) {
+          const refreshed = await seal.getSubscriptionById(subId);
+          if (refreshed) sub = refreshed;
+        }
+        reanchorPending = true;
+        promisedNextDate = preserve;
       } else if (firstDay && firstDay >= preserve) {
-        // Already on/after preserve — converged, clear the intent.
-        await sb
-          .from("subscription_reanchor_intents")
-          .delete()
-          .eq("customer_id", ctx.customerId)
-          .eq("seal_subscription_id", String(sub.id));
+        if (reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+          // Already on/after preserve — converged, clear the intent.
+          await sb
+            .from("subscription_reanchor_intents")
+            .delete()
+            .eq("customer_id", ctx.customerId)
+            .eq("seal_subscription_id", String(sub.id))
+            .eq("created_at", intent.created_at as string);
+        } else {
+          // Igualdad exacta con una intención recién armada: puede ser el calendario
+          // viejo en una lectura atrasada. Se sigue enseñando la fecha prometida.
+          reanchorPending = true;
+          promisedNextDate = preserve;
+        }
       } else {
         // firstDay null → Seal still regenerating; leave intent for next poll.
         // The Hub keeps the "updating your calendar" banner up while this holds.
         reanchorPending = true;
+        promisedNextDate = preserve;
       }
     }
   } catch (err) {
     console.warn("[hub-dashboard] reanchor drain failed:", err);
+  }
+
+  // Reactivación o reanudación cuyo seguimiento aún no ha corrido (2026-10-14):
+  // Seal sigue regenerando el calendario, o el portal aún no ha traído a mañana
+  // el cobro de quien volvió tras un impago. Mismo banner y mismo re-poll que un
+  // cambio de plan. Solo lectura: lo aplica el webhook (lib/reactivation.ts).
+  if (!reanchorPending) {
+    try {
+      const { data: followup } = await sb
+        .from("reactivation_followups")
+        .select("status")
+        .eq("seal_subscription_id", String(sub.id))
+        .in("status", ["pending", "handling"])
+        .maybeSingle();
+      if (followup) reanchorPending = true;
+    } catch (err) {
+      console.warn("[hub-dashboard] reactivation followup lookup failed:", err);
+    }
   }
 
   const subscription = mapToSubscription(sub, ctx.customerId);
@@ -274,11 +319,20 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   // retrasa la pantalla entera. `answered` sale de la lápida además de la fila,
   // para que a quien pidió el borrado no se le vuelva a ofrecer como si nunca
   // hubiera contestado.
+  // Lo que se ENSEÑA (14-oct-2026): con un cambio de líneas a medias, el plan pedido y no la
+  // suma de lo viejo y lo nuevo; con un re-anclaje pendiente, la fecha prometida y no la que
+  // Seal acaba de regenerar (o "—"). La caché de arriba sigue guardando lo vivo de Seal.
+  let shown = await maskPendingLineRepair(ctx.customerId, sub, subscription);
+  if (promisedNextDate) shown = { ...shown, nextShipDate: `${promisedNextDate}T13:00:00Z` };
+
   return {
-    subscription,
+    subscription: shown,
     drops: { balance, tierEarned, activeReward, tierEarnedAt, dropsReleaseAt },
     nextEvent,
-    upcomingShipments,
+    // Mientras el calendario se re-ancla, los próximos envíos que tiene Seal son los
+    // regenerados, ANTERIORES a lo prometido: no se enseñan hasta que se muevan.
+    upcomingShipments: promisedNextDate ? [] : upcomingShipments,
     reanchorPending,
+    reactivationKind,
   };
 });

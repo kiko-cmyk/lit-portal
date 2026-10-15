@@ -7,6 +7,15 @@ interface QuickActionButtonProps {
   icon: ReactNode;
   label: string;
   sub?: string;
+  /**
+   * Lo que cambia la acción, en la franja de abajo de la tarjeta (rediseño lp2,
+   * Juan 2026-10-13): «20 ENE → HOY» al adelantar, «20 ENE → 20 JUN» al saltar,
+   * «4 CAJAS · CADA 5 MESES» en el plan y las cajas en el sabor. Así la tarjeta
+   * dice qué va a pasar antes de pulsarla, que es lo que la hacía «sosa».
+   */
+  state?: ReactNode;
+  /** La fila de abajo nunca se parte en dos (los sabores de «Cambiar sabor»). */
+  stateOneLine?: boolean;
   /** Optional eyebrow (kept for backward compat — Hub no longer uses it). */
   eyebrow?: string;
   /** Forced muted-grey with SOON badge, non-clickable. */
@@ -16,32 +25,26 @@ interface QuickActionButtonProps {
 }
 
 /**
- * Quick action tile — tema PRE (Juan 2026-07):
- *   - Label en Clash Display 600 uppercase (peso PRE), sobre tarjeta clara.
- *   - Label SIEMPRE en dos filas: primera palabra en la fila 1, el resto
- *     en la fila 2 (p.ej. "Adelantar" / "pedido").
- *   - Borde suave + lift en hover, sombra suave, flecha al hover.
+ * Tarjeta de acción del Hub, rediseño lp2: blanca y en relieve sobre la tarjeta
+ * crema de «Gestiona tu plan», con el icono en círculo oscuro y trazo lima.
+ * En móvil el título va en dos líneas («ADELANTAR / ENVÍO») y en escritorio en
+ * una; la flecha en círculo solo aparece en escritorio.
  */
 export function QuickActionButton({
   icon,
   label,
   sub,
+  state,
+  stateOneLine = false,
   comingSoon,
   onClick,
   disabled,
 }: QuickActionButtonProps) {
   const inert = comingSoon || disabled;
-  // Dos filas fijas: 1ª palabra arriba, resto abajo.
   const trimmedLabel = label.trim();
   const spaceIdx = trimmedLabel.indexOf(" ");
   const labelLine1 = spaceIdx === -1 ? trimmedLabel : trimmedLabel.slice(0, spaceIdx);
   const labelLine2 = spaceIdx === -1 ? "" : trimmedLabel.slice(spaceIdx + 1);
-  const base =
-    "group relative flex h-full min-h-[112px] w-full flex-col justify-between gap-2 overflow-hidden rounded-[20px] md:rounded-[22px] px-5 pt-5 pb-5 text-left transition-all duration-200 ease-out";
-  const active =
-    "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] shadow-[0_10px_30px_-16px_rgba(40,34,20,0.18)] hover:-translate-y-[2px] hover:border-[color:var(--color-bold-yellow)]/60 hover:shadow-[0_14px_30px_-14px_rgba(40,34,20,0.26)] active:translate-y-0";
-  const muted =
-    "border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.03] cursor-not-allowed";
 
   return (
     <button
@@ -49,68 +52,73 @@ export function QuickActionButton({
       onClick={comingSoon ? undefined : onClick}
       disabled={inert}
       aria-disabled={inert}
-      className={`${base} ${comingSoon ? muted : active} disabled:cursor-not-allowed disabled:opacity-60`}
+      className="group relative flex h-full min-h-[196px] w-full cursor-pointer flex-col gap-[9px] rounded-[18px] border border-[#2F343D]/[0.07] bg-white p-3.5 text-left text-[#2F343D] shadow-[0_12px_24px_-18px_rgba(40,34,20,0.35)] transition-all duration-200 ease-out hover:-translate-y-[2px] hover:shadow-[0_16px_30px_-18px_rgba(40,34,20,0.45)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 md:min-h-[186px] md:gap-2.5 md:rounded-[20px] md:p-[18px]"
     >
-      <span
-        className={`inline-flex h-5 w-5 transition-transform duration-200 ${
-          comingSoon
-            ? "text-[color:var(--color-warm-gray)]/50"
-            : "text-[color:var(--color-bold-yellow)] group-hover:scale-110"
-        }`}
-      >
-        {icon}
+      <span className="flex w-full items-center justify-between">
+        <span className="flex h-[38px] w-[38px] items-center justify-center rounded-full bg-[#2F343D] text-[color:var(--color-bold-yellow)] md:h-[42px] md:w-[42px]">
+          <span className="inline-flex h-[17px] w-[17px] md:h-[18px] md:w-[18px]">{icon}</span>
+        </span>
+        <span
+          aria-hidden
+          className="hidden h-[30px] w-[30px] items-center justify-center rounded-full border border-[#2F343D]/15 transition-colors duration-200 group-hover:border-[#2F343D]/40 md:flex"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14" />
+            <path d="M13 6l6 6-6 6" />
+          </svg>
+        </span>
       </span>
 
       {comingSoon && (
         <span
-          className="absolute right-3 top-3 rounded-full bg-[color:var(--color-lit-grey)]/10 px-2 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
+          className="absolute right-3 top-3 rounded-full bg-[#2F343D]/10 px-2 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
           style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
         >
           <T en="Soon" es="Pronto" />
         </span>
       )}
 
-      <div className="flex flex-col gap-1">
-        <span
-          className="text-[14px] font-semibold uppercase leading-[1.05] tracking-[0.02em]"
-          style={{
-            fontFamily: "var(--font-display)",
-            color: comingSoon
-              ? "var(--color-warm-gray)"
-              : "var(--color-lit-grey)",
-          }}
-        >
-          <span className="block">{labelLine1}</span>
-          {labelLine2 && <span className="block">{labelLine2}</span>}
-        </span>
-        {sub && (
-          <span
-            className="text-[12px] leading-[1.4]"
-            style={{
-              color: comingSoon
-                ? "rgba(122, 116, 106, 0.6)"
-                : "var(--color-warm-gray)",
-            }}
-          >
-            {sub}
-          </span>
+      <span className="mt-0.5 font-display text-[15px] font-semibold uppercase leading-[1.05] tracking-[0.01em] md:mt-1 md:text-[17px]">
+        <span className="block md:inline">{labelLine1}</span>
+        {labelLine2 && (
+          <>
+            <span className="hidden md:inline"> </span>
+            <span className="block md:inline">{labelLine2}</span>
+          </>
         )}
-      </div>
+      </span>
+      {sub && <span className="text-[12px] leading-[1.4] text-[#5E6168] md:text-[13px] md:leading-[1.45]">{sub}</span>}
 
-      {/* Subtle arrow that only reveals on hover. */}
-      {!comingSoon && (
+      {state && (
         <span
-          aria-hidden
-          className="pointer-events-none absolute bottom-4 right-4 -translate-x-2 text-[15px] font-light text-[color:var(--color-lit-grey)]/55 opacity-0 transition-all duration-200 ease-out group-hover:translate-x-0 group-hover:opacity-100"
+          className={`mt-auto flex w-full items-center border-t border-dashed border-[#2F343D]/16 pt-2.5 font-display text-[11px] font-semibold uppercase tracking-[0.02em] md:gap-[7px] md:pt-3 md:text-[13px] ${
+            stateOneLine ? "flex-nowrap gap-[3px] md:flex-wrap" : "flex-wrap gap-[5px]"
+          }`}
         >
-          →
+          {state}
         </span>
       )}
     </button>
   );
 }
 
-/** Inline SVG icon set — line icons sized 20×20. */
+/**
+ * «20 ENE → HOY»: de qué fecha a cuál mueve la acción el próximo envío. La
+ * flecha va en SVG porque ni Clash ni Barlow traen el glifo «→».
+ */
+export function DateChange({ from, to }: { from: string; to: string }) {
+  return (
+    <>
+      <span className="text-[#8C8E87]">{from}</span>
+      <svg aria-hidden className="h-3 w-3 md:h-3.5 md:w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 12h14" />
+        <path d="M13 6l6 6-6 6" />
+      </svg>
+      <span>{to}</span>
+    </>
+  );
+}
+
 export const QAIcons = {
   // Bolt = "instant / now". Distinct from Skip's skip-forward glyph.
   ChargeNow: (

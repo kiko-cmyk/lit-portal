@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
@@ -25,6 +25,19 @@ const barlowCondensed = Barlow_Condensed({
 // Same trick we already use for `assetPrefix` in next.config.ts.
 const VERCEL_ORIGIN =
   process.env.ASSET_PREFIX_URL || "https://lit-portal-drab.vercel.app";
+
+/**
+ * `viewport-fit=cover` (Juan 2026-10-13: «la barra de abajo debe estar abajo del
+ * todo, que nada se vea detrás»). Sin él, en iPhone la barra fija de abajo se
+ * queda por encima de la zona de la barra de inicio y por debajo asoma la
+ * página. Con él la página llega al borde, y lo que va pegado a un borde se
+ * aparta de las zonas seguras con `--safe-top` / `--safe-bottom` (globals.css).
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   // Per-page titles override this via each route's generateMetadata().
@@ -85,7 +98,7 @@ export default async function RootLayout({
         <meta name="google" content="notranslate" />
         <link rel="preconnect" href="https://api.fontshare.com" crossOrigin="anonymous" />
         <link
-          href="https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap"
+          href="https://api.fontshare.com/v2/css?f[]=clash-display@300,400,500,600,700&display=swap"
           rel="stylesheet"
         />
       </head>

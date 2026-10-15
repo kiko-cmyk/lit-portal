@@ -71,7 +71,7 @@ export function ExtrasOverlay({ onClose }: { onClose: () => void }) {
       onClick={adding !== null ? undefined : onClose}
     >
       <div
-        className="zone-cream relative mx-auto w-full max-w-md rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-8 sm:rounded-3xl"
+        className="zone-cream relative mx-auto w-full max-w-md rounded-t-3xl bg-[color:var(--color-brisky-cream)] px-6 pt-9 pb-[max(2rem,env(safe-area-inset-bottom,0px))] sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button

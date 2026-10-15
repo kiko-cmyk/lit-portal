@@ -45,6 +45,21 @@ export async function acquirePlanLock(
   customerId: string,
   sealSubscriptionId: number | string,
   holder?: string,
+  opts: {
+    /**
+     * Vida del cerrojo. Por defecto la de la ruta de plan. El cron de referidos pide
+     * más (120 s, el doble del maxDuration de una función): así su cerrojo no puede
+     * caducar mientras aplica, y su `release()` nunca borra el de otra petición
+     * (el unlock borra por (cliente, sub) sin mirar quién lo tiene).
+     */
+    ttlSeconds?: number;
+    /**
+     * Si la RPC falla, LANZA en vez de dejar pasar. Para quien puede esperar (un
+     * cron): aplicar un descuento sin cerrojo es peor que aplicarlo en la pasada
+     * siguiente.
+     */
+    strict?: boolean;
+  } = {},
 ): Promise<PlanLock> {
   const subId = String(sealSubscriptionId);
   // Fuera del presupuesto de la petición: el cerrojo se toma al principio, cuando
@@ -55,12 +70,13 @@ export async function acquirePlanLock(
     supabaseAdmin().rpc("plan_change_try_lock", {
       p_customer_id: customerId,
       p_subscription_id: subId,
-      p_ttl_seconds: LOCK_TTL_SECONDS,
+      p_ttl_seconds: opts.ttlSeconds ?? LOCK_TTL_SECONDS,
       p_holder: holder ?? null,
     }),
   );
 
   if (error) {
+    if (opts.strict) throw new Error(`plan-lock: no se pudo tomar el cerrojo: ${error.message}`);
     // No se puede tomar el cerrojo. Se DEJA PASAR a propósito, con un log: la
     // alternativa es que un fallo de Supabase deje a todo el mundo sin poder cambiar
     // de plan, y la carrera que esto cierra necesita dos peticiones simultáneas sobre
@@ -99,4 +115,39 @@ export async function acquirePlanLock(
       }
     },
   };
+}
+
+/**
+ * Ejecuta `fn` con el cerrojo de la sub tomado, o NO la ejecuta si otro lo tiene.
+ *
+ * Para quien puede esperar a su siguiente pasada (14-oct-2026): los tres que aplican
+ * el re-anclaje (webhook de Seal, `hub/dashboard` y `reanchor-drain`) lo hacían sin
+ * cerrojo. `seal.reanchorCadence` mueve los cobros del más lejano al más cercano, y cada
+ * movimiento dispara otro `subscription/updated`: la re-entrada del webhook leía el
+ * primero todavía sin mover, calculaba el mismo desfase y volvía a mover los que ya
+ * estaban movidos. La fecha prometida quedaba bien y los envíos siguientes, retrasados
+ * el doble. Con esto, mientras uno mueve, los demás se lo saltan y lo ven terminado
+ * en su pasada siguiente.
+ *
+ * Estricto: si la RPC del cerrojo falla, tampoco se ejecuta (mover sin cerrojo es peor
+ * que mover en la pasada siguiente). TTL de 60 s, por encima de lo que tarda en mover
+ * un calendario entero.
+ */
+export async function tryWithPlanLock<T>(
+  customerId: string,
+  sealSubscriptionId: number | string,
+  holder: string,
+  fn: () => Promise<T>,
+): Promise<{ ran: true; value: T } | { ran: false; reason: string }> {
+  let lock: PlanLock;
+  try {
+    lock = await acquirePlanLock(customerId, sealSubscriptionId, holder, { strict: true, ttlSeconds: 60 });
+  } catch (e) {
+    return { ran: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    return { ran: true, value: await fn() };
+  } finally {
+    await lock.release();
+  }
 }

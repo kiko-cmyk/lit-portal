@@ -1,12 +1,14 @@
 "use client";
 
-import { useLangValue } from "@/lib/i18n";
-import type { UpcomingShipment } from "@/lib/types";
+import { CardTitle, Lp2Card } from "@/components/Lp2";
+import { frequencyLabel } from "@/lib/frequency-label";
+import { useLang, useLangValue } from "@/lib/i18n";
+import type { Frequency, UpcomingShipment } from "@/lib/types";
 
 interface DeliveryCalendarProps {
   /**
-   * Next shipment Seal has scheduled. Rendered as the first tile, highlighted
-   * yellow with a "PRÓXIMA" tag. Comes from `subscription.nextShipDate`.
+   * Next shipment Seal has scheduled. Rendered first and highlighted in yellow.
+   * Comes from `subscription.nextShipDate`.
    */
   nextShipDate: Date | null;
   /**
@@ -14,153 +16,124 @@ interface DeliveryCalendarProps {
    * Sorted ascending by date.
    */
   upcoming: UpcomingShipment[];
+  /** Para la etiqueta «Cada 5 meses» de la cabecera. */
+  frequency?: Frequency;
 }
+
+/** Fechas que se enseñan, como hasta ahora: la próxima y cinco más. */
+const MAX_DATES = 6;
 
 /**
- * Visual calendar of upcoming deliveries. Per Juan 2026-05-18: full width
- * inside the section container, more visual punch than the v1 strip.
+ * «Próximos envíos», rediseño lp2 (Juan 2026-10-13).
  *
- * Layout: horizontal scroll-snap on mobile so it fills the screen and
- * scrolls naturally; equal-column grid (max 6 tiles) on md+ so the whole
- * year-or-so of upcoming ships is visible at once without scrolling.
+ * Móvil: una agenda, una fila por envío con el día grande y el mes al lado; la
+ * primera en lima. Escritorio: seis fichas de fecha en fila (tres por fila entre
+ * md y lg), la primera también en lima. Antes fue una línea de tiempo fina y
+ * Juan la vio «sosa»; luego llevó una píldora «Tu próximo LIT» en la ficha lima
+ * y la quitó: el color ya dice cuál es la próxima (el mismo criterio que el
+ * 2026-05-18).
  *
- * Each tile is taller and the day number renders in Clash Display
- * clamp(2.4–3.6rem) so the date is the centre of gravity.
+ * Las fechas NO son pulsables: solo se puede saltar o adelantar la próxima, y
+ * eso vive en «Gestiona tu plan».
  */
-export function DeliveryCalendar({
-  nextShipDate,
-  upcoming,
-}: DeliveryCalendarProps) {
+export function DeliveryCalendar({ nextShipDate, upcoming, frequency }: DeliveryCalendarProps) {
   const lang = useLangValue();
+  const t = useLang();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
 
-  const tiles: Array<{ key: string; date: Date; isNext: boolean }> = [];
-  if (nextShipDate) {
-    tiles.push({ key: "next", date: nextShipDate, isNext: true });
-  }
-  upcoming.forEach((u) => {
-    tiles.push({ key: u.date, date: new Date(u.date), isNext: false });
-  });
-
-  if (tiles.length === 0) return null;
-
-  // Cap visible-at-once on desktop to keep tile width readable.
-  // 6 tiles in a single row at md+; mobile scrolls horizontally.
-  const desktopCols = Math.min(6, tiles.length) || 1;
+  const dates: Array<{ key: string; date: Date; isNext: boolean }> = [];
+  if (nextShipDate) dates.push({ key: "next", date: nextShipDate, isNext: true });
+  upcoming.forEach((u) => dates.push({ key: u.date, date: new Date(u.date), isNext: false }));
+  const shown = dates.slice(0, MAX_DATES);
+  if (shown.length === 0) return null;
 
   return (
-    <section className="mx-6 md:mx-0">
-      {/* Mobile: horizontal scroll-snap. Hidden on md+. */}
-      <div className="flex gap-2.5 overflow-x-auto pb-1 [scroll-snap-type:x_mandatory] [scrollbar-width:none] md:hidden [&::-webkit-scrollbar]:hidden">
-        {tiles.map((tile) => (
-          <div key={tile.key} className="w-[110px] flex-shrink-0">
-            <DateTile date={tile.date} dateLocale={dateLocale} isNext={tile.isNext} />
-          </div>
-        ))}
-      </div>
-      {/* Desktop: full-width grid. Up to 6 tiles in one row. */}
-      <div
-        className="hidden gap-3 md:grid"
-        style={{ gridTemplateColumns: `repeat(${desktopCols}, minmax(0, 1fr))` }}
-      >
-        {tiles.slice(0, 6).map((tile) => (
-          <DateTile
-            key={tile.key}
-            date={tile.date}
-            dateLocale={dateLocale}
-            isNext={tile.isNext}
-          />
-        ))}
-      </div>
-    </section>
+    <div className="mx-6 md:mx-0">
+      <Lp2Card>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <CardTitle thin={t({ en: "Upcoming", es: "Próximos" })} bold={t({ en: "deliveries", es: "envíos" })} />
+          {frequency && (
+            <p className="m-0 text-[9.5px] font-bold uppercase tracking-[0.18em] text-[#8C8E87] md:text-[10.5px]">
+              {frequencyLabel(frequency, lang, { format: "long" })}
+            </p>
+          )}
+        </div>
+
+        {/* Móvil: agenda. */}
+        <ol className="m-0 mt-[18px] list-none p-0 md:hidden">
+          {shown.map((d, i) => (
+            <li
+              key={d.key}
+              className={`flex items-center gap-3.5 px-3.5 ${
+                d.isNext
+                  ? "rounded-[16px] bg-[color:var(--color-bold-yellow)] py-[13px]"
+                  : `py-3 ${i < shown.length - 1 ? "border-b border-[#2F343D]/12" : ""}`
+              }`}
+            >
+              <span className="flex w-[84px] flex-none items-baseline gap-[5px]">
+                <span className={`font-display font-semibold leading-none ${d.isNext ? "text-[30px]" : "text-[26px]"}`}>
+                  {d.date.getDate()}
+                </span>
+                <span className={`font-display font-light uppercase tracking-[0.04em] ${d.isNext ? "text-[16px]" : "text-[15px]"}`}>
+                  {monthShort(d.date, dateLocale)}
+                </span>
+              </span>
+              <span
+                className={`text-[9.5px] font-bold uppercase tracking-[0.18em] ${
+                  d.isNext ? "text-[#2F343D]/75" : "text-[#8C8E87]"
+                }`}
+              >
+                {d.date.toLocaleDateString(dateLocale, { weekday: "long" })} · {d.date.getFullYear()}
+              </span>
+            </li>
+          ))}
+        </ol>
+
+        {/* Escritorio: fichas. */}
+        <ol className="m-0 mt-[22px] hidden list-none grid-cols-3 gap-3 p-0 md:grid lg:grid-cols-6">
+          {shown.map((d) => (
+            <li
+              key={d.key}
+              className={`flex flex-col rounded-[20px] px-[18px] pt-[18px] pb-5 ${
+                d.isNext
+                  ? "bg-[color:var(--color-bold-yellow)] shadow-[0_14px_28px_-18px_rgba(120,122,20,0.55)]"
+                  : "border border-[#2F343D]/[0.07] bg-white shadow-[0_12px_26px_-18px_rgba(40,34,20,0.35)]"
+              }`}
+            >
+              <span
+                className={`text-[9.5px] font-bold uppercase tracking-[0.18em] ${
+                  d.isNext ? "text-[#2F343D]/75" : "text-[#8C8E87]"
+                }`}
+              >
+                {d.date.toLocaleDateString(dateLocale, { weekday: "long" })}
+              </span>
+              <span className="mt-3.5 flex items-baseline gap-1.5">
+                <span className={`font-display font-semibold leading-none ${d.isNext ? "text-[44px]" : "text-[40px]"}`}>
+                  {d.date.getDate()}
+                </span>
+                <span
+                  className={`font-display uppercase tracking-[0.04em] ${
+                    d.isNext ? "text-[20px] font-medium" : "text-[19px] font-light"
+                  }`}
+                >
+                  {monthShort(d.date, dateLocale)}
+                </span>
+              </span>
+              <span
+                className={`mt-2 text-[9.5px] font-bold tracking-[0.18em] ${
+                  d.isNext ? "text-[#2F343D]/75" : "text-[#8C8E87]"
+                }`}
+              >
+                {d.date.getFullYear()}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </Lp2Card>
+    </div>
   );
 }
 
-function DateTile({
-  date,
-  dateLocale,
-  isNext,
-}: {
-  date: Date;
-  dateLocale: string;
-  isNext: boolean;
-}) {
-  // Redesign 2026-05-18 round 4: drop the mega day number — too brusque.
-  // Show a tear-off receipt feel instead: weekday eyebrow on top,
-  // "1 jun" in a medium display weight (no shouting), year muted below.
-  const day = date.toLocaleDateString(dateLocale, { day: "numeric" });
-  const monthShort = date
-    .toLocaleDateString(dateLocale, { month: "short" })
-    .replace(".", "");
-  const weekdayLong = date
-    .toLocaleDateString(dateLocale, { weekday: "long" });
-  const year = date.getFullYear();
-
-  return (
-    <div
-      className={`relative flex h-[124px] min-w-[96px] flex-col items-stretch justify-between rounded-[14px] px-4 py-4 transition-all duration-200 ease-out hover:-translate-y-1 [scroll-snap-align:start] ${
-        isNext
-          ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)] hover:shadow-[0_18px_30px_-14px_rgba(235,238,98,0.7)]"
-          : "border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] text-[color:var(--color-lit-grey)] shadow-[0_10px_30px_-14px_rgba(40,34,20,0.22)] hover:border-[color:var(--color-bold-yellow)]/45 hover:shadow-[0_12px_24px_-14px_rgba(50,55,67,0.3)]"
-      }`}
-    >
-      {/* Top: weekday for every tile. The yellow fill alone signals which
-          one is next — per Juan 2026-05-18 round 5, no extra "Próxima"
-          pill needed, the colour does the job. */}
-      <span
-        className="font-semibold uppercase tracking-[0.22em]"
-        style={{
-          fontFamily: "var(--font-cond)",
-          fontSize: 10,
-          color: isNext
-            ? "var(--color-lit-grey)"
-            : "var(--color-warm-gray)",
-        }}
-      >
-        {weekdayLong}
-      </span>
-
-      {/* Middle: day + month, medium display weight (no shouty mega) */}
-      <div className="leading-none">
-        <span
-          className="font-semibold tracking-[-0.015em]"
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: 28,
-          }}
-        >
-          {day}
-        </span>
-        <span
-          className="ml-1.5 font-semibold uppercase"
-          style={{
-            fontFamily: "var(--font-cond)",
-            fontSize: 12,
-            letterSpacing: "0.18em",
-            color: isNext
-              ? "var(--color-lit-grey)"
-              : "var(--color-warm-gray)",
-          }}
-        >
-          {monthShort}
-        </span>
-      </div>
-
-      {/* Bottom: muted year. */}
-      <div className="flex items-baseline justify-between gap-2">
-        <span
-          className="font-semibold uppercase tracking-[0.2em]"
-          style={{
-            fontFamily: "var(--font-cond)",
-            fontSize: 9,
-            color: isNext
-              ? "rgba(50, 55, 67, 0.7)"
-              : "rgba(122, 116, 106, 0.7)",
-          }}
-        >
-          {year}
-        </span>
-      </div>
-    </div>
-  );
+function monthShort(d: Date, locale: string): string {
+  return d.toLocaleDateString(locale, { month: "short" }).replace(".", "");
 }

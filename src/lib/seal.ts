@@ -222,6 +222,16 @@ export interface SealSubscription {
   items: SealItem[];
   billing_attempts: SealBillingAttempt[];
   subscription_type: number;
+  /**
+   * Historial de Seal, del más reciente al más antiguo. Solo viene en `/subscription?id=`.
+   * `created` va en UTC y sin zona ("2026-10-14 13:12:14"). Ver `sealBusyReason`.
+   */
+  log?: SealLogEntry[];
+}
+
+export interface SealLogEntry {
+  content: string;
+  created: string;
 }
 
 interface SealListResponse<T> {
@@ -768,6 +778,12 @@ export class SealClient {
    * Seal honours a custom per-unit `price` — SL30 went in at 22.64 when its
    * catalogue price is 28.35. `total_value` comes back as Σ(price × quantity).
    *
+   * PRECIO FINAL (6-oct-2026). El portal escribe aquí el precio de SUSCRIPCIÓN ya neto
+   * (28,35), nunca el de la variante, que desde ese día es el de compra única (37,80)
+   * con el 25% en el plan. Se asume que Seal guarda `price` tal cual, como hasta hoy
+   * con los planes al 0%; que no vuelva a aplicar el % del plan encima está SIN
+   * VERIFICAR con planes al 25% (comprobar en una sub de prueba tras el cambio).
+   *
    * GOTCHA: `price` is per-unit, not total. With quantity=2 and price=10,
    * Seal charges 20. To preserve a desired total, divide first. And it is
    * REQUIRED, not optional: omitting it returns "Item is missing price value."
@@ -1018,13 +1034,18 @@ export class SealClient {
     subscriptionId: number,
     preserveYYYYMMDD: string,
   ): Promise<number> {
+    // LANZA EN VEZ DE DEVOLVER 0 (14-oct-2026). Los tres que llaman a esto (webhook,
+    // dashboard, reanchor-drain) borran la intención en cuanto vuelve, porque "0" se leía
+    // como "no había nada que mover". Con la lectura fallida o el calendario todavía sin
+    // regenerar, eso borraba la única promesa de fecha que había: el cobro salía antes de
+    // lo prometido y nadie se enteraba. Ahora la intención se queda para la pasada siguiente.
     const sub = await this.getSubscriptionById(subscriptionId);
-    if (!sub) return 0;
+    if (!sub) throw new ReanchorNotReadyError(subscriptionId, "no se pudo leer la sub");
 
     const pending = (sub.billing_attempts ?? [])
       .filter((ba) => !ba.completed_at && !ba.status && !ba.skipped_on)
       .sort((a, b) => a.date.localeCompare(b.date));
-    if (pending.length === 0) return 0;
+    if (pending.length === 0) throw new ReanchorNotReadyError(subscriptionId, "Seal todavía no ha regenerado el calendario");
 
     const firstDay = pending[0].date.slice(0, 10);
     // Only act when Seal anchored EARLIER than the preserved date.
@@ -1268,10 +1289,41 @@ export class SealClient {
 
 export const seal = new SealClient();
 
+/** `reanchorCadence` no ha podido decidir: hay que dejar la intención y volver a intentarlo. */
+export class ReanchorNotReadyError extends Error {
+  constructor(public subscriptionId: number, reason: string) {
+    super(`reanchor sub ${subscriptionId}: ${reason}`);
+    this.name = "ReanchorNotReadyError";
+  }
+}
+
 export class SealApiError extends Error {
-  constructor(public status: number, body: string) {
+  constructor(public status: number, public readonly body: string) {
     super(`Seal API error ${status}: ${body}`);
     this.name = "SealApiError";
+  }
+
+  /**
+   * Lo que Seal dijo en `error`/`message` cuando contestó `success: false`, o null si la
+   * respuesta no era suya (HTML de un borde, cuerpo vacío, JSON de otra forma).
+   *
+   * Importa porque Seal usa el 503 para NEGARSE (14-oct-2026): "You can't remove all items
+   * from the subscription.", "Could not edit the subscription.", "already has an attempt
+   * scheduled…" y su limitador de 10 peticiones simultáneas por clave. Con `success: false`
+   * en el cuerpo, la petición llegó y Seal no hizo nada: es un rechazo seguro, no un "no sé".
+   */
+  sealRejection(): string | null {
+    if (this.status === 200) return this.body;
+    try {
+      const parsed = JSON.parse(this.body) as { success?: unknown; error?: unknown; message?: unknown };
+      if (parsed && parsed.success === false) {
+        const text = parsed.error ?? parsed.message;
+        return typeof text === "string" && text ? text : "success:false";
+      }
+    } catch {
+      // no era JSON de Seal
+    }
+    return null;
   }
 }
 
@@ -1345,6 +1397,7 @@ import {
   type FlavorComposition,
   type SubscriptionLine,
   type SubscriptionShape,
+  type TargetLine,
 } from "./mix";
 
 /**
@@ -1623,6 +1676,49 @@ export function findAllAppliedDiscountCodeIds(s: SealSubscription, code: string)
  * The mix needs no DB read because the composition is derived from Seal's own items,
  * so Seal stays the single source of truth.
  */
+/**
+ * La suscripción tal como quedará cuando termine un cambio de líneas a medio aplicar
+ * (14-oct-2026). Para el Hub y Cuenta: mientras `subscription_line_repairs` tiene la
+ * intención pendiente, Seal puede tener a la vez las líneas viejas y las nuevas, y
+ * pintarlas tal cual enseñó "6 cajas por envío · 170,10€" a quien había pedido 3 cajas a
+ * 85,05€. Se enseña lo PEDIDO (con el aviso de que se está aplicando), que es lo que va a
+ * cobrarse: el cron nunca deja una sub a medias sin converger o sin avisar a una persona.
+ *
+ * Mismas cuentas que `mapToSubscription` (cajas, composición, importe), sobre el objetivo.
+ * Las líneas que aún no existen en Seal llevan `itemId` 0, igual que la respuesta sintética
+ * de la ruta de plan; mientras tanto el Hub no deja cambiar el plan.
+ */
+export function projectPendingTarget(current: Subscription, targets: TargetLine[]): Subscription {
+  if (!targets.length) return current;
+  const sellingPlanId = current.lines[0]?.sellingPlanId ?? "";
+  const lines: SubscriptionLine[] = targets.map((t) => ({
+    itemId: current.lines.find((l) => String(l.variantId) === String(t.variantId))?.itemId ?? 0,
+    productId: t.productId,
+    variantId: t.variantId,
+    flavor: t.flavor,
+    boxes: t.boxes,
+    quantity: t.quantity,
+    unitPrice: (t.unitPriceCents / 100).toFixed(2),
+    sellingPlanId,
+    ...(t.composition ? { composition: t.composition } : {}),
+  }));
+  const composition = compositionFromLines(lines);
+  const rawBoxes = lines.reduce((sum, l) => sum + l.boxes, 0);
+  const boxCount = Math.min(MAX_BOXES, Math.max(1, rawBoxes));
+  const main = [...lines].sort((a, b) => b.boxes - a.boxes)[0] ?? null;
+  return {
+    ...current,
+    mainItemId: main?.itemId ?? current.mainItemId,
+    currentVariantId: main?.variantId ?? current.currentVariantId,
+    boxCount,
+    lines,
+    composition,
+    shape: shapeFor(composition),
+    flavorSummary: composition.length ? compositionLabel(composition) : current.flavorSummary,
+    chargeTotalCents: sumLineCharges(lines),
+  };
+}
+
 export function mapToSubscription(s: SealSubscription, customerId: string): Subscription {
   const next = getNextBillingAttempt(s);
   const nextShipDate = next?.date ?? null;

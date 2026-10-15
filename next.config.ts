@@ -46,7 +46,7 @@ const csp = [
   `script-src 'self' 'unsafe-inline' ${ASSET_PREFIX}`,
   `style-src 'self' 'unsafe-inline' https://api.fontshare.com`,
   `font-src 'self' https://cdn.fontshare.com data:`,
-  `img-src 'self' https://litsalt.com https://cdn.shopify.com data:`,
+  `img-src 'self' ${ASSET_PREFIX} https://litsalt.com https://cdn.shopify.com data:`,
   `connect-src 'self' ${ASSET_PREFIX}`,
   `frame-ancestors 'self' https://litsalt.com`,
   `base-uri 'self'`,

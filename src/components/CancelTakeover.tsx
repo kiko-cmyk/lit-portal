@@ -1,11 +1,16 @@
 "use client";
 
+import { skipErrorMessage } from "@/lib/skip-messages";
 import { useEffect, useState } from "react";
 import { api, clearSelectedSubscription, clearSessionToken } from "@/lib/api-client";
 import { addCycle, spacedFromNext } from "@/lib/cadence";
 import { T, useLang, useLangValue } from "@/lib/i18n";
+import { SheetArrow, SheetClose, SheetDoneMark, SheetTitle } from "@/components/Lp2Sheet";
+import { FlavorThumb } from "@/components/MixBuilder";
+import { formatEuro } from "@/lib/format-price";
+import { frequencyLabel } from "@/lib/frequency-label";
 import { compositionLabel } from "@/lib/mix";
-import { BOX_OPTIONS, FREQUENCIES, longerFrequencies } from "@/lib/plan-options";
+import { BOX_OPTIONS, longerFrequencies } from "@/lib/plan-options";
 import { portalHref } from "@/lib/portal-link";
 import {
   ALL_FLAVORS,
@@ -25,8 +30,10 @@ import type {
 } from "@/lib/types";
 
 /**
- * Cancel takeover — full-screen Board 3 (dark indigo). Retention redesign
- * (2026-07-03), bilingual EN/ES:
+ * Cancel takeover — full-screen Board 3. Retention redesign (2026-07-03),
+ * bilingual EN/ES. Since the lp2 redesign (Juan 2026-10-13) it wears the
+ * landing's dark (#262A32) instead of the indigo, with the `lp2-*` pieces in
+ * their `.lp2-dark` variant: lime CTA, two-weight titles, quiet cards.
  *
  *   logro     → "what you've built" (stats)
  *   motivo    → reason FIRST, so the offer can be tailored
@@ -179,26 +186,25 @@ export function CancelTakeover({
 
   return (
     <div
-      className="zone-indigo fixed inset-0 z-50 overflow-y-auto bg-[#16130C] text-[#F2EEE1]"
+      role="dialog"
+      aria-modal="true"
+      className="lp2-dark fixed inset-0 z-50 overflow-y-auto bg-[#262A32] text-[#F2F1EA]"
       style={{
         backgroundImage:
-          "radial-gradient(120% 55% at 50% 0%, rgba(235,238,98,0.06), transparent 55%)",
+          "radial-gradient(120% 55% at 50% 0%, rgba(235,238,98,0.07), transparent 55%)",
       }}
     >
-      <button
-        type="button"
-        // After a REAL cancel the plain onClose would drop the customer back
-        // on a stale ACTIVE Hub (single-sub: the refetch 401s because the
-        // server purged the sessions, and the empty catch swallowed it) — the
-        // × must exit exactly like "Volver a LIT". (audit 2026-07-08)
-        onClick={step === "done" && done ? exitAfterCancel : onClose}
-        className="absolute right-5 top-5 z-10 text-2xl opacity-60"
-        aria-label="Close"
-      >
-        ×
-      </button>
+      {/* After a REAL cancel the plain onClose would drop the customer back
+          on a stale ACTIVE Hub (single-sub: the refetch 401s because the
+          server purged the sessions, and the empty catch swallowed it) — the
+          × must exit exactly like "Volver a LIT". (audit 2026-07-08) */}
+      <SheetClose
+        dark
+        onClose={step === "done" && done ? exitAfterCancel : onClose}
+        className="absolute right-5 top-[calc(1.25rem+var(--safe-top))]"
+      />
 
-      <div className="mx-auto max-w-md px-6 pt-16 pb-10 sm:max-w-lg md:max-w-2xl">
+      <div className="mx-auto max-w-md px-6 pt-20 pb-12 sm:max-w-lg md:max-w-2xl md:pt-28">
         {step === "logro" && (
           <Logro stats={stats} onStay={onClose} onContinue={() => setStep("motivo")} />
         )}
@@ -287,12 +293,13 @@ function Logro({
   const loading = stats === null;
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="This is what" es="Esto es lo que" />
-        <br />
-        <T en="you've built" es="has construido" />
-      </h1>
-      <div className="mt-10 grid grid-cols-2 gap-4">
+      <SheetTitle
+        size="lg"
+        className=""
+        thin={t({ en: "This is what", es: "Esto es lo que" })}
+        bold={t({ en: "you've built", es: "has construido" })}
+      />
+      <div className="mt-10 grid grid-cols-2 gap-3 md:gap-4">
         <Stat label={t({ en: "Boxes received", es: "Cajas recibidas" })} value={stats?.boxes ?? 0} loading={loading} />
         <Stat
           label={t({ en: "Months in inner circle", es: "Meses en inner circle" })}
@@ -300,19 +307,11 @@ function Logro({
           loading={loading}
         />
       </div>
-      <div className="mt-10 space-y-3">
-        <button
-          type="button"
-          onClick={onStay}
-          className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
-        >
+      <div className="mt-10 space-y-5">
+        <button type="button" onClick={onStay} className="lp2-cta">
           <T en="Stay with LIT" es="Seguir con LIT" />
         </button>
-        <button
-          type="button"
-          onClick={onContinue}
-          className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
-        >
+        <button type="button" onClick={onContinue} className="lp2-link">
           <T en="I still want to cancel" es="Aún así quiero cancelar" />
         </button>
       </div>
@@ -338,29 +337,26 @@ function Motivo({
   const t = useLang();
   return (
     <>
-      <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+      <div className="lp2-eyebrow">
         <T en="Help us understand" es="Ayúdanos a entender" />
       </div>
-      <h1 className="mt-2 font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="Why are you" es="¿Por qué lo" />
-        <br />
-        <T en="leaving" es="dejas" />
-        <span className="text-[color:var(--color-bold-yellow)]">?</span>
-      </h1>
+      <SheetTitle
+        size="lg"
+        className="mt-3"
+        thin={t({ en: "Why are you", es: "¿Por qué lo" })}
+        bold={t({ en: "leaving?", es: "dejas?" })}
+      />
       <ul className="mt-8 space-y-2">
         {REASONS.map((r) => (
           <li key={r.value}>
             <button
               type="button"
               onClick={() => setReason(r.value)}
-              className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm uppercase tracking-[0.12em] ${
-                reason === r.value
-                  ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/10"
-                  : "border-[#F2EEE1]/10"
-              }`}
+              aria-pressed={reason === r.value}
+              className={`lp2-choice ${reason === r.value ? "is-on" : ""}`}
             >
               <span>{t({ en: r.en, es: r.es })}</span>
-              {reason === r.value && <span className="text-[color:var(--color-bold-yellow)]">●</span>}
+              <RadioMark on={reason === r.value} />
             </button>
           </li>
         ))}
@@ -370,19 +366,17 @@ function Motivo({
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
           placeholder={t({ en: "Tell us what happened", es: "Cuéntanos qué ha pasado" })}
-          className="mt-3 w-full rounded-[14px] border border-[#F2EEE1]/10 bg-transparent p-3 text-sm placeholder:opacity-40"
+          className="lp2-field mt-3"
           rows={3}
         />
       )}
-      <div className="mt-10 flex items-center justify-between">
-        <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
-          ← <T en="Back" es="Atrás" />
-        </button>
+      <div className="mt-10 flex items-center gap-5">
+        <BackLink onClick={onBack} />
         <button
           type="button"
           onClick={onContinue}
           disabled={!reason || (reason === "other" && !freeText.trim())}
-          className="rounded-full bg-[color:var(--color-bold-yellow)] px-6 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-30"
+          className="lp2-cta flex-1 sm:ml-auto sm:w-auto sm:flex-none sm:px-9"
         >
           <T en="Continue" es="Continuar" />
         </button>
@@ -501,6 +495,35 @@ function Solucion({
       });
     if (code === "gateway_timeout" || status === 504)
       return t({ en: "The service is taking longer than usual. Try again in a moment.", es: "El servicio está tardando más de lo normal. Inténtalo de nuevo en un momento." });
+    // Rechazado ANTES de tocar nada (otro cambio con el cerrojo tomado, o el descuento de
+    // un referido que había que retirar primero): se reintenta en unos segundos.
+    if (code === "plan_change_in_progress" || code === "referral_reward_busy")
+      return t({
+        en: "We're finishing another update to your subscription. Wait a moment and try again.",
+        es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+      });
+    // Rechazado antes de tocar nada (14-oct-2026): Seal seguía con un cambio reciente.
+    if (code === "seal_busy")
+      return t({
+        en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
+        es: "Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada.",
+      });
+    if (code === "change_unconfirmed")
+      return t({
+        en: "We couldn't confirm your change. Reload the page in a few minutes to see how your plan ended up and, if it didn't change, try again.",
+        es: "No hemos podido confirmar tu cambio. Recarga la página en unos minutos para ver cómo ha quedado tu plan y, si no ha cambiado, vuelve a pedirlo.",
+      });
+    if (code === "frequency_change_failed")
+      return t({
+        en: "We couldn't change the frequency and nothing was changed. Try again in a few minutes.",
+        es: "No hemos podido cambiar la frecuencia y no se ha cambiado nada. Inténtalo de nuevo en unos minutos.",
+      });
+    // ESTE cambio entró a medias y el cron lo termina en minutos (14-oct-2026).
+    if (code === "change_applying")
+      return t({
+        en: "Your change is still being applied. You'll see it on your subscription within a few minutes and you won't be overcharged. No need to do it again.",
+        es: "Tu cambio se está terminando de aplicar. En unos minutos lo verás en tu suscripción y no se te cobrará de más. No hace falta que lo repitas.",
+      });
     // Escritura a medias o sin cerrar (2-oct-2026): la ruta no deja tarificar encima y el
     // cron la cierra en minutos. Reintentar en el acto solo devuelve el 409.
     if (code === "change_in_progress")
@@ -544,47 +567,41 @@ function Solucion({
     try {
       await api("/api/subscription/skip", {
         method: "POST",
-        body: JSON.stringify({ sealSubscriptionId: subscription?.sealSubscriptionId, reason: "taking_a_break" }),
+        body: JSON.stringify({
+          sealSubscriptionId: subscription?.sealSubscriptionId,
+          reason: "taking_a_break",
+          expectedNextShipDate: subscription?.nextShipDate,
+        }),
       });
       onStayed();
     } catch (e) {
       const code = (e as { code?: string }).code;
-      setError(
-        code === "already_charged" || code === "no_pending_attempt"
-          ? t({ en: "This order is already being processed and can't be skipped.", es: "Este pedido ya se está procesando y no se puede saltar." })
-          : t({ en: "Couldn't skip. Try again or contact us.", es: "No se pudo saltar. Inténtalo de nuevo o escríbenos." }),
-      );
+      const status = (e as { status?: number }).status;
+      setError(skipErrorMessage(code, status, t));
     } finally {
       setBusy(false);
     }
   };
 
-  const errorBox = error && (
-    <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/15 px-4 py-3 text-xs text-[#e8a591]">
-      {error}
-    </div>
-  );
+  const errorBox = error && <div className="lp2-notice lp2-notice--error mt-4">{error}</div>;
   const eyebrow = (
-    <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+    <div className="lp2-eyebrow">
       <T en="Before you cancel" es="Antes de cancelar" />
     </div>
   );
   const secondary = (
     <>
-      <button
-        type="button"
-        onClick={onDecline}
-        className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
-      >
+      <button type="button" onClick={onDecline} className="lp2-link pt-2">
         <T en="Keep cancelling" es="Seguir con la cancelación" />
       </button>
-      <div className="mt-6">
-        <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-50">
-          ← <T en="Back" es="Atrás" />
-        </button>
+      <div className="pt-4">
+        <BackLink onClick={onBack} />
       </div>
     </>
   );
+  // Los títulos-pregunta de las ofertas: tamaño medio en móvil (son frases
+  // largas) y grandes en escritorio, donde la pantalla es entera.
+  const offerTitle = "mt-3 md:text-[46px]";
 
   // ── No me gusta → probar otro sabor ──
   if (reason === "dont_like") {
@@ -608,14 +625,15 @@ function Solucion({
     return (
       <>
         {eyebrow}
-        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
-          {halfAndHalf ? (
-            <T en="What if you keep both?" es="¿Y si te quedas los dos?" />
-          ) : (
-            <T en="What if you try another flavor?" es="¿Y si pruebas otro sabor?" />
-          )}
-        </h1>
-        <p className="mt-5 max-w-md text-sm opacity-75">
+        <SheetTitle
+          className={offerTitle}
+          text={
+            halfAndHalf
+              ? t({ en: "What if you keep both?", es: "¿Y si te quedas los dos?" })
+              : t({ en: "What if you try another flavor?", es: "¿Y si pruebas otro sabor?" })
+          }
+        />
+        <p className="lp2-text mt-5 max-w-md">
           {halfAndHalf ? (
             <T
               en="Same plan, same price, same ship date. Split your boxes and try the other flavor without giving up the one you have."
@@ -628,27 +646,25 @@ function Solucion({
             />
           )}
         </p>
-        <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
+        <div className="lp2-label mt-7">
           <T en="Try instead" es="Prueba con" />
         </div>
-        <div className="mt-2 space-y-2">
+        <div className="space-y-2">
           {flavorAlternatives.map((f) => (
             <button
               key={f.key}
               type="button"
               onClick={() => setOfferFlavor(f.key)}
-              className={`flex w-full items-center justify-between rounded-[14px] border px-4 py-3.5 text-left ${
-                offerFlavor === f.key
-                  ? "border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/10"
-                  : "border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05]"
-              }`}
+              aria-pressed={offerFlavor === f.key}
+              className={`lp2-choice py-2.5 pl-3.5 ${offerFlavor === f.key ? "is-on" : ""}`}
             >
-              <span className="font-display text-lg font-black uppercase leading-tight">
-                {f.label}
+              <span className="flex min-w-0 items-center gap-3">
+                <FlavorThumb flavor={f.key} />
+                <span className="font-display text-[17px] font-semibold uppercase leading-tight">
+                  {f.label}
+                </span>
               </span>
-              {offerFlavor === f.key && (
-                <span className="text-[color:var(--color-bold-yellow)]">●</span>
-              )}
+              <RadioMark on={offerFlavor === f.key} />
             </button>
           ))}
         </div>
@@ -664,7 +680,7 @@ function Solucion({
                   { en: "Your mix is set.", es: "Tu mezcla está lista." },
                 )
               }
-              className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+              className="lp2-cta"
             >
               {busy ? (
                 <T en="Saving…" es="Guardando…" />
@@ -685,11 +701,7 @@ function Solucion({
                 { en: "Your flavor is updated.", es: "Tu sabor está actualizado." },
               )
             }
-            className={`w-full rounded-full py-4 text-xs font-black uppercase tracking-[0.2em] disabled:opacity-40 ${
-              halfAndHalf
-                ? "border border-[#F2EEE1]/25 text-[#F2EEE1]"
-                : "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
-            }`}
+            className={halfAndHalf ? "lp2-ghost" : "lp2-cta"}
           >
             {busy ? (
               <T en="Saving…" es="Guardando…" />
@@ -708,36 +720,34 @@ function Solucion({
     return (
       <>
         {eyebrow}
-        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
-          <T en="What if you get fewer boxes?" es="¿Y si recibes menos cajas?" />
-        </h1>
-        <p className="mt-5 max-w-md text-sm opacity-75">
+        <SheetTitle
+          className={offerTitle}
+          text={t({ en: "What if you get fewer boxes?", es: "¿Y si recibes menos cajas?" })}
+        />
+        <p className="lp2-text mt-5 max-w-md">
           <T
             en="Fewer boxes means a lower charge per shipment, without losing your bulk discount."
             es="Con menos cajas pagas menos por envío, sin perder tu descuento por cantidad."
           />
         </p>
-        <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
+        <div className="lp2-label mt-7">
           <T en="Boxes per shipment" es="Cajas por envío" />
         </div>
-        <div className="mt-2 grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-6 gap-2">
           {fewerBoxOptions.map((n) => (
             <button
               key={n}
               type="button"
               onClick={() => setOfferBoxes(n)}
-              className={`rounded-[14px] py-3 text-sm font-black ${
-                offerBoxes === n
-                  ? "bg-[color:var(--color-bold-yellow)] text-[color:var(--color-lit-grey)]"
-                  : "border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.06] opacity-60"
-              }`}
+              aria-pressed={offerBoxes === n}
+              className={`lp2-option py-3 text-[18px] ${offerBoxes === n ? "is-on" : ""}`}
             >
               {n}
             </button>
           ))}
         </div>
         {boxCount === 4 && hasPackPrice && (
-          <p className="mt-3 text-[11px] opacity-60">
+          <p className="mt-3 text-[12px] text-[#F2F1EA]/60">
             <T
               en="You already get 1 free box with the 3+1 pack."
               es="Ya tienes 1 caja gratis con el pack 3+1."
@@ -745,20 +755,22 @@ function Solucion({
           </p>
         )}
         {newPrice !== null && (
-          <div className="mt-4 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
-            <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+          <div className="lp2-card mt-4">
+            <div className="lp2-label">
               <T en="New charge per shipment" es="Nuevo importe por envío" />
             </div>
-            <div className="mt-1 flex items-baseline gap-3">
-              <span className="font-display text-4xl font-black text-[color:var(--color-bold-yellow)]">
-                €{newPrice.toFixed(2)}
+            <div className="flex items-baseline gap-3">
+              <span className="lp2-figure text-[38px] text-[color:var(--color-bold-yellow)]">
+                {formatEuro(Math.round(newPrice * 100), lang)}
               </span>
               {curPrice !== null && curPrice !== newPrice && (
-                <span className="text-sm line-through opacity-50">€{curPrice.toFixed(2)}</span>
+                <span className="text-[14px] text-[#F2F1EA]/45 line-through">
+                  {formatEuro(Math.round(curPrice * 100), lang)}
+                </span>
               )}
             </div>
             {belowCatalogue && (
-              <p className="mt-3 text-[11px] leading-relaxed opacity-70">
+              <p className="mt-3 text-[12px] leading-relaxed text-[#F2F1EA]/70">
                 <T
                   en="Heads up: you're on an older price. If you change the number of boxes you move to the current tariff, and going back to your boxes later would cost today's price."
                   es="Ojo: tienes un precio antiguo. Si cambias el número de cajas pasas a la tarifa actual, y volver luego a tus cajas te costaría el precio de hoy."
@@ -779,7 +791,7 @@ function Solucion({
                 expectedLineIds: subscription?.lines?.map((l) => l.itemId),
               })
             }
-            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+            className="lp2-cta"
           >
             {busy ? (
               <T en="Saving…" es="Guardando…" />
@@ -798,25 +810,23 @@ function Solucion({
     return (
       <>
         {eyebrow}
-        <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
-          <T en="What if you just skip the next one?" es="¿Y si solo te saltas la próxima?" />
-        </h1>
-        <p className="mt-5 max-w-md text-sm opacity-75">
+        <SheetTitle
+          className={offerTitle}
+          text={t({ en: "What if you just skip the next one?", es: "¿Y si solo te saltas la próxima?" })}
+        />
+        <p className="lp2-text mt-5 max-w-md">
           <T
             en="A breather without cancelling. You resume whenever you want."
             es="Un respiro sin darte de baja. Retomas cuando quieras."
           />
         </p>
         {skipShip && currentShip && (
-          <div className="mt-6 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
-            <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
-              <T en="Your next box would ship on" es="Tu próxima caja saldría el" />
-            </div>
-            <div className="mt-1 font-display text-xl font-black uppercase">{fmt(skipShip)}</div>
-            <div className="mt-1 text-[11px] uppercase tracking-[0.12em] opacity-45 line-through">
-              {fmt(currentShip)}
-            </div>
-          </div>
+          <DateMove
+            className="mt-6"
+            label={<T en="Your next box would ship on" es="Tu próxima caja saldría el" />}
+            from={fmt(currentShip)}
+            to={fmt(skipShip)}
+          />
         )}
         {errorBox}
         <div className="mt-8 space-y-3">
@@ -824,7 +834,7 @@ function Solucion({
             type="button"
             disabled={busy}
             onClick={doSkip}
-            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+            className="lp2-cta"
           >
             {busy ? <T en="Skipping…" es="Saltando…" /> : <T en="Skip the next one" es="Saltar la próxima" />}
           </button>
@@ -838,34 +848,38 @@ function Solucion({
   return (
     <>
       {eyebrow}
-      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
-        <T en="What if you space it out?" es="¿Y si lo espacias en vez de dejarlo?" />
-      </h1>
-      <p className="mt-5 max-w-md text-sm opacity-75">
+      <SheetTitle
+        className={offerTitle}
+        text={t({ en: "What if you space it out?", es: "¿Y si lo espacias en vez de dejarlo?" })}
+      />
+      <p className="lp2-text mt-5 max-w-md">
         <T
           en="Getting more than you use? Receive it less often. No need to cancel."
           es="¿Recibes más de lo que usas? Recíbelo más espaciado. No hace falta cancelar."
         />
       </p>
       {longer.length > 0 && (
-        <div className="mt-6">
-          <div className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-55">
+        <div className="mt-7">
+          <div className="lp2-label">
             <T en="Receive it every" es="Recíbelo cada" />
           </div>
-          <select
-            value={offerFreq}
-            onChange={(e) => setOfferFreq(e.target.value as Frequency)}
-            className="mt-2 w-full rounded-[14px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.06] px-4 py-3 text-sm font-bold uppercase tracking-[0.15em] text-[#F2EEE1]"
-          >
+          {/* Botones y no un <select> (lp2, 2026-10-13): son pocas opciones, se
+              ven todas de un vistazo, y el desplegable nativo pintaba en
+              algunos sistemas el texto claro sobre una lista blanca. Formato
+              corto («2 meses») porque la etiqueta ya dice «cada». */}
+          <div className="grid grid-cols-3 gap-2">
             {longer.map((f) => (
-              <option key={f} value={f}>
-                {t({
-                  en: FREQUENCIES.find((x) => x.value === f)?.en ?? f,
-                  es: FREQUENCIES.find((x) => x.value === f)?.es ?? f,
-                })}
-              </option>
+              <button
+                key={f}
+                type="button"
+                onClick={() => setOfferFreq(f)}
+                aria-pressed={offerFreq === f}
+                className={`lp2-option py-3 text-[14px] uppercase ${offerFreq === f ? "is-on" : ""}`}
+              >
+                {frequencyLabel(f, lang, { format: "short" })}
+              </button>
             ))}
-          </select>
+          </div>
         </div>
       )}
       {/* Guard on longer.length too: at the max cadence spacedShip equals
@@ -873,21 +887,18 @@ function Solucion({
           struck through. Normally unreachable (handleReasonContinue skips
           this screen at 6mo), kept as defence. (audit 2026-07-08) */}
       {longer.length > 0 && spacedShip && currentShip && (
-        <div className="mt-4 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
-          <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
-            <T en="Your next order would move to" es="Tu próximo pedido pasaría al" />
-          </div>
-          <div className="mt-1 font-display text-xl font-black uppercase">{fmt(spacedShip)}</div>
-          <div className="mt-1 text-[11px] uppercase tracking-[0.12em] opacity-45 line-through">
-            {fmt(currentShip)}
-          </div>
-        </div>
+        <DateMove
+          className="mt-4"
+          label={<T en="Your next order would move to" es="Tu próximo pedido pasaría al" />}
+          from={fmt(currentShip)}
+          to={fmt(spacedShip)}
+        />
       )}
       {curPrice !== null && (
-        <p className="mt-3 text-[11px] opacity-60 leading-relaxed">
+        <p className="mt-3 text-[12px] leading-relaxed text-[#F2F1EA]/60">
           <T
-            en={`You keep paying €${curPrice.toFixed(2)} per shipment, just fewer times a year.`}
-            es={`Sigues pagando €${curPrice.toFixed(2)} por envío, solo que menos veces al año.`}
+            en={`You keep paying ${formatEuro(Math.round(curPrice * 100), lang)} per shipment, just fewer times a year.`}
+            es={`Sigues pagando ${formatEuro(Math.round(curPrice * 100), lang)} por envío, solo que menos veces al año.`}
           />
         </p>
       )}
@@ -897,7 +908,7 @@ function Solucion({
           type="button"
           disabled={busy || longer.length === 0}
           onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "fromNext" })}
-          className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-40"
+          className="lp2-cta"
         >
           {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Space out my deliveries" es="Espaciar mis entregas" />}
         </button>
@@ -924,6 +935,7 @@ function Descuento({
   onDecline: () => void;
 }) {
   const t = useLang();
+  const lang = useLangValue();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The offer is shown to everyone (the FE can't know eligibility up front),
@@ -966,6 +978,18 @@ function Descuento({
         );
         return;
       }
+      if (code === "discount_apply_unconfirmed" || code === "gateway_timeout") {
+        // No sabemos si el 15% entró (14-oct-2026): repetirlo podría ponerlo dos veces, y
+        // decir "no se pudo" puede ser falso. Se le dice la verdad y no se le deja repetir.
+        setUnavailable(true);
+        setError(
+          t({
+            en: "We couldn't confirm whether your discount was applied. We're checking it and we'll write to you; there's no need to try again.",
+            es: "No hemos podido confirmar si tu descuento se ha aplicado. Lo estamos comprobando y te escribimos; no hace falta que lo repitas.",
+          }),
+        );
+        return;
+      }
       setError(
         t({
           en: "Couldn't apply the discount. Try again or contact us.",
@@ -979,13 +1003,14 @@ function Descuento({
 
   return (
     <>
-      <div className="text-[10px] font-bold uppercase tracking-[0.25em] opacity-55">
+      <div className="lp2-eyebrow">
         <T en="Wait" es="Espera" />
       </div>
-      <h1 className="mt-2 font-display text-4xl font-black uppercase leading-[1.05] md:text-5xl">
-        <T en="This one's on us" es="Esta va por nuestra cuenta" />
-      </h1>
-      <p className="mt-5 max-w-md text-sm opacity-75">
+      <SheetTitle
+        className="mt-3 md:text-[46px]"
+        text={t({ en: "This one's on us", es: "Esta va por nuestra cuenta" })}
+      />
+      <p className="lp2-text mt-5 max-w-md">
         <T
           en="15% off your next order, on top of your bulk discount. Just for staying."
           es="Un 15% en tu próximo pedido, además de tu descuento por cantidad. Solo por quedarte."
@@ -993,35 +1018,27 @@ function Descuento({
       </p>
 
       {discounted !== null && current !== null && (
-        <div className="mt-7 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
-          <div className="text-[10px] font-bold uppercase tracking-[0.22em] opacity-60">
+        <div className="lp2-card mt-7">
+          <div className="lp2-label">
             <T en="Your next order" es="Tu próximo pedido" />
           </div>
-          <div className="mt-1 flex items-baseline gap-3">
-            <span className="font-display text-4xl font-black text-[color:var(--color-bold-yellow)]">
-              €{discounted.toFixed(2)}
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-2">
+            <span className="lp2-figure text-[44px] text-[color:var(--color-bold-yellow)] md:text-[52px]">
+              {formatEuro(Math.round(discounted * 100), lang)}
             </span>
-            <span className="text-sm line-through opacity-50">€{current.toFixed(2)}</span>
-            <span className="rounded-full border border-[color:var(--color-bold-yellow)]/50 px-2 py-0.5 text-[11px] font-bold tracking-[0.1em] text-[color:var(--color-bold-yellow)]">
-              −15%
+            <span className="text-[14px] text-[#F2F1EA]/45 line-through">
+              {formatEuro(Math.round(current * 100), lang)}
             </span>
+            <span className="lp2-pill self-center">−15%</span>
           </div>
         </div>
       )}
 
-      {error && (
-        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/15 px-4 py-3 text-xs text-[#e8a591]">
-          {error}
-        </div>
-      )}
+      {error && <div className="lp2-notice lp2-notice--error mt-4">{error}</div>}
 
-      <div className="mt-9 space-y-3">
+      <div className="mt-9 space-y-5">
         {unavailable ? (
-          <button
-            type="button"
-            onClick={onStay}
-            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
-          >
+          <button type="button" onClick={onStay} className="lp2-cta">
             <T en="Keep my subscription" es="Seguir con mi suscripción" />
           </button>
         ) : (
@@ -1029,16 +1046,12 @@ function Descuento({
             type="button"
             disabled={busy}
             onClick={handleKeep}
-            className="w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
+            className="lp2-cta"
           >
             {busy ? <T en="Applying…" es="Aplicando…" /> : <T en="Keep my 15%" es="Quedarme con el 15%" />}
           </button>
         )}
-        <button
-          type="button"
-          onClick={onDecline}
-          className="w-full text-[11px] uppercase tracking-[0.18em] opacity-60 underline"
-        >
+        <button type="button" onClick={onDecline} className="lp2-link">
           <T en="Cancel anyway" es="Cancelar de todas formas" />
         </button>
       </div>
@@ -1073,12 +1086,13 @@ function Confirmar({
 
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none md:text-6xl">
-        <T en="Confirm" es="Confirmar" />
-        <br />
-        <T en="cancellation" es="cancelación" />
-      </h1>
-      <p className="mt-6 max-w-md text-sm opacity-70">
+      <SheetTitle
+        size="lg"
+        className=""
+        thin={t({ en: "Confirm", es: "Confirmar" })}
+        bold={t({ en: "cancellation", es: "cancelación" })}
+      />
+      <p className="lp2-text mt-6 max-w-md">
         {willShipNext ? (
           <T
             en="Your next shipment is already within 24h, so it'll go out. After that, no more shipments and no more charges."
@@ -1091,7 +1105,7 @@ function Confirmar({
           />
         )}
       </p>
-      <div className="mt-8 space-y-3 rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 text-sm md:rounded-[22px]">
+      <div className="lp2-card mt-8 divide-y divide-[#F2F1EA]/10 py-1.5">
         {willShipNext && nextDateLabel && (
           <Detail label={t({ en: "Last shipment", es: "Último envío" })} value={nextDateLabel} />
         )}
@@ -1105,15 +1119,11 @@ function Confirmar({
         />
         <Detail label={t({ en: "Next billing", es: "Próximo cobro" })} value={t({ en: "None", es: "Ninguno" })} />
       </div>
-      {error && (
-        <div className="mt-4 rounded-[14px] border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/15 px-4 py-3 text-xs text-[#e8a591]">
-          {error}
-        </div>
-      )}
-      <div className="mt-10 flex items-center justify-between">
-        <button type="button" onClick={onBack} className="text-[11px] uppercase tracking-[0.18em] opacity-60">
-          ← <T en="Back" es="Atrás" />
-        </button>
+      {error && <div className="lp2-notice lp2-notice--error mt-4">{error}</div>}
+      {/* La baja va en botón de contorno y no en el lima: es la acción que no
+          queremos empujar, pero tiene que estar a la vista y sin trucos. */}
+      <div className="mt-10 flex items-center gap-5">
+        <BackLink onClick={onBack} />
         <button
           type="button"
           disabled={busy}
@@ -1144,7 +1154,7 @@ function Confirmar({
               setBusy(false);
             }
           }}
-          className="rounded-full border border-[#F2EEE1]/25 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] disabled:opacity-30"
+          className="lp2-ghost flex-1 sm:ml-auto sm:w-auto sm:flex-none sm:px-8"
         >
           {busy ? <T en="Cancelling…" es="Cancelando…" /> : <T en="Cancel subscription" es="Cancelar suscripción" />}
         </button>
@@ -1157,18 +1167,18 @@ function DoneStayed({ msg, onClose }: { msg: StayMsg | null; onClose: () => void
   const t = useLang();
   return (
     <>
-      <h1 className="font-display text-5xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-6xl">
-        <T en="Great, you're staying" es="Genial, te quedas" />
-      </h1>
-      <p className="mt-8 text-sm opacity-80">
+      <SheetDoneMark dark />
+      <SheetTitle
+        size="lg"
+        className="mt-6"
+        thin={t({ en: "Great,", es: "Genial," })}
+        bold={t({ en: "you're staying", es: "te quedas" })}
+      />
+      <p className="lp2-text mt-6">
         {msg ? `${t(msg)} ` : ""}
         <T en="See you soon." es="Nos vemos pronto." />
       </p>
-      <button
-        type="button"
-        onClick={onClose}
-        className="mt-10 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)]"
-      >
+      <button type="button" onClick={onClose} className="lp2-cta lp2-cta--still mt-10">
         <T en="Back to LIT" es="Volver a LIT" />
       </button>
     </>
@@ -1188,12 +1198,15 @@ function DoneState({
   busy: boolean;
   onExit: () => void;
 }) {
+  const t = useLang();
   return (
     <>
-      <h1 className="font-display text-6xl font-black uppercase leading-none text-[color:var(--color-bold-yellow)] md:text-7xl">
-        <T en="Thank you for trusting LIT" es="Gracias por confiar en LIT" />
-      </h1>
-      <p className="mt-8 text-sm opacity-80">
+      <SheetTitle
+        size="lg"
+        className=""
+        text={t({ en: "Thank you for trusting LIT", es: "Gracias por confiar en LIT" })}
+      />
+      <p className="lp2-text mt-6">
         {retainsActiveSub ? (
           <T
             en="This subscription is cancelled. Your other subscription stays active and you can keep managing it here."
@@ -1207,7 +1220,7 @@ function DoneState({
         type="button"
         onClick={onExit}
         disabled={busy}
-        className="mt-10 w-full rounded-full bg-[color:var(--color-bold-yellow)] py-4 text-xs font-black uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] disabled:opacity-50"
+        className="lp2-cta lp2-cta--still mt-10"
       >
         {busy ? (
           <T en="Closing…" es="Cerrando…" />
@@ -1221,26 +1234,82 @@ function DoneState({
   );
 }
 
+/** Cifra de «lo que has construido», en lima como las de la landing. */
 function Stat({ label, value, loading }: { label: string; value: number; loading?: boolean }) {
   return (
-    <div className="rounded-[20px] border border-[#F2EEE1]/10 bg-[#F2EEE1]/[0.05] p-5 md:rounded-[22px]">
+    <div className="lp2-card md:p-6">
       <div
-        className={`font-display text-4xl font-black transition-opacity duration-300 ${
+        className={`lp2-figure text-[46px] text-[color:var(--color-bold-yellow)] transition-opacity duration-300 md:text-[60px] ${
           loading ? "animate-pulse opacity-40" : "opacity-100"
         }`}
       >
         {value}
       </div>
-      <div className="mt-1 text-[10px] uppercase tracking-[0.18em] opacity-60">{label}</div>
+      <div className="lp2-label mt-2.5 mb-0">{label}</div>
     </div>
   );
 }
 
 function Detail({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-[11px] uppercase tracking-[0.15em] opacity-60">{label}</span>
-      <span className="text-sm">{value}</span>
+    <div className="flex items-center justify-between gap-4 py-3">
+      <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#F2F1EA]/55">{label}</span>
+      <span className="text-right text-[14px] text-[#F2F1EA]">{value}</span>
+    </div>
+  );
+}
+
+/** «Atrás» con flecha en SVG (ni Clash ni Barlow traen «←»). */
+function BackLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex flex-none cursor-pointer items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#F2F1EA]/60 transition-colors hover:text-[#F2F1EA]"
+    >
+      <SheetArrow className="h-3.5 w-3.5 rotate-180" />
+      <T en="Back" es="Atrás" />
+    </button>
+  );
+}
+
+/** Radio de las listas de elección, en su versión oscura. */
+function RadioMark({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={`h-4 w-4 flex-none rounded-full ${
+        on ? "bg-[color:var(--color-bold-yellow)]" : "border-[1.5px] border-[#F2F1EA]/30"
+      }`}
+    />
+  );
+}
+
+/**
+ * La fecha que cambia: la de hoy tachada y la nueva en grande, con la flecha
+ * entre las dos (saltar y espaciar).
+ */
+function DateMove({
+  label,
+  from,
+  to,
+  className = "",
+}: {
+  label: React.ReactNode;
+  from: string;
+  to: string;
+  className?: string;
+}) {
+  return (
+    <div className={`lp2-card ${className}`}>
+      <div className="lp2-label">{label}</div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-[13px] font-semibold uppercase tracking-[0.06em] text-[#F2F1EA]/45 line-through">
+          {from}
+        </span>
+        <SheetArrow className="h-4 w-4 flex-none text-[color:var(--color-bold-yellow)]" />
+        <span className="lp2-figure text-[26px]">{to}</span>
+      </div>
     </div>
   );
 }

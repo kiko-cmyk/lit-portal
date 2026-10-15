@@ -2,23 +2,25 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { BottomNav, TopNav } from "@/components/BottomNav";
+import { TopNav } from "@/components/BottomNav";
+import { MobileHeader } from "@/components/MobileHeader";
 import { orderStatusStyle, translateOrderStatus } from "@/lib/order-status";
-import { CustomerChip } from "@/components/CustomerChip";
 import { DangerZone } from "@/components/DangerZone";
 import { LoginScreen } from "@/components/LoginScreen";
-import { Logo } from "@/components/Logo";
-import { Marquee } from "@/components/Marquee";
+import { BrandBand, CardTitle, Figure, Lp2Card } from "@/components/Lp2";
+import { Lp2Loader } from "@/components/Lp2Loader";
 import { ProfileSurveyBanner } from "@/components/ProfileSurveyBanner";
+import { ReferralCard } from "@/components/ReferralCard";
 import { SubscribeBanner } from "@/components/SubscribeBanner";
 import { QAIcons } from "@/components/QuickActionButton";
 import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
-import { SignOutPill, SwitchAccountRow } from "@/components/SwitchAccount";
+import { SwitchAccountRow } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
-import { frequencyLabel } from "@/lib/frequency-label";
+import { flavorVisual, unknownFlavorName } from "@/lib/flavor-visuals";
+import { formatEuro } from "@/lib/format-price";
+import { frequencyBetweenLabel, frequencyParts } from "@/lib/frequency-label";
 import {
-  LangToggle,
   T,
   useLang,
   useLangValue,
@@ -26,7 +28,7 @@ import {
 } from "@/lib/i18n";
 import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-skipped";
 import { shortLabel } from "@/lib/mix";
-import { DEFAULT_FLAVOR } from "@/lib/seal-plans";
+import { FLAVORS, type FlavorKey } from "@/lib/seal-plans";
 import Link from "next/link";
 import { orderDetailHref } from "@/lib/portal-link";
 import type {
@@ -89,7 +91,7 @@ export default function AccountPage() {
   const [billingOpen, setBillingOpen] = useState(false);
   const t = useLang();
   const lang = useLangValue();
-  const { canSwitch, openChooser, accountOnly } = useSubscriptionSwitch();
+  const { accountOnly } = useSubscriptionSwitch();
   usePageTitle({ en: "Account · LIT", es: "Cuenta · LIT" });
 
   useEffect(() => {
@@ -204,24 +206,24 @@ export default function AccountPage() {
   if (error === "unauthorized" || error === "session_expired" || error === "session_invalid") return <LoginScreen />;
   if (error) {
     return (
-      <main className="zone-cream flex flex-1 items-center justify-center p-8 text-center">
-        <p className="text-xs">
-          <T en="Something went wrong." es="Algo no fue bien." /> ({error})
-        </p>
+      <main className="zone-lp2 flex flex-1 flex-col items-center justify-center bg-[#EFEEE5] p-8 text-center text-[#2F343D]">
+        <h1 className="m-0 font-display text-[28px] font-semibold uppercase leading-[0.98] tracking-[0.005em] md:text-[38px]">
+          <T en="Something went wrong." es="Algo no fue bien." />
+        </h1>
+        <p className="mt-3 mb-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8C8E87]">{error}</p>
       </main>
     );
   }
-  if (!customer) {
-    return (
-      <main className="zone-cream flex flex-1 items-center justify-center">
-        <p className="text-xs uppercase tracking-[0.2em] opacity-50">
-          <T en="Loading…" es="Cargando…" />
-        </p>
-      </main>
-    );
-  }
+  // La espera común del portal (lp2, 2026-10-13), la misma que la de la entrada.
+  if (!customer) return <Lp2Loader />;
 
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
+  // «HOLA, JUAN»: solo el nombre de pila. Si no hay nombre, queda «Hola,».
+  const firstName = (customer.name ?? "").trim().split(/\s+/)[0] ?? "";
+  // «ABR 2026»: mes corto sin el punto que pone es-ES («abr.»).
+  const memberSince = new Date(customer.memberSince)
+    .toLocaleDateString(dateLocale, { month: "short", year: "numeric" })
+    .replace(".", "");
 
   // A cancelled/expired sub still comes back from GET /api/subscription: that
   // route falls back to the most recent sub when none is ACTIVE, so
@@ -319,104 +321,81 @@ export default function AccountPage() {
   };
 
   return (
-    <div className="zone-cream mesh-bg flex min-h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="zone-lp2 mesh-bg flex min-h-screen flex-col overflow-x-clip bg-[color:var(--background)] text-[color:var(--foreground)]">
       <TopNav />
 
-      {/* Mobile header — fixed so it NEVER hides on scroll (per Juan
-          2026-05-19). */}
-      <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-brisky-cream)]/90 px-6 pt-5 pb-3 backdrop-blur-md md:hidden">
-        <Logo />
-        {/* min-w-0 lets the group shrink on narrow phones (≤390px with pill +
-            toggle + chip + TierPill); chip name and TierPill truncate under
-            pressure instead of overflowing (audit 2026-07-08). */}
-        <div className="flex min-w-0 items-center gap-2.5">
-          {/* Multi-sub switch: pill a la IZQUIERDA del grupo, con el mismo
-              tamaño/estilo que el chip de nombre y el toggle de idioma (Juan
-              2026-07-06). */}
-          {canSwitch && (
-            <button
-              type="button"
-              onClick={openChooser}
-              className="shrink-0 self-stretch inline-flex cursor-pointer items-center rounded-full border border-[color:var(--color-lit-grey)]/22 bg-[color:var(--color-sharp-white)] px-3.5 py-[8px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-lit-grey)] transition-transform duration-150 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-lit-grey)]/50"
-              style={{ fontFamily: "var(--font-body)", fontSize: 11 }}
-            >
-              {t({ en: "Switch", es: "Cambiar" })}
-            </button>
-          )}
-          {customer && <CustomerChip name={customer.name} />}
-          <TierPill
-            visible={tier?.earned ?? false}
-            tierEarnedAt={tier?.earnedAt ?? null}
-          />
-          {/* Wholesale: the bottom tab bar is gone, so the way out lives here. */}
-          {accountOnly && <SignOutPill />}
-        </div>
-      </header>
+      {/* Cabecera móvil (Juan 2026-10-14): menú, logo e iniciales, como la de
+          litsalt.com. Fija: nunca se esconde al hacer scroll (Juan 2026-05-19). */}
+      <MobileHeader name={customer?.name} extra={<TierPill visible={tier?.earned ?? false} tierEarnedAt={tier?.earnedAt ?? null} />} />
 
-      {/* pb-32 reserves room for the fixed tab bar; without one, that is just a
-          hole at the end of the page. */}
+      {/* Abajo, 48 px más la zona de la barra de inicio del iPhone: el mismo
+          hueco que deja la banda arriba y abajo. Desde el 2026-10-14 no hay
+          barra fija abajo que reservar (sus pestañas van en el menú). */}
       <main
-        className={`flex-1 pt-[88px] ${accountOnly ? "pb-12" : "pb-32"} md:mx-auto md:w-full md:max-w-5xl md:px-8 md:pt-[92px] md:pb-12`}
+        className={`flex flex-1 flex-col gap-4 pt-[calc(88px+var(--safe-top))] pb-[calc(48px+var(--safe-bottom))] md:mx-auto md:w-full md:max-w-[1440px] md:gap-6 md:px-8 md:pt-[100px] md:pb-12`}
       >
-        {/* H1 "CUENTA" eliminado a petición de Juan 2026-05-19: la
-            pestaña activa de la nav + el browser tab title ya indican
-            dónde está el usuario, el titular interno es redundante. */}
+        {/* Rediseño lp2 (Juan 2026-10-13, aprobado en el lienzo PRE). Orden:
+            saludo con cifras → encuesta (si toca) → «Tu plan» y «Tus datos» a
+            la MISMA altura → «Mis pedidos» → referidos → banda → baja.
+            Todas las tarjetas se separan con el hueco de esta columna (16 px en
+            móvil, 24 en escritorio), así que ninguna lleva margen propio. */}
 
-        {/* Identidad del cliente, en TEXTO y no en una banda oscura con foto
-            (Juan 2026-09-15).
+        {/* Saludo a dos pesos («HOLA, JUAN»), con «miembro desde» y las cajas
+            entregadas como cifras al lado (Juan: «ponlo de otro modo más
+            elegante» que las pastillas). Para un mayorista la cifra cuenta
+            pedidos, no cajas de un plan.
 
-            Hasta hoy esto era un bloque negro con la foto de marca velada. El
-            problema apareció al traer el banner del formulario a esta pantalla:
-            quedaban DOS bandas oscuras casi idénticas separadas por una fila de
-            tarjetas claras, compitiendo entre ellas, y encima el degradado del
-            hero se abría hasta 0.35 por la derecha y dejaba una mancha gris a
-            media banda.
-
-            Con el nombre en texto, la única superficie oscura de Cuenta vuelve a
-            ser una: la del formulario, que es la que tiene que llamar la
-            atención. La página queda cuadrada y la identidad sigue estando,
-            que es lo único que ese bloque aportaba.
-
-            Sin `Section`: no es una sección con datos que tocar, es la cabecera
-            de la página. De ahí que no lleve caja ni el `mb-3` del resto. */}
-        {/* A la izquierda y GRANDE (Juan 2026-09-15). El nombre es el titular de
-            la pantalla, así que usa el titular del portal: `text-4xl font-black
-            uppercase`, el mismo de los overlays (ChargeNow, Address, Flavor).
-            Probamos primero a la derecha y en tamaño intermedio y se quedaba en
-            tierra de nadie, ni titular ni etiqueta. */}
-        <div className="mx-6 mb-6 mt-3 md:mx-0 md:mt-5">
+            En escritorio, al tamaño de la fecha del hero del Hub (88 px, Juan
+            2026-10-13). En móvil, más pequeño (Juan 2026-10-14): 52 px como
+            mucho, en UNA línea con un nombre corto («HOLA, JUAN» mide 311 px);
+            un nombre largo baja a la segunda y se encoge para caber en la suya
+            en vez de salirse de la pantalla (`--hola-size`). Encima, un poco
+            más de aire que antes (20 px en móvil, 24 en escritorio). */}
+        <div className="mx-6 mt-5 flex flex-col gap-5 md:mx-0 md:mt-6 md:flex-row md:flex-wrap md:items-end md:justify-between md:gap-x-10 md:gap-y-6">
           <h1
-            className="font-display text-4xl font-black uppercase leading-[1] tracking-[-0.02em] text-[color:var(--color-lit-grey)]"
+            className="m-0 font-display text-[length:var(--hola-size)] uppercase leading-[0.95] tracking-[0.005em] text-[#2F343D] md:text-[88px] md:leading-[0.9]"
+            style={{ "--hola-size": `min(52px, calc((100vw - 48px) / ${(clashNameEm(firstName) * 1.03).toFixed(2)}))` } as React.CSSProperties}
           >
-            {customer.name}
-          </h1>
-          <div
-            className="mt-1.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-          >
-            <T en="Member since" es="Miembro desde" />{" "}
-            {new Date(customer.memberSince)
-              .toLocaleDateString(dateLocale, { month: "short", year: "numeric" })
-              .toUpperCase()}{" "}
-            ·{" "}
-            {/* A wholesale account buys cases per order, not boxes on a plan,
-                so counting "boxes delivered" reads wrong on their file. */}
-            {accountOnly ? (
-              <T
-                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "order" : "orders"}`}
-                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "pedido" : "pedidos"}`}
-              />
-            ) : (
-              <T
-                en={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "box" : "boxes"} delivered`}
-                es={`${customer.boxesReceived} ${customer.boxesReceived === 1 ? "caja" : "cajas"} entregadas`}
-              />
+            <span className="font-light">{t({ en: "Hi,", es: "Hola," })}</span>
+            {firstName && (
+              <>
+                {" "}
+                <span className="font-semibold">{firstName}</span>
+              </>
             )}
+          </h1>
+          <div className="grid grid-cols-2 border-t border-[#2F343D]/16 pt-4 md:flex md:border-t-0 md:pt-0 md:pb-1.5">
+            <div className="pr-3 md:pr-[30px]">
+              <p className="m-0 font-display text-[26px] font-semibold uppercase leading-none md:text-[30px]">
+                {memberSince}
+              </p>
+              <p className="mt-[7px] mb-0 text-[9.5px] font-semibold uppercase tracking-[0.18em] text-[#8C8E87] md:mt-[9px]">
+                <T en="Member since" es="Miembro desde" />
+              </p>
+            </div>
+            <div className="border-l border-[#2F343D]/16 pl-4 md:pl-[30px]">
+              <p className="m-0 font-display text-[26px] font-semibold leading-none md:text-[30px]">
+                {customer.boxesReceived}
+              </p>
+              <p className="mt-[7px] mb-0 text-[9.5px] font-semibold uppercase tracking-[0.18em] text-[#8C8E87] md:mt-[9px]">
+                {accountOnly ? (
+                  <T
+                    en={customer.boxesReceived === 1 ? "Order" : "Orders"}
+                    es={customer.boxesReceived === 1 ? "Pedido" : "Pedidos"}
+                  />
+                ) : (
+                  <T
+                    en={customer.boxesReceived === 1 ? "Box delivered" : "Boxes delivered"}
+                    es={customer.boxesReceived === 1 ? "Caja entregada" : "Cajas entregadas"}
+                  />
+                )}
+              </p>
+            </div>
           </div>
         </div>
 
         {subPaused && (
-          <section className="mx-6 mb-3 rounded-[18px] border border-[color:var(--color-lit-grey)]/12 bg-[color:var(--color-sharp-white)] px-5 py-4 md:mx-0">
+          <section className="mx-6 rounded-[24px] border border-[#2F343D]/[0.06] bg-[color:var(--color-sharp-white)] px-5 py-5 shadow-[0_22px_44px_-24px_rgba(40,34,20,0.38)] md:mx-0 md:rounded-[28px] md:p-[30px]">
             <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]">
               <T en="Paused" es="En pausa" />
             </div>
@@ -450,54 +429,16 @@ export default function AccountPage() {
           </section>
         )}
 
-        {subActive && !subPaused && (
-          <section className="mx-6 mb-3 grid grid-cols-2 gap-1.5 md:mx-0 md:grid-cols-4">
-            <CompactAction
-              icon={QAIcons.ChargeNow}
-              label={t({ en: "Bring fwd", es: "Adelantar" })}
-              onClick={() => setChargeNowOpen(true)}
-              disabled={!!subscription?.withinCutoff}
-            />
-            <CompactAction
-              icon={QAIcons.ChangePlan}
-              label={t({ en: "Plan", es: "Plan" })}
-              onClick={() => setPlanOpen(true)}
-              // Match Mi LIT: disable when within 24h of next ship so the
-              // user doesn't hit a backend cutoff_passed error.
-              disabled={!!subscription?.withinCutoff}
-            />
-            <CompactAction
-              icon={QAIcons.Skip}
-              label={t({ en: "Skip", es: "Saltar" })}
-              onClick={() => setSkipOpen(true)}
-              disabled={!!subscription?.withinCutoff}
-            />
-            <CompactAction
-              icon={QAIcons.Flavor}
-              label={t({ en: "Flavor", es: "Sabor" })}
-              onClick={() => setFlavorOpen(true)}
-              disabled={!!subscription?.withinCutoff}
-            />
-          </section>
-        )}
-
-        {/* Formulario de perfilado. Vive en CUENTA desde el 2026-09-15, bajo las
-            acciones rápidas. Antes estaba en el Hub, alimentado por
-            /api/hub/dashboard, y esa ruta 404ea sin suscripción viva: los 77
-            pausados y los cancelados no lo veían nunca, que es justo la gente de
-            la que más interesa aprender. Ahora el estado viaja en
-            /api/customer, que solo pide poder entrar al área personal.
-
-            Deliberadamente FUERA del `subActive && !subPaused` de la rejilla de
-            arriba: contestar no toca la suscripción, así que no hay razón para
-            escondérselo a quien está en pausa. */}
+        {/* Formulario de perfilado, justo debajo del saludo. Deliberadamente
+            FUERA de cualquier condición de suscripción activa: contestar no
+            toca la suscripción, así que no hay razón para escondérselo a quien
+            está en pausa. */}
         {customer?.profileSurvey?.enabled && !customer.profileSurvey.answered && (
           <ProfileSurveyBanner onStart={() => setSurveyOpen(true)} />
         )}
 
-
         {justSkipped && subscription?.nextShipDate && (
-          <div className="mx-6 mb-3 flex items-center justify-between border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
+          <div className="mx-6 flex items-center justify-between rounded-[14px] border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/20 px-4 py-2.5 md:mx-0">
             <span className="text-[12px] text-[color:var(--color-lit-grey)]">
               <T
                 en="You skipped the previous order. The next one ships on"
@@ -521,89 +462,6 @@ export default function AccountPage() {
           </div>
         )}
 
-        {subActive && (
-          <Section title={t({ en: "My subscription", es: "Mi suscripción" })}>
-            <div className="grid grid-cols-4 border-t border-[color:var(--color-lit-grey)]/6">
-              <SubsummCell
-                label={t({ en: "Boxes", es: "Cajas" })}
-                value={String(subscription.boxCount)}
-                showRightBorder
-              />
-              <SubsummCell
-                label={t({ en: "Frequency", es: "Frecuencia" })}
-                value={frequencyLabel(subscription.frequency, lang, { format: "short" }).toUpperCase()}
-                showRightBorder
-              />
-              <SubsummCell
-                label={t({
-                  en: (subscription.composition?.length ?? 0) > 1 ? "Flavors" : "Flavor",
-                  es: (subscription.composition?.length ?? 0) > 1 ? "Sabores" : "Sabor",
-                })}
-                value={
-                  // Una mezcla no cabe entera en un cuarto de fila, así que se
-                  // resume como "2L · 1W" y el detalle va en la fila de abajo.
-                  // Antes esto hacía flavor.split(" ").slice(1), que con una
-                  // etiqueta de mezcla ("2× Lemon · 1× Watermelon") daba basura.
-                  (subscription.composition?.length ?? 0) > 1
-                    ? subscription.composition!
-                        .map((c) => `${c.boxes}${shortLabel(c.flavor)[0]}`)
-                        .join(" · ")
-                    : // El "tipo" del producto (LEMON, SUN, …) es lo que el
-                      // cliente reconoce. "Salty" es prefijo de gama, se queda
-                      // fuera para que la card respire.
-                      (shortLabel(subscription.composition?.[0]?.flavor ?? DEFAULT_FLAVOR) ||
-                        subscription.flavor)
-                        .toUpperCase() || "—"
-                }
-                showRightBorder
-              />
-              <SubsummCell
-                label={t({ en: "Next", es: "Próximo" })}
-                value={
-                  subscription.nextShipDate
-                    ? new Date(subscription.nextShipDate)
-                        .toLocaleDateString(dateLocale, {
-                          month: "short",
-                          day: "numeric",
-                        })
-                        .toUpperCase()
-                    : "—"
-                }
-              />
-            </div>
-            {/* La fila "Tu mezcla" se quitó (Juan 2026-09-10): la celda SABORES
-                de arriba ya dice "2L · 2W", así que era el mismo dato dos veces
-                a tres centímetros de distancia. Existía porque el resumen
-                abreviado se consideraba insuficiente, pero con dos o tres
-                sabores la abreviatura se lee sin ayuda. */}
-            {/* Hidden while paused. The summary and the mix above are fine to read,
-                but this button opens PlanOverlay, which posts the four fast-path ids
-                to /api/subscription/plan and would try to mutate a paused
-                subscription. The backend refuses that now, so leaving the button
-                here would only show an error where the resume banner already says
-                what to do. */}
-            {!subPaused && (
-              <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={() => setPlanOpen(true)}
-                  // Ancho completo en MÓVIL y automático en desktop, igual que
-                  // el CTA del banner del formulario (Juan 2026-09-15): en un
-                  // teléfono un botón corto alineado a la izquierda es un
-                  // objetivo táctil pequeño en una tarjeta que ocupa toda la
-                  // pantalla.
-                  className="w-full rounded-full border border-[color:var(--color-lit-grey)]/40 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-[color:var(--color-lit-grey)] transition-colors hover:border-[color:var(--color-lit-grey)] md:w-auto"
-                >
-                  <T
-                    en="Change boxes or frequency"
-                    es="Cambiar cajas o frecuencia"
-                  />
-                </button>
-              </div>
-            )}
-          </Section>
-        )}
-
         {subCancelled && (
           <Section title={t({ en: "My subscription", es: "Mi suscripción" })}>
             <p className="text-[13px] leading-[1.5] text-[color:var(--color-warm-gray)]">
@@ -615,293 +473,251 @@ export default function AccountPage() {
           </Section>
         )}
 
-        {/* DOS COLUMNAS en desktop (Juan 2026-09-10): "Mis datos" a la
-            izquierda, dirección y método de pago a la derecha.
-            En móvil sigue siendo una sola columna, en el mismo orden que antes.
-
-            Las dos columnas ocupan la MISMA ALTURA, que es lo pedido: la
-            rejilla las estira por defecto (`items-stretch`) y cada columna es
-            un flex vertical cuya última tarjeta crece (`last:flex-1`) hasta
-            llenar lo que sobre. Así el bloque queda cerrado por abajo en vez de
-            dejar un escalón entre la columna corta y la larga.
-
-            Se estira la ÚLTIMA y no todas a partes iguales para no inflar
-            tarjetas de dos filas hasta el tamaño de la de al lado: el aire
-            sobrante se lo queda una sola, la de más abajo.
-
-            ESPACIADO, y es lo delicado: en Cuenta todas las secciones se
-            separan por el `mb-3` (12px) que trae cada `Section`, y ese hueco
-            tiene que ser el mismo en todas partes (Juan 2026-09-10, "ni más ni
-            menos"). Aquí eso significa tres cosas a la vez:
-              - `gap-3` = los mismos 12px entre las dos columnas y entre las
-                tarjetas apiladas de la derecha.
-              - `[&>div>section]:mb-0` anula el `mb-3` DENTRO de las columnas,
-                que si no se sumaría al gap y daría 24px.
-              - `mb-3` en el propio contenedor devuelve esos 12px por debajo,
-                para que "Mis pedidos" quede a la misma distancia que el resto.
-                Sin él el bloque se pegaba a la sección siguiente. */}
-        <div className="md:mb-3 md:grid md:grid-cols-2 md:gap-3 md:[&>div>section]:mb-0 md:[&>div]:flex md:[&>div]:flex-col md:[&>div]:gap-3 md:[&>div>section:last-child]:flex-1">
-        <div>
-        <Section title={t({ en: "My details", es: "Mis datos" })}>
-          {emailChangeConfirmed && (
-            <div className="mx-6 mb-3 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
-              <T
-                en="Email updated successfully."
-                es="Email actualizado correctamente."
+        {/* «Tu plan» y «Tus datos» en la MISMA fila y a la MISMA altura (Juan
+            2026-10-13: «no me gusta que las columnas no sean iguales de
+            altas»): la rejilla estira las dos tarjetas y cada una deja sus
+            botones abajo con `mt-auto`. Sin suscripción, «Tus datos» va sola. */}
+        <div
+          className={`flex flex-col gap-4 md:gap-6 ${subActive && subscription ? "lg:grid lg:grid-cols-2 lg:items-stretch" : ""}`}
+        >
+          {subActive && subscription && (
+            <div className="mx-6 md:mx-0">
+              <PlanCard
+                subscription={subscription}
+                paused={subPaused}
+                onPlan={() => setPlanOpen(true)}
+                onChargeNow={() => setChargeNowOpen(true)}
+                onSkip={() => setSkipOpen(true)}
+                onFlavor={() => setFlavorOpen(true)}
               />
             </div>
           )}
-          {emailChangePending && (
-            <div className="mx-6 mb-3 rounded-[14px] border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs leading-relaxed text-[color:var(--color-lit-grey)] md:mx-0">
-              <T
-                en={`We sent a confirmation link to ${emailChangePending}. Click it from that inbox to apply the change. Until you do, your account email stays the same.`}
-                es={`Te hemos enviado un enlace de confirmación a ${emailChangePending}. Ábrelo desde ese correo para aplicar el cambio. Hasta entonces tu email actual sigue activo.`}
+          <div className="mx-6 md:mx-0">
+            <Lp2Card as="article" className="flex h-full flex-col">
+              <CardTitle
+                thin={t({ en: "Personal", es: "personales" })}
+                bold={t({ en: "details", es: "Datos" })}
+                boldFirst={lang === "es"}
               />
-            </div>
-          )}
-          <EditableRow
-            label={t({ en: "Name", es: "Nombre" })}
-            value={customer.name}
-            inputType="text"
-            onSave={async (v) => {
-              const [firstName, ...rest] = v.trim().split(/\s+/);
-              const lastName = rest.join(" ");
-              await api("/api/customer", {
-                method: "PATCH",
-                body: JSON.stringify({ firstName, lastName }),
-              });
-              setCustomer({ ...customer, name: v });
-            }}
-          />
-          <EditableRow
-            label={t({ en: "Email", es: "Email" })}
-            value={customer.email}
-            inputType="email"
-            onSave={async (v) => {
-              // PATCH /api/customer no longer mutates email synchronously.
-              // It stages a request and emails the new address; only the
-              // magic-link click applies the change. Show the customer
-              // a banner so they know to check their inbox.
-              const res = await api<{
-                updated: boolean;
-                emailChangeRequested?: boolean;
-                newEmail?: string;
-              }>("/api/customer", {
-                method: "PATCH",
-                body: JSON.stringify({ email: v }),
-              });
-              if (res.emailChangeRequested && res.newEmail) {
-                setEmailChangePending(res.newEmail);
-              }
-              // Don't mutate local customer.email — the UI keeps showing
-              // the old address until confirmation.
-            }}
-          />
-          <EditableRow
-            label={t({ en: "Phone", es: "Teléfono" })}
-            value={customer.phone ?? ""}
-            placeholder="—"
-            inputType="tel"
-            onSave={async (v) => {
-              await api("/api/customer", {
-                method: "PATCH",
-                body: JSON.stringify({ phone: v }),
-              });
-              setCustomer({ ...customer, phone: v });
-            }}
-          />
-          {/* Sits right under the email row on purpose: this is where people
-              who are in the WRONG account try to fix it, by retyping their
-              email. That never works when the other address already has a
-              Shopify customer, so give them the door that does. 2026-07-29.
-              Hidden in wholesale mode: the header already carries CERRAR
-              SESIÓN, and two controls firing the same logout three rows apart
-              is noise on a screen that is now only rows of data. */}
-          {!accountOnly && <SwitchAccountRow />}
-        </Section>
-        </div>
-
-        {/* Columna derecha: dónde llega y cómo se paga. Van juntas porque son
-            los dos datos del envío, y separadas de la identidad de la
-            izquierda. */}
-        <div>
-
-        {/* Wholesale: the address on their Shopify customer record, which is what
-            prefills their checkout. A partner has no Seal subscription, so the
-            section above (Seal's shipping address) never renders for them and
-            this is the only address they can fix themselves. */}
-        {accountOnly && (
-          <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
-            <BusinessAddressBlock
-              value={business?.delivery ?? null}
-              onEdit={() => setDeliveryOpen(true)}
-              editLabel={t({ en: "Change delivery address", es: "Cambiar dirección de entrega" })}
-              note={t({
-                en: "Where your orders ship. It also prefills your checkout.",
-                es: "Donde te llegan los pedidos. También se rellena sola en el checkout.",
-              })}
-            />
-          </Section>
-        )}
-
-        {accountOnly && (
-          <Section title={t({ en: "Billing details", es: "Datos de facturación" })}>
-            <EditableRow
-              label={t({ en: "Tax ID", es: "NIF / CIF" })}
-              value={business?.billing.taxId ?? ""}
-              onSave={(v) => saveBusiness({ billing: { taxId: v } })}
-            />
-            {/* By default the billing address SHOWS the delivery one (Juan
-                2026-07-29): most partners invoice where the boxes land, and a
-                block that just said "same as delivery" made them go up to read
-                their own address. Underneath, it is still the absence of a
-                separate fiscal address, so the day they move there is no stale
-                duplicate to forget about. */}
-            <BusinessAddressBlock
-              value={
-                business?.billing.sameAsDelivery === false
-                  ? business.billing
-                  : business?.delivery ?? null
-              }
-              onEdit={() => setBillingOpen(true)}
-              editLabel={t({
-                en: "Change billing address",
-                es: "Cambiar dirección de facturación",
-              })}
-              note={
-                business?.billing.sameAsDelivery === false
-                  ? t({
-                      en: "We invoice to this address.",
-                      es: "Facturamos a esta dirección.",
-                    })
-                  : t({
-                      en: "Same as your delivery address. We invoice with this data.",
-                      es: "La misma que la de entrega. Facturamos con estos datos.",
-                    })
-              }
-              onReset={
-                business?.billing.sameAsDelivery === false
-                  ? () => saveBusiness({ billing: { sameAsDelivery: true } })
-                  : undefined
-              }
-              resetLabel={t({
-                en: "Use the delivery address again",
-                es: "Volver a usar la de entrega",
-              })}
-            />
-          </Section>
-        )}
-
-        {subActive && (
-          <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
-            {/* The overlay used to just vanish on success, with no word that
-                anything had been saved (Juan, 2026-07-29). After the
-                gateway_timeout incident, silence on success is the worst
-                possible ending: it reads exactly like the failure did. */}
-            {addressSaved && (
-              <div className="mx-6 mb-3 rounded-[14px] bg-green-50 px-4 py-3 text-xs text-green-800 md:mx-0">
-                <T
-                  en={
-                    addressSaved === true
-                      ? "Address updated. It applies from your next shipment."
-                      : `Address updated. It applies from your shipment on ${addressSaved}.`
-                  }
-                  es={
-                    addressSaved === true
-                      ? "Dirección actualizada. Aplica desde tu próximo envío."
-                      : `Dirección actualizada. Aplica desde tu envío del ${addressSaved}.`
-                  }
+              {emailChangeConfirmed && (
+                <div className="mt-4 lp2-notice md:mx-0">
+                  <T
+                    en="Email updated successfully."
+                    es="Email actualizado correctamente."
+                  />
+                </div>
+              )}
+              {emailChangePending && (
+                <div className="mt-4 rounded-[14px] border-l-[3px] border-[color:var(--color-bold-yellow)] bg-[color:var(--color-bold-yellow)]/15 px-4 py-3 text-xs leading-relaxed text-[color:var(--color-lit-grey)] md:mx-0">
+                  <T
+                    en={`We sent a confirmation link to ${emailChangePending}. Click it from that inbox to apply the change. Until you do, your account email stays the same.`}
+                    es={`Te hemos enviado un enlace de confirmación a ${emailChangePending}. Ábrelo desde ese correo para aplicar el cambio. Hasta entonces tu email actual sigue activo.`}
+                  />
+                </div>
+              )}
+              <div className="mt-4 border-t border-[#2F343D]/12 md:mt-[22px]">
+                <EditableRow
+                  label={t({ en: "Name", es: "Nombre" })}
+                  value={customer.name}
+                  inputType="text"
+                  onSave={async (v) => {
+                    const [firstName, ...rest] = v.trim().split(/\s+/);
+                    const lastName = rest.join(" ");
+                    await api("/api/customer", {
+                      method: "PATCH",
+                      body: JSON.stringify({ firstName, lastName }),
+                    });
+                    setCustomer({ ...customer, name: v });
+                  }}
                 />
+                <EditableRow
+                  label={t({ en: "Email", es: "Email" })}
+                  value={customer.email}
+                  inputType="email"
+                  onSave={async (v) => {
+                    // PATCH /api/customer no longer mutates email synchronously.
+                    // It stages a request and emails the new address; only the
+                    // magic-link click applies the change. Show the customer
+                    // a banner so they know to check their inbox.
+                    const res = await api<{
+                      updated: boolean;
+                      emailChangeRequested?: boolean;
+                      newEmail?: string;
+                    }>("/api/customer", {
+                      method: "PATCH",
+                      body: JSON.stringify({ email: v }),
+                    });
+                    if (res.emailChangeRequested && res.newEmail) {
+                      setEmailChangePending(res.newEmail);
+                    }
+                    // Don't mutate local customer.email — the UI keeps showing
+                    // the old address until confirmation.
+                  }}
+                />
+                <EditableRow
+                  label={t({ en: "Phone", es: "Teléfono" })}
+                  value={customer.phone ?? ""}
+                  placeholder="—"
+                  inputType="tel"
+                  onSave={async (v) => {
+                    await api("/api/customer", {
+                      method: "PATCH",
+                      body: JSON.stringify({ phone: v }),
+                    });
+                    setCustomer({ ...customer, phone: v });
+                  }}
+                />
+                {subActive && subscription && (
+                  <>
+                    <AddressBlock
+                      address={subscription.shippingAddress}
+                      onEdit={() => {
+                        setAddressSaved(null);
+                        setAddressOpen(true);
+                      }}
+                    />
+                    {addressSaved && (
+                      <div className="my-3 lp2-notice md:mx-0">
+                        <T
+                          en={
+                            addressSaved === true
+                              ? "Address updated. It applies from your next shipment."
+                              : `Address updated. It applies from your shipment on ${addressSaved}.`
+                          }
+                          es={
+                            addressSaved === true
+                              ? "Dirección actualizada. Aplica desde tu próximo envío."
+                              : `Dirección actualizada. Aplica desde tu envío del ${addressSaved}.`
+                          }
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+                {/* Sin método de pago para el mayorista: paga cada pedido en el
+                    checkout, así que la fila solo enseñaría un vacío. */}
+                {!accountOnly && <PaymentBlock />}
               </div>
-            )}
-            <AddressBlock
-              address={subscription.shippingAddress}
-              onEdit={() => {
-                setAddressSaved(null);
-                setAddressOpen(true);
-              }}
-            />
-          </Section>
+              {/* Cerrar sesión o entrar con otro email, al pie de la tarjeta
+                  (2026-07-29: la gente que está en la cuenta EQUIVOCADA intenta
+                  arreglarlo reescribiendo el email). Fuera para el mayorista:
+                  ya lleva CERRAR SESIÓN en la cabecera. */}
+              {!accountOnly && (
+                <div className="mt-auto pt-[18px] md:pt-6">
+                  <SwitchAccountRow variant="card" />
+                </div>
+              )}
+            </Lp2Card>
+          </div>
+        </div>
+
+        {/* Mayorista: su dirección de entrega y la de facturación, que son las
+            de su ficha de Shopify (no hay suscripción). */}
+        {accountOnly && (
+          <div className="flex flex-col gap-4 md:gap-6 lg:grid lg:grid-cols-2 lg:items-stretch">
+          {accountOnly && (
+            <Section title={t({ en: "Delivery address", es: "Dirección de entrega" })}>
+              <BusinessAddressBlock
+                value={business?.delivery ?? null}
+                onEdit={() => setDeliveryOpen(true)}
+                editLabel={t({ en: "Change delivery address", es: "Cambiar dirección de entrega" })}
+                note={t({
+                  en: "Where your orders ship. It also prefills your checkout.",
+                  es: "Donde te llegan los pedidos. También se rellena sola en el checkout.",
+                })}
+              />
+            </Section>
+          )}
+          {accountOnly && (
+            <Section title={t({ en: "Billing details", es: "Datos de facturación" })}>
+              <EditableRow
+                label={t({ en: "Tax ID", es: "NIF / CIF" })}
+                value={business?.billing.taxId ?? ""}
+                onSave={(v) => saveBusiness({ billing: { taxId: v } })}
+              />
+              {/* By default the billing address SHOWS the delivery one (Juan
+                  2026-07-29): most partners invoice where the boxes land, and a
+                  block that just said "same as delivery" made them go up to read
+                  their own address. Underneath, it is still the absence of a
+                  separate fiscal address, so the day they move there is no stale
+                  duplicate to forget about. */}
+              <BusinessAddressBlock
+                value={
+                  business?.billing.sameAsDelivery === false
+                    ? business.billing
+                    : business?.delivery ?? null
+                }
+                onEdit={() => setBillingOpen(true)}
+                editLabel={t({
+                  en: "Change billing address",
+                  es: "Cambiar dirección de facturación",
+                })}
+                note={
+                  business?.billing.sameAsDelivery === false
+                    ? t({
+                        en: "We invoice to this address.",
+                        es: "Facturamos a esta dirección.",
+                      })
+                    : t({
+                        en: "Same as your delivery address. We invoice with this data.",
+                        es: "La misma que la de entrega. Facturamos con estos datos.",
+                      })
+                }
+                onReset={
+                  business?.billing.sameAsDelivery === false
+                    ? () => saveBusiness({ billing: { sameAsDelivery: true } })
+                    : undefined
+                }
+                resetLabel={t({
+                  en: "Use the delivery address again",
+                  es: "Volver a usar la de entrega",
+                })}
+              />
+            </Section>
+          )}
+          </div>
         )}
 
-        {/* Hidden for wholesale: the stored payment method belongs to a
-            subscription. A partner pays each order at checkout, so the section
-            would only ever render an empty state they can't act on. */}
-        {!accountOnly && (
-          <Section title={t({ en: "Payment method", es: "Método de pago" })}>
-            <PaymentBlock />
-          </Section>
-        )}
-        </div>
-        </div>
-
-        {/* IDIOMA: en desktop se fue al header, junto a Suscripción y Cuenta
-            (Juan 2026-09-10), así que aquí solo queda para móvil (`md:hidden`).
-            Revierte la decisión del 2026-07-13 de tenerlo en el cuerpo: una
-            tarjeta entera para dos botones pesaba lo mismo que la dirección o
-            el pago, y el idioma no es un dato de la cuenta, es un ajuste de la
-            interfaz. En el header además queda accesible desde el Hub y no solo
-            desde esta pantalla.
-
-            Por qué NO se quita también en móvil: la barra superior del móvil ya
-            lleva Cambiar + chip de nombre + TierPill, y el audit del 2026-07-08
-            dejó anotado que a 390px eso ya va justo. Metiendo un cuarto control
-            se rompe. Así que en móvil esta sección es el único sitio donde el
-            cliente puede cambiar de idioma, y quitarla lo dejaría sin él. */}
-        <div className="md:hidden">
-          <Section title={t({ en: "Language", es: "Idioma" })}>
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-sm text-[color:var(--color-warm-gray)]">
-                {t({ en: "Choose your language", es: "Elige tu idioma" })}
-              </span>
-              <LangToggle />
-            </div>
-          </Section>
-        </div>
-
-        {/* Sin margen propio: el `mb-3` de la Section anterior ya da los 12px
-            que separan TODAS las secciones de Cuenta (Juan 2026-09-10, "ni más
-            ni menos"). El `mt-7 md:mt-9` que llevaba antes hacía este hueco más
-            grande que los demás. */}
         <OrdersSection orders={orders} />
 
-        {/* `compact` sólo cuando debajo viene el banner de AHORRA (Juan
-            2026-09-22): con la banda oscura detrás, el marquee dejaba de ser el
-            final de la página y pasaba a ser un separador más, y los 40/48px
-            por arriba y por abajo abrían dos agujeros seguidos entre "Mis
-            pedidos" y la oferta. Cuando el banner no sale, el marquee vuelve a
-            cerrar la pantalla y conserva el hueco largo del resto del portal. */}
-        <Marquee compact={!accountOnly && subscription == null} />
+        {/* «Trae a alguien», debajo de «Mis pedidos» (Juan 2026-10-13). Solo con
+            la suscripción ACTIVA, igual que en Suscripción: el programa es para
+            quien está suscrito, y una pausada no puede recibir sus 10€ hasta
+            que vuelva. La tarjeta se esconde sola si el programa no está
+            abierto para este cliente (flag REFERRALS, B2B). */}
+        {!accountOnly && subscription?.status === "active" && <ReferralCard placement="account" />}
+
+        {/* `compact` solo cuando debajo viene la invitación a suscribirse (Juan
+            2026-09-22): entonces la banda deja de cerrar la página y pasa a ser
+            un separador, y el hueco largo abría dos agujeros seguidos. */}
+        <BrandBand compact={!accountOnly && subscription == null} />
 
         {/* La invitación a suscribirse, para quien no tiene NINGUNA suscripción
-            (Juan 2026-09-22).
-
-            DESPUÉS del marquee LIT · PERFORM · REPEAT y no antes (Juan): así el
-            cierre de marca sigue cerrando la página y la oferta queda como
-            remate, no interrumpiendo el ritmo de la pantalla. Quien entra viene
-            a ver lo suyo, sus datos y sus pedidos, y la oferta se lee al final.
-
-            `subscription == null` es la condición exacta: /api/subscription
-            devuelve la más reciente aunque esté cancelada, así que sólo es null
-            cuando de verdad no hay nada. Por eso NO se usa `!subActive`, que
-            también es cierto para un cancelado y le pondría un anuncio encima
-            del aviso de su propia cancelación.
-
-            Fuera para el mayorista: el partner B2B compra por pedido, no por
-            plan, y ya tuvo su propio lío con el enlace equivocado de retail. */}
+            (Juan 2026-09-22), DESPUÉS de la banda: el cierre de marca sigue
+            cerrando y la oferta queda como remate. `subscription == null` es la
+            condición exacta (/api/subscription devuelve la más reciente aunque
+            esté cancelada). Fuera para el mayorista. */}
         {!accountOnly && subscription == null && <SubscribeBanner />}
 
-        {/* Cancel is hidden while paused: the wizard's confirm step reasons about
-            the next billing attempt, which a paused sub doesn't have, so the
-            button 400s at the end after making the customer walk the whole flow.
-            Not a dark pattern, the paused banner above says in plain words to
-            email us to cancel, and a paused sub isn't being charged meanwhile. */}
+        {/* Baja: oculta mientras está en pausa (el asistente razona sobre el
+            próximo cobro, que una pausada no tiene; el aviso de pausa ya dice
+            que nos escriban para cancelar). Las dos alternativas abren los
+            mismos overlays que «Tu plan», con el mismo bloqueo de la ventana
+            de cierre. */}
+        {/* `mt-8 md:mt-6` + el hueco de la columna = 48 px, lo mismo que hay
+            entre los referidos y la banda (Juan 2026-10-13). */}
         {subActive && !subPaused && (
-          <DangerZone onCancel={() => setCancelOpen(true)} />
+          <div className="mt-8 md:mt-6">
+            <DangerZone
+              onCancel={() => setCancelOpen(true)}
+              onSkip={() => setSkipOpen(true)}
+              onChangeFrequency={() => setPlanOpen(true)}
+              alternativesDisabled={!!subscription?.withinCutoff || !!subscription?.pendingChange}
+            />
+          </div>
         )}
       </main>
 
-      <BottomNav />
 
       {cancelOpen && (
         <CancelTakeover
@@ -1055,53 +871,24 @@ export default function AccountPage() {
   );
 }
 
-function CompactAction({
-  icon,
-  label,
-  onClick,
-  disabled,
-  comingSoon,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick?: () => void;
-  disabled?: boolean;
-  comingSoon?: boolean;
-}) {
-  const inert = comingSoon || disabled;
-  return (
-    <button
-      type="button"
-      onClick={comingSoon ? undefined : onClick}
-      disabled={inert}
-      aria-disabled={inert}
-      className={
-        comingSoon
-          ? "relative flex flex-col items-center gap-2 rounded-2xl border border-[color:var(--color-lit-grey)]/8 bg-[color:var(--color-lit-grey)]/[0.04] px-1.5 py-3.5 cursor-not-allowed"
-          : "flex flex-col items-center gap-2 rounded-2xl border border-[color:var(--color-lit-grey)]/6 bg-[color:var(--color-sharp-white)] px-1.5 py-3.5 transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-[color:var(--color-bold-yellow)]/60 hover:bg-[color:var(--color-bold-yellow)]/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:border-[color:var(--color-lit-grey)]/6 disabled:hover:bg-[color:var(--color-sharp-white)]"
-      }
-    >
-      {comingSoon && (
-        <span
-          className="absolute right-1.5 top-1.5 rounded-sm bg-[color:var(--color-lit-grey)]/10 px-1.5 py-0.5 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 8 }}
-        >
-          <T en="Soon" es="Pronto" />
-        </span>
-      )}
-      <span
-        className={`h-[20px] w-[20px] ${comingSoon ? "text-[color:var(--color-warm-gray)]/55" : "text-[color:var(--color-lit-grey)]"}`}
-      >
-        {icon}
-      </span>
-      <span
-        className={`font-semibold uppercase leading-[1.15] tracking-[0.22em] ${comingSoon ? "text-[color:var(--color-warm-gray)]" : "text-[color:var(--color-lit-grey)]"}`}
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        {label}
-      </span>
-    </button>
-  );
+/**
+ * Ancho aproximado de un nombre en Clash Display Semibold, en «em». Medido con
+ * la fuente: la I 0,23, la M 0,93, la W 1,09, la A 0,79 y ninguna otra pasa de
+ * 0,78 (se cuentan a 0,74). Con él, en móvil, un nombre largo baja de tamaño en
+ * el saludo lo justo para caber en su línea, en vez de salirse de la pantalla.
+ * Nunca menos que «HOLA,» (2,9), que va en la línea de arriba al mismo tamaño.
+ */
+function clashNameEm(name: string): number {
+  let em = 0;
+  for (const c of name.toUpperCase()) {
+    em +=
+      c === "I" || c === "Í" ? 0.23
+      : c === "M" ? 0.93
+      : c === "W" ? 1.1
+      : c === "A" || c === "Á" ? 0.8
+      : 0.74;
+  }
+  return Math.max(em, 2.9);
 }
 
 function Section({
@@ -1115,70 +902,264 @@ function Section({
   actionLabel?: string;
   onAction?: () => void;
 }) {
+  // Título a dos pesos como el resto de tarjetas del rediseño lp2: la primera
+  // palabra fina y el resto en negrita («MI SUSCRIPCIÓN», «DATOS DE
+  // FACTURACIÓN»). Una sola palabra va entera en negrita.
+  const [first, ...rest] = title.split(" ");
   return (
-    <section
-      className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6"
-      style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
-    >
-      <div className="mb-4 flex items-baseline justify-between">
-        <h2
-          className="font-display font-semibold uppercase leading-[1] tracking-[-0.01em] text-[color:var(--color-lit-grey)]"
-          style={{ fontSize: "clamp(16px, 3.6vw, 19px)" }}
-        >
-          {title}
-        </h2>
-        {actionLabel && onAction && (
-          <button
-            type="button"
-            onClick={onAction}
-            className="py-1 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-          >
-            {actionLabel}
-          </button>
-        )}
-      </div>
-      <div>{children}</div>
-    </section>
+    <div className="mx-6 md:mx-0">
+      <Lp2Card className="h-full">
+        <div className="mb-4 flex items-baseline justify-between gap-3 md:mb-5">
+          <CardTitle thin={rest.length ? first : ""} bold={rest.length ? rest.join(" ") : first} />
+          {actionLabel && onAction && (
+            <button
+              type="button"
+              onClick={onAction}
+              className="py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[#8C8E87] hover:text-[#2F343D]"
+            >
+              {actionLabel}
+            </button>
+          )}
+        </div>
+        <div>{children}</div>
+      </Lp2Card>
+    </div>
   );
 }
 
-function SubsummCell({
-  label,
-  value,
-  sub,
-  showRightBorder,
+/** Clases de las filas de «Tus datos»: etiqueta en versalitas y valor debajo. */
+const ROW = "flex items-center justify-between gap-3 border-b border-[#2F343D]/12 py-[15px] md:gap-4 md:py-4";
+const ROW_LABEL = "m-0 text-[9.5px] font-semibold uppercase tracking-[0.18em] text-[#8C8E87]";
+const ROW_VALUE = "mt-1 mb-0 break-words text-[14px] md:mt-[5px] md:text-[14.5px]";
+const ROW_ACTION =
+  "flex-none cursor-pointer text-[10px] font-bold uppercase tracking-[0.16em] text-[#2F343D] underline underline-offset-[3px] transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * «Tu plan» (rediseño lp2, Juan 2026-10-13). Sustituye a «Mi suscripción» y a la
+ * rejilla de acciones de arriba: los sabores con su caja, cuatro cifras y, al
+ * pie, «Cambiar cajas o frecuencia» y las tres acciones rápidas. El pie va con
+ * `mt-auto` para que la tarjeta acabe a la vez que «Tus datos».
+ *
+ * En pausa: sin acciones (el backend las rechaza para una pausada; el aviso de
+ * arriba ya ofrece reanudar) y la etiqueta dice «En pausa». Dentro de la ventana
+ * de cierre las cuatro acciones se desactivan, como en el Hub, para no acabar en
+ * un `cutoff_passed`.
+ */
+function PlanCard({
+  subscription,
+  paused,
+  onPlan,
+  onChargeNow,
+  onSkip,
+  onFlavor,
 }: {
-  label: string;
-  value: string;
-  sub?: string;
-  showRightBorder?: boolean;
+  subscription: Subscription;
+  paused: boolean;
+  onPlan: () => void;
+  onChargeNow: () => void;
+  onSkip: () => void;
+  onFlavor: () => void;
 }) {
+  const t = useLang();
+  const lang = useLangValue();
+  const dateLocale = lang === "es" ? "es-ES" : "en-US";
+  // También mientras un cambio de plan se termina de aplicar (14-oct-2026): lo que enseña la
+  // tarjeta ya es lo pedido, y escribir encima de un cambio a medias es lo que no se hace.
+  const locked = !!subscription.withinCutoff || !!subscription.pendingChange;
+  const freq = frequencyParts(subscription.frequency);
+  const next = subscription.nextShipDate ? new Date(subscription.nextShipDate) : null;
+  const nextLabel = next
+    ? `${next.getDate()} ${next.toLocaleDateString(dateLocale, { month: "short" }).replace(".", "")}`
+    : "—";
+  const price =
+    subscription.chargeTotalCents > 0 ? formatEuro(subscription.chargeTotalCents, lang) : null;
+  const cell = "border-[#2F343D]/12";
+  const manyFlavors = (subscription.composition?.length ?? 0) >= 3;
+  // Con 4 sabores, en un móvil de 360 cada columna mide 62 px: la caja y el
+  // nombre bajan un punto para caber (en escritorio, igual que con 3).
+  const fourFlavors = (subscription.composition?.length ?? 0) >= 4;
+  // «2×» y el nombre en la MISMA línea bajo la caja (Juan 2026-10-13), donde
+  // cabe: con 3 sabores desde md y con 4 desde xl (entre lg y xl la tarjeta va
+  // en media columna y cada sabor mide ~90 px). En móvil no caben y van uno
+  // encima del otro.
+  const countRow = !manyFlavors ? "" : fourFlavors ? "xl:flex xl:items-baseline xl:gap-2" : "md:flex md:items-baseline md:gap-2";
+  const labelTop = !manyFlavors ? "md:mt-1.5" : fourFlavors ? "md:mt-1.5 xl:mt-0" : "md:mt-0";
+
   return (
-    <div
-      className={`px-1 py-4 text-center ${showRightBorder ? "border-r border-[color:var(--color-lit-grey)]/6" : ""}`}
-    >
-      <div
-        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
-      >
-        {label}
+    <Lp2Card as="article" className="flex h-full flex-col">
+      {/* `flex-wrap`: con «PLAN DE SUSCRIPCIÓN» el título ocupa casi toda la
+          línea en móvil, y «ACTIVO» baja debajo en vez de partir el título. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
+        <CardTitle
+          thin={t({ en: "Subscription", es: "de suscripción" })}
+          bold={t({ en: "plan", es: "Plan" })}
+          boldFirst={lang === "es"}
+        />
+        {/* «Activo», en masculino: habla del plan (Juan 2026-10-13). */}
+        <span className="flex flex-none items-center gap-1.5 rounded-full bg-[color:var(--color-bold-yellow)]/60 px-[11px] py-1.5 text-[9.5px] font-bold uppercase tracking-[0.16em] md:px-3 md:py-[7px] md:text-[10px]">
+          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[#2F343D]" />
+          {paused ? t({ en: "Paused", es: "En pausa" }) : t({ en: "Active", es: "Activo" })}
+        </span>
       </div>
-      <div
-        className="mt-1.5 font-display font-semibold uppercase leading-[0.95] tracking-[-0.015em] text-[color:var(--color-lit-grey)]"
-        style={{ fontSize: "clamp(18px, 4.2vw, 22px)" }}
-      >
-        {value}
-      </div>
-      {sub && (
+
+      {/* Los sabores en UNA fila (Juan 2026-10-13). Con 1 o 2, la caja a la
+          izquierda y el texto al lado; con 3 o más, una columna por sabor con la
+          caja arriba y el texto debajo, que es lo que deja caber hasta 4 en un
+          móvil de 360 y en la tarjeta estrecha de escritorio (dos columnas desde
+          1024 px). */}
+      {subscription.composition?.length ? (
         <div
-          className="mt-1 font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]/85"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 9 }}
+          className={`mt-[18px] grid border-y border-[#2F343D]/12 py-3.5 md:mt-[22px] md:gap-4 ${
+            manyFlavors ? (subscription.composition.length >= 4 ? "gap-2" : "gap-3") : "grid-cols-2 gap-3"
+          }`}
+          style={
+            manyFlavors
+              ? { gridTemplateColumns: `repeat(${subscription.composition.length}, minmax(0, 1fr))` }
+              : undefined
+          }
         >
-          {sub}
+          {subscription.composition.map((c) => {
+            const v = flavorVisual(c.flavor);
+            const name = Object.prototype.hasOwnProperty.call(FLAVORS, c.flavor)
+              ? shortLabel(c.flavor as FlavorKey)
+              : unknownFlavorName(c.flavor);
+            return (
+              <div
+                key={c.flavor}
+                className={manyFlavors ? "flex min-w-0 flex-col items-start gap-2" : "flex items-center gap-2.5 md:gap-3.5"}
+              >
+                <span
+                  aria-hidden
+                  className={`relative flex-none md:h-[68px] md:w-[80px] ${fourFlavors ? "h-[50px] w-[56px]" : "h-[58px] w-[66px]"}`}
+                >
+                  <span
+                    className={`absolute bottom-0 left-1 rounded-full md:left-1.5 md:h-[60px] md:w-[60px] ${
+                      fourFlavors ? "h-[44px] w-[44px]" : "h-[52px] w-[52px]"
+                    }`}
+                    style={{ background: v.disc }}
+                  />
+                  {v.box && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={v.box}
+                      alt=""
+                      className={`absolute bottom-0.5 left-0 h-auto max-w-none md:w-[74px] ${fourFlavors ? "w-[53px]" : "w-[62px]"}`}
+                      style={{ filter: "drop-shadow(0 8px 8px rgba(26,28,34,0.22))" }}
+                    />
+                  )}
+                </span>
+                <span className={`min-w-0 ${countRow}`}>
+                  <span className="block flex-none font-display text-[24px] font-semibold leading-none md:text-[28px]">
+                    {c.boxes}×
+                  </span>
+                  <span
+                    className={`mt-[5px] block font-bold uppercase leading-[1.3] md:text-[10px] md:tracking-[0.14em] ${labelTop} ${
+                      fourFlavors ? "text-[9px] tracking-[0.08em]" : "text-[9.5px] tracking-[0.14em]"
+                    }`}
+                  >
+                    Salty <br className="md:hidden" />
+                    {name}
+                  </span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-[18px] border-y border-[#2F343D]/12 py-3.5 text-[14px] md:mt-[22px]">
+          {subscription.flavorSummary || subscription.flavor}
+        </p>
+      )}
+
+      <div className="grid grid-cols-2">
+        <Figure
+          size="sm"
+          className={`border-b ${cell} py-4 pr-3 md:pr-[18px]`}
+          value={subscription.boxCount}
+          label={t({ en: "Boxes per delivery", es: "Cajas por envío" })}
+        />
+        <Figure
+          size="sm"
+          className={`border-b border-l ${cell} py-4 pl-4 md:pl-[18px]`}
+          value={freq.n}
+          label={frequencyBetweenLabel(subscription.frequency, lang)}
+        />
+        <Figure
+          size="sm"
+          className="pt-4 pr-3 md:pr-[18px]"
+          value={nextLabel}
+          label={t({ en: "Next delivery", es: "Próximo envío" })}
+        />
+        {price && (
+          <Figure
+            size="sm"
+            className={`border-l ${cell} pt-4 pl-4 md:pl-[18px]`}
+            value={price}
+            label={
+              <>
+                <span className="md:hidden">{t({ en: "Per delivery", es: "Por envío" })}</span>
+                <span className="hidden md:inline">
+                  {t({ en: "Per delivery · free shipping", es: "Por envío · envío gratis" })}
+                </span>
+              </>
+            }
+          />
+        )}
+      </div>
+
+      {subscription.pendingChange && (
+        <div className="mt-4 lp2-notice md:mx-0" role="status" aria-live="polite">
+          {subscription.pendingChange.stalled ? (
+            <T
+              en="We're reviewing your last change: it didn't finish applying and we're on it. You won't be overcharged, and we'll write to you once it's sorted."
+              es="Estamos revisando tu último cambio: se ha quedado a medias y lo estamos mirando nosotros. No te cobraremos de más y te escribimos en cuanto esté."
+            />
+          ) : (
+            <T
+              en="We're finishing your change. This is your new plan and it will be ready in a few minutes. You don't need to do anything and you won't be overcharged."
+              es="Estamos terminando de aplicar tu cambio. Este es tu plan nuevo y estará listo en unos minutos. No hace falta que hagas nada y no te cobraremos de más."
+            />
+          )}
         </div>
       )}
-    </div>
+
+      {!paused && (
+        <div className="mt-auto pt-5 md:pt-6">
+          <button
+            type="button"
+            onClick={onPlan}
+            disabled={locked}
+            className="flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-full bg-[#2F343D] px-[18px] py-3.5 text-[11px] font-bold uppercase tracking-[0.16em] text-[#F2F1EA] transition-transform duration-150 hover:-translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 md:py-[15px]"
+          >
+            <T en="Change boxes or frequency" es="Cambiar cajas o frecuencia" />
+            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#EBEE62" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14" />
+              <path d="M13 6l6 6-6 6" />
+            </svg>
+          </button>
+          <div className="mt-2.5 grid grid-cols-3 gap-2 md:gap-2.5">
+            {[
+              { icon: QAIcons.ChargeNow, label: t({ en: "Bring fwd", es: "Adelantar" }), onClick: onChargeNow },
+              { icon: QAIcons.Skip, label: t({ en: "Skip", es: "Saltar" }), onClick: onSkip },
+              { icon: QAIcons.Flavor, label: t({ en: "Flavor", es: "Sabor" }), onClick: onFlavor },
+            ].map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                onClick={a.onClick}
+                disabled={locked}
+                className="flex cursor-pointer flex-col items-center gap-1.5 rounded-[16px] border border-[#2F343D]/12 px-1 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#2F343D] transition-colors hover:border-[#2F343D]/35 disabled:cursor-not-allowed disabled:opacity-50 md:flex-row md:justify-center md:gap-2 md:rounded-full md:border-[#2F343D]/18 md:px-2.5 md:py-[13px] md:text-[11px]"
+              >
+                <span aria-hidden className="inline-flex h-[17px] w-[17px] md:h-4 md:w-4">
+                  {a.icon}
+                </span>
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </Lp2Card>
   );
 }
 
@@ -1308,15 +1289,12 @@ function EditableRow({
 
   if (!editing) {
     return (
-      <div className="flex gap-3 border-b border-[color:var(--color-lit-grey)]/6 py-3 last:border-b-0">
-        <div
-          className="min-w-[88px] pt-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-        >
-          {label}
-        </div>
-        <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
-          {value || placeholder || "—"}
+      <div className={ROW}>
+        <div className="min-w-0">
+          <p className={ROW_LABEL}>{label}</p>
+          <p className={`${ROW_VALUE} ${value ? "text-[#2F343D]" : "text-[#8C8E87]"}`}>
+            {value || t({ en: "Not added", es: "Sin añadir" })}
+          </p>
         </div>
         <button
           type="button"
@@ -1324,38 +1302,32 @@ function EditableRow({
             setDraft(value);
             setEditing(true);
           }}
-          className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          className={ROW_ACTION}
         >
-          <T en="Edit" es="Editar" />
+          {value ? <T en="Edit" es="Editar" /> : <T en="Add" es="Añadir" />}
         </button>
       </div>
     );
   }
 
   return (
-    <div className="border-b border-[color:var(--color-lit-grey)]/6 py-3 last:border-b-0">
-      <div
-        className="mb-2 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        {label}
-      </div>
-      <div className="flex gap-2">
+    <div className="border-b border-[#2F343D]/12 py-[15px] md:py-4">
+      <p className={ROW_LABEL}>{label}</p>
+      <div className="mt-2 flex gap-2">
         <input
           autoFocus
           type={inputType}
           value={draft}
+          placeholder={placeholder && placeholder !== "—" ? placeholder : undefined}
           onChange={(e) => setDraft(e.target.value)}
           disabled={busy}
-          className="flex-1 rounded-full border border-[color:var(--color-lit-grey)]/15 bg-[color:var(--color-brisky-cream)] px-4 py-2 text-[13px] text-[color:var(--color-lit-grey)] focus:border-[color:var(--color-bold-yellow)] focus:bg-[color:var(--color-sharp-white)] focus:outline-none disabled:opacity-50"
+          className="min-w-0 flex-1 rounded-full border border-[#2F343D]/15 bg-[#EFEEE5] px-4 py-2.5 text-[14px] text-[#2F343D] focus:border-[color:var(--color-bold-yellow)] focus:bg-white focus:outline-none disabled:opacity-50"
         />
         <button
           type="button"
           onClick={handleSave}
           disabled={busy}
-          className="rounded-full bg-[color:var(--color-lit-grey)] px-4 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
+          className="cursor-pointer rounded-full bg-[#2F343D] px-4 text-[10px] font-bold uppercase tracking-[0.16em] text-[color:var(--color-bold-yellow)] disabled:opacity-50"
         >
           {busy ? "…" : <T en="Save" es="OK" />}
         </button>
@@ -1363,12 +1335,13 @@ function EditableRow({
           type="button"
           onClick={() => setEditing(false)}
           disabled={busy}
-          className="rounded-full border border-[color:var(--color-lit-grey)]/20 px-2.5 text-[14px] font-bold text-[color:var(--color-warm-gray)] hover:text-[color:var(--color-lit-grey)]"
+          aria-label={t({ en: "Cancel", es: "Cancelar" })}
+          className="cursor-pointer rounded-full border border-[#2F343D]/20 px-3 text-[14px] font-bold text-[#8C8E87] hover:text-[#2F343D]"
         >
           ×
         </button>
       </div>
-      {err && <p className="mt-2 text-[10px] text-[color:var(--color-danger)]">{err}</p>}
+      {err && <p className="mt-2 mb-0 text-[11px] text-[color:var(--color-danger)]">{err}</p>}
     </div>
   );
 }
@@ -1380,42 +1353,31 @@ function AddressBlock({
   address: SubscriptionAddress | null;
   onEdit: () => void;
 }) {
-  if (!address || !address.address1) {
-    return (
-      <button
-        type="button"
-        onClick={onEdit}
-        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-lit-grey)] underline-offset-2 hover:underline"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 11 }}
-      >
-        <T en="Add shipping address" es="Añadir dirección" />
-      </button>
-    );
+  const t = useLang();
+  const has = !!address && !!address.address1;
+  let line: string | null = null;
+  if (has && address) {
+    const street = address.address2 ? `${address.address1}, ${address.address2}` : address.address1;
+    const town = [address.postalCode, address.city].filter(Boolean).join(" ");
+    // La provincia solo si dice algo que la ciudad no dice («28045 Madrid,
+    // Madrid» sobra); el país solo fuera de España, donde está casi todo el mundo.
+    const province =
+      address.province && address.province.toLowerCase() !== (address.city ?? "").toLowerCase()
+        ? `, ${address.province}`
+        : "";
+    const country = address.countryCode && address.countryCode !== "ES" ? ` · ${address.country}` : "";
+    line = `${street} · ${town}${province}${country}`;
   }
   return (
-    <div className="flex items-start gap-3 py-1">
-      <div
-        className="min-w-[88px] pt-0.5 font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        <T en="Address" es="Dirección" />
+    <div className={ROW}>
+      <div className="min-w-0">
+        <p className={ROW_LABEL}>{t({ en: "Delivery address", es: "Dirección de entrega" })}</p>
+        <p className={`${ROW_VALUE} ${line ? "text-[#2F343D]" : "text-[#8C8E87]"}`}>
+          {line ?? t({ en: "Not added", es: "Sin añadir" })}
+        </p>
       </div>
-      <div className="flex-1 text-[13px] leading-[1.5] text-[color:var(--color-lit-grey)]">
-        <div>{address.address1}</div>
-        {address.address2 && <div>{address.address2}</div>}
-        <div>
-          {address.postalCode} {address.city}
-          {address.province ? `, ${address.province}` : ""}
-        </div>
-        <div>{address.country}</div>
-      </div>
-      <button
-        type="button"
-        onClick={onEdit}
-        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        <T en="Edit" es="Editar" />
+      <button type="button" onClick={onEdit} className={ROW_ACTION}>
+        {has ? <T en="Change" es="Cambiar" /> : <T en="Add" es="Añadir" />}
       </button>
     </div>
   );
@@ -1484,28 +1446,29 @@ function PaymentBlock() {
     }
   };
 
+  const rowLabel = t({ en: "Payment method", es: "Método de pago" });
+
   if (loading) {
     return (
-      <div
-        className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-      >
-        <T en="Loading…" es="Cargando…" />
+      <div className={ROW}>
+        <div className="min-w-0">
+          <p className={ROW_LABEL}>{rowLabel}</p>
+          <p className={`${ROW_VALUE} text-[#8C8E87]`}>
+            <T en="Loading…" es="Cargando…" />
+          </p>
+        </div>
       </div>
     );
   }
 
   if (!data?.instrument) {
     return (
-      <div className="flex items-center gap-3 py-1">
-        <div
-          className="min-w-[88px] font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-        >
-          <T en="Method" es="Método" />
-        </div>
-        <div className="flex-1 text-[13px] text-[color:var(--color-warm-gray)]">
-          <T en="No payment method on file." es="Sin método de pago registrado." />
+      <div className={ROW}>
+        <div className="min-w-0">
+          <p className={ROW_LABEL}>{rowLabel}</p>
+          <p className={`${ROW_VALUE} text-[#8C8E87]`}>
+            <T en="No payment method on file." es="Sin método de pago registrado." />
+          </p>
         </div>
       </div>
     );
@@ -1519,33 +1482,22 @@ function PaymentBlock() {
         ? "Shop Pay"
         : inst.type === "card"
           ? t({ en: "Card", es: "Tarjeta" })
-          : t({ en: "Method", es: "Método" });
+          : null;
 
   return (
     <div>
-      <div className="flex items-center gap-3 py-1">
-        <div
-          className="min-w-[88px] font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-          style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-        >
-          {typeLabel}
-        </div>
-        <div className="flex-1 text-[13px] text-[color:var(--color-lit-grey)]">
-          {inst.label}
+      <div className={ROW}>
+        <div className="min-w-0">
+          <p className={ROW_LABEL}>{rowLabel}</p>
+          <p className={`${ROW_VALUE} text-[#2F343D]`}>
+            {typeLabel && inst.label && !inst.label.toLowerCase().startsWith(typeLabel.toLowerCase())
+              ? `${typeLabel} · ${inst.label}`
+              : inst.label || typeLabel}
+          </p>
         </div>
         {!sentTo && (
-          <button
-            type="button"
-            onClick={sendEmail}
-            disabled={busy}
-            className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] underline-offset-2 hover:text-[color:var(--color-lit-grey)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-          >
-            {busy ? (
-              <T en="Sending…" es="Enviando…" />
-            ) : (
-              <T en="Change" es="Cambiar" />
-            )}
+          <button type="button" onClick={sendEmail} disabled={busy} className={ROW_ACTION}>
+            {busy ? <T en="Sending…" es="Enviando…" /> : <T en="Change" es="Cambiar" />}
           </button>
         )}
       </div>
@@ -1609,20 +1561,17 @@ function PaymentBlock() {
 // the same function and is always visible (sticky header).
 
 /**
- * Pedidos visibles antes del "Ver más" en Cuenta. Mismo número que el Hub
- * (`VISIBLE_ORDERS` en components/OrderHistory.tsx): las dos superficies
- * enseñan la misma lista y descuadrarlas no tendría motivo. Va duplicado y no
- * importado porque esta lista es una implementación aparte, con su propio
- * markup compacto; el día que se unifiquen, la constante se unifica con ellas.
+ * Pedidos visibles antes del "Ver más" en Cuenta. Mismo número que tenía el Hub
+ * (`VISIBLE_ORDERS` en components/OrderHistory.tsx). Desde el 2026-10-13 el Hub
+ * ya no enseña pedidos (Juan): esta es la única lista. Va duplicado y no
+ * importado porque es una implementación aparte, con su propio markup compacto.
  */
 const VISIBLE_ACCOUNT_ORDERS = 4;
 
 function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
-  const [open, setOpen] = useState(true);
-  // Mismo corte que `OrderHistory` en el Hub (Juan 2026-09-10): se ven 4 y el
-  // resto se pliega. Aquí la sección YA tenía su propio desplegable de
-  // cabecera, así que son dos cosas distintas y conviven: `open` esconde la
-  // sección entera, `expanded` alarga la lista de dentro.
+  // Se ven 4 y el resto se pliega tras «Ver todos los pedidos» (Juan
+  // 2026-09-10). El desplegable que escondía la sección entera se fue con el
+  // rediseño lp2 (2026-10-13): la tarjeta va siempre abierta.
   const [expanded, setExpanded] = useState(false);
   const lang = useLangValue();
   const dateLocale = lang === "es" ? "es-ES" : "en-US";
@@ -1633,107 +1582,94 @@ function OrdersSection({ orders }: { orders: OrderHistoryItem[] | null }) {
       ? orders.slice(0, VISIBLE_ACCOUNT_ORDERS)
       : orders;
 
-  return (
-    <section
-      className="mx-6 mb-3 rounded-[20px] border border-[color:var(--color-lit-grey)]/10 bg-[color:var(--color-sharp-white)] px-5 py-5 md:mx-0 md:px-6"
-      style={{ boxShadow: "0 10px 30px -14px rgba(40,34,20,0.22)" }}
+  const t = useLang();
+  const toggle = collapsible ? (
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      aria-expanded={expanded}
+      className="inline-flex cursor-pointer items-center justify-center gap-2.5 rounded-full border border-[#2F343D]/20 px-5 py-[13px] text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#2F343D] transition-colors hover:border-[#2F343D]/45"
     >
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full cursor-pointer items-baseline justify-between"
+      {expanded ? t({ en: "Show less", es: "Ver menos" }) : t({ en: "See all orders", es: "Ver todos los pedidos" })}
+      <svg
+        aria-hidden
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`transition-transform duration-200 ${expanded ? "-rotate-90" : ""}`}
       >
-        <h2
-          className="font-display font-semibold uppercase leading-[1] tracking-[-0.01em] text-[color:var(--color-lit-grey)]"
-          style={{ fontSize: "clamp(16px, 3.6vw, 19px)" }}
-        >
-          <T en="My orders" es="Mis pedidos" />
-        </h2>
-        <span
-          className={`text-[13px] text-[color:var(--color-warm-gray)] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-        >
-          ▾
-        </span>
-      </button>
-      {open && (
-        <div className="mt-4">
-          {!orders && (
-            <p
-              className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-            >
-              <T en="Loading…" es="Cargando…" />
-            </p>
-          )}
-          {orders && orders.length === 0 && (
-            <p
-              className="font-semibold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)]"
-              style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-            >
-              <T en="No orders yet." es="Aún no hay pedidos." />
-            </p>
-          )}
-          {orders && orders.length > 0 && (
-            <ul>
-              {(shown ?? []).map((o) => (
-                <li
-                  key={o.id}
-                  className="border-t border-[color:var(--color-lit-grey)]/6"
-                >
-                  <Link
-                    href={orderDetailHref(lang, o.id)}
-                    className="flex items-center justify-between gap-3 py-3 -mx-2 px-2 rounded-md transition-colors hover:bg-[color:var(--color-brisky-cream)]"
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[13px] font-bold text-[color:var(--color-lit-grey)]">
-                        {o.orderNumber} ·{" "}
-                        {new Date(o.date).toLocaleDateString(dateLocale, {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </span>
-                      <span
-                        className="font-semibold uppercase tracking-[0.18em] text-[color:var(--color-warm-gray)]"
-                        style={{ fontFamily: "var(--font-cond)", fontSize: 10 }}
-                      >
-                        {o.total.toFixed(2)} {o.currency}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="rounded-sm px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.15em]"
-                        style={orderStatusStyle(o.status)}
-                      >
-                        {o.status ? translateOrderStatus(o.status, lang).toUpperCase() : "—"}
-                      </span>
-                      <span className="text-[12px] text-[color:var(--color-warm-gray)]" aria-hidden>→</span>
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-          {collapsible && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              aria-expanded={expanded}
-              className="mt-3 flex w-full cursor-pointer items-center justify-center gap-2 border-t border-[color:var(--color-lit-grey)]/6 pt-3 text-[10px] font-bold uppercase tracking-[0.22em] text-[color:var(--color-warm-gray)] transition-colors hover:text-[color:var(--color-lit-grey)]"
-              style={{ fontFamily: "var(--font-cond)" }}
-            >
-              {expanded ? <T en="Show less" es="Ver menos" /> : <T en="Show more" es="Ver más" />}
-              <span
-                aria-hidden
-                className={`text-[12px] leading-none transition-transform duration-200 ${
-                  expanded ? "rotate-180" : ""
-                }`}
-              >
-                ⌄
-              </span>
-            </button>
-          )}
+        <path d="M5 12h14" />
+        <path d="M13 6l6 6-6 6" />
+      </svg>
+    </button>
+  ) : null;
+
+  return (
+    <div className="mx-6 md:mx-0">
+      <Lp2Card>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <CardTitle
+            thin={t({ en: "history", es: "Historial de" })}
+            bold={t({ en: "Order", es: "pedidos" })}
+            boldFirst={lang === "en"}
+          />
+          {toggle && <div className="hidden md:block">{toggle}</div>}
         </div>
-      )}
-    </section>
+        {!orders && (
+          <p className="mt-4 mb-0 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8C8E87]">
+            <T en="Loading…" es="Cargando…" />
+          </p>
+        )}
+        {orders && orders.length === 0 && (
+          <p className="mt-4 mb-0 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8C8E87]">
+            <T en="No orders yet." es="Aún no hay pedidos." />
+          </p>
+        )}
+        {orders && orders.length > 0 && (
+          <ul className="m-0 mt-4 grid list-none gap-2.5 p-0 md:mt-6 md:grid-cols-2 md:gap-3">
+            {(shown ?? []).map((o) => (
+              <li key={o.id}>
+                <Link
+                  href={orderDetailHref(lang, o.id)}
+                  className="flex items-center justify-between gap-3 rounded-[16px] bg-[#EFEEE5] px-4 py-[15px] text-[#2F343D] transition-colors hover:bg-[#E7E6DC] md:rounded-[18px] md:px-5 md:py-[18px]"
+                >
+                  <span className="min-w-0">
+                    <span className="block font-display text-[17px] font-semibold leading-none md:text-[20px]">
+                      {o.orderNumber}
+                    </span>
+                    <span className="mt-[5px] block text-[12.5px] text-[#5E6168] md:mt-1.5 md:text-[13.5px]">
+                      {new Date(o.date).toLocaleDateString(dateLocale, {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      }).replace(".", "")}{" "}
+                      · {o.currency === "EUR" ? formatEuro(Math.round(o.total * 100), lang) : `${o.total.toFixed(2)} ${o.currency}`}
+                    </span>
+                  </span>
+                  <span className="flex flex-none items-center gap-2.5 md:gap-3">
+                    <span
+                      className="rounded-full px-2.5 py-1.5 text-[9.5px] font-bold uppercase tracking-[0.14em] md:px-3 md:text-[10px]"
+                      style={orderStatusStyle(o.status)}
+                    >
+                      {o.status ? translateOrderStatus(o.status, lang) : "—"}
+                    </span>
+                    <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2F343D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 12h14" />
+                      <path d="M13 6l6 6-6 6" />
+                    </svg>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        {toggle && <div className="mt-3.5 md:hidden [&>button]:w-full">{toggle}</div>}
+      </Lp2Card>
+    </div>
   );
 }

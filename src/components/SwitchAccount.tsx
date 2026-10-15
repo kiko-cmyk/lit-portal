@@ -27,7 +27,7 @@ import { portalHref } from "@/lib/portal-link";
  * exactly today's behaviour, so a failure here is never a regression.
  */
 
-function useSwitchAccount(): { busy: boolean; go: () => void } {
+export function useSwitchAccount(): { busy: boolean; go: () => void } {
   const lang = useLangValue();
   const [busy, setBusy] = useState(false);
 
@@ -121,8 +121,32 @@ export function SignOutPill() {
  * yellow-on-dark treatment, which the portal reserves for primary actions, and
  * deliberately not in the Zona oscura, which is styled to make you hesitate.
  */
-export function SwitchAccountRow() {
+export function SwitchAccountRow({ variant = "row" }: { variant?: "row" | "card" } = {}) {
   const { busy, go } = useSwitchAccount();
+  // `card`: el pie de la tarjeta «Tus datos» del rediseño lp2 (2026-10-13), una
+  // píldora a todo el ancho con el icono de salir, sin la raya ni el margen de
+  // la fila; la tarjeta ya separa el pie con su propio hueco.
+  if (variant === "card") {
+    return (
+      <button
+        type="button"
+        onClick={go}
+        disabled={busy}
+        className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-full border border-[#2F343D]/18 px-3 py-[13px] text-[9.5px] font-bold uppercase tracking-[0.1em] text-[#2F343D] transition-colors hover:border-[#2F343D]/45 disabled:opacity-50 md:gap-2.5 md:px-5 md:py-3.5 md:text-[10.5px] md:tracking-[0.16em]"
+      >
+        <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />
+          <path d="M10 17l5-5-5-5" />
+          <path d="M15 12H4" />
+        </svg>
+        {busy ? (
+          <T en="Signing out…" es="Cerrando sesión…" />
+        ) : (
+          <T en="Log out or use another email" es="Cerrar sesión o entrar con otro email" />
+        )}
+      </button>
+    );
+  }
   return (
     <div className="mx-6 border-t border-[color:var(--color-lit-grey)]/8 pt-5 md:mx-0">
       <button

@@ -136,6 +136,14 @@ export interface Subscription {
     // never saw). No component ever rendered it, but it travelled to the
     // client in every /api/subscription response. Removed 2026-07-28.
   };
+  /**
+   * Un cambio de líneas que se está terminando de aplicar (14-oct-2026). Presente solo
+   * mientras `subscription_line_repairs` lo tiene pendiente: entonces las cajas, el importe
+   * y la composición de arriba son los PEDIDOS, no la suma a medias que enseña Seal, y la
+   * pantalla debe decirlo y no dejar cambiar nada hasta que termine. `stalled`: se ha quedado
+   * a medias por algo que tiene que mirar una persona (y lo de arriba es lo que hay en Seal).
+   */
+  pendingChange?: { since: string; stalled: boolean } | null;
 }
 
 export interface SubscriptionAddress {
@@ -225,11 +233,38 @@ export interface ClaimResponse {
 
 // ============ Referral ============
 
+/**
+ * GET /api/referral/code — la tarjeta «Trae a alguien» de Mi LIT.
+ *
+ * Sin enlace para compartir a propósito (decisión del 9-oct): el amigo escribe
+ * el código en el checkout. Sin ningún dato de los amigos: solo contadores.
+ */
 export interface ReferralCodeResponse {
-  code: string;
-  shareUrl: string;
-  conversions: number;
-  dropsEarned: number;
+  /** Programa abierto para este cliente (flag + no es B2B). Si es false, no se pinta nada. */
+  enabled: boolean;
+  /**
+   * `active` con `code`; `pending` mientras el cron lo da de alta en Shopify (el
+   * mismo día o el siguiente); `unavailable` si no se le puede dar (p. ej. B2B).
+   */
+  status: "active" | "pending" | "unavailable";
+  code: string | null;
+  /** Importes, para que el copy no los lleve escritos a mano. */
+  friendAmountEur: number;
+  rewardAmountEur: number;
+  /** Amigos que pagaron con su código y cualificaron. */
+  friendsJoined: number;
+  rewards: {
+    /** Esperando su cobro (se aplican 1-48 h antes). */
+    queued: number;
+    /** Ya puestos en su próximo cobro. */
+    applied: number;
+    /** Ya descontados en un cobro. */
+    consumed: number;
+    /** Fecha (ISO) del cobro que lleva aplicado un premio, si lo hay. */
+    nextDiscountedChargeAt: string | null;
+  };
+  /** Página de condiciones del programa (REFERRAL_TERMS_URL), o null si no hay. */
+  termsUrl: string | null;
 }
 
 // ============ The World ============
@@ -446,6 +481,13 @@ export interface HubDashboard {
    * Sorted by date ascending. Seal typically pre-schedules 5–6 in advance.
    */
   upcomingShipments: UpcomingShipment[];
+  /**
+   * Solo con la tarjeta de reactivar (2026-10-14): de qué baja viene. `unpaid` =
+   * Seal la canceló por impago (texto propio: el último pago no pasó y la caja se
+   * cobra mañana); `support` = la canceló atención desde el admin de Seal;
+   * `portal` = baja hecha desde el portal.
+   */
+  reactivationKind?: "portal" | "unpaid" | "support" | null;
   /**
    * True while a re-anchor intent is still pending for this customer — i.e. a
    * frequency change is in flight and Seal hasn't finished regenerating +

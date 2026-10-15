@@ -256,21 +256,89 @@ create index if not exists idx_claimed_rewards_customer on claimed_rewards(custo
 -- insert and double-fulfill (and double-deduct drops).
 create unique index if not exists uq_claimed_rewards_customer_reward on claimed_rewards(customer_id, reward_id);
 
+-- Referidos, fase 0 (2026-10-10): las columnas de estado y `referral_rewards`
+-- llegan con database/migrations/2026-10-10_referrals_fase0.sql. Se reflejan
+-- aquí para que una base nueva nazca igual que producción.
 create table if not exists referral_codes (
-  customer_id  text primary key,
-  code         text not null unique,
-  created_at   timestamptz not null default now()
+  customer_id         text primary key,
+  code                text not null unique check (code = upper(code)),
+  status              text not null default 'pending'
+                        check (status in ('pending','active','failed','disabled','retired')),
+  shopify_discount_id text,
+  bulk_creation_id    text,
+  activated_at        timestamptz,
+  disabled_at         timestamptz,
+  disabled_reason     text,
+  attempts            int  not null default 0,
+  last_error          text,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
 );
+
+create index if not exists idx_referral_codes_pending on referral_codes (updated_at) where status = 'pending';
 
 create table if not exists referral_conversions (
   id                    uuid primary key default uuid_generate_v4(),
   referrer_customer_id  text not null,
   converted_order_id    text not null unique,
   converted_at          timestamptz not null default now(),
-  drops_awarded         int  not null default 250
+  drops_awarded         int  not null default 0,
+  code                  text,
+  friend_customer_id    text,
+  friend_order_name     text,
+  purchase_type         text,
+  status                text not null default 'pending'
+                          check (status in ('pending','qualified','rejected','review','revoked','legacy')),
+  reason                text,
+  signals               jsonb,
+  attempts              int  not null default 0,
+  last_error            text,
+  qualified_at          timestamptz,
+  revoked_at            timestamptz,
+  friend_sub_checked_at timestamptz,
+  updated_at            timestamptz not null default now()
 );
 
 create index if not exists idx_referral_conversions_referrer on referral_conversions(referrer_customer_id, converted_at desc);
+create unique index if not exists uq_referral_conversions_friend_once on referral_conversions (friend_customer_id) where status = 'qualified';
+create index if not exists idx_referral_conversions_open on referral_conversions (status, converted_at) where status in ('pending','review');
+
+create table if not exists referral_rewards (
+  id                          uuid primary key default uuid_generate_v4(),
+  conversion_id               uuid not null unique references referral_conversions (id),
+  referrer_customer_id        text not null,
+  amount_cents                int  not null default 1000 check (amount_cents > 0),
+  status                      text not null default 'queued'
+                                check (status in ('queued','applying','applied','consumed','revoked','expired','failed')),
+  status_reason               text,
+  seal_subscription_id        text,
+  reward_code                 text unique check (reward_code = upper(reward_code)),
+  shopify_discount_id         text,
+  seal_discount_ids           text[] not null default '{}',
+  charge_due_at               timestamptz,
+  apply_sent_at               timestamptz,
+  applied_at                  timestamptz,
+  consumed_at                 timestamptz,
+  consumed_order_id           text unique,
+  next_check_at               timestamptz default now(),
+  revoked_at                  timestamptz,
+  expires_at                  timestamptz not null default (now() + interval '180 days'),
+  attempts                    int  not null default 0,
+  last_error                  text,
+  shopify_discount_deleted_at timestamptz,
+  created_at                  timestamptz not null default now(),
+  updated_at                  timestamptz not null default now(),
+  constraint referral_rewards_live_has_sub
+    check (status not in ('applying','applied') or seal_subscription_id is not null),
+  constraint referral_rewards_consumed_shape
+    check (status <> 'consumed' or consumed_at is not null)
+);
+
+-- Como mucho UNA recompensa viva por suscripción: apply de Seal no es idempotente.
+create unique index if not exists uq_referral_rewards_live_per_sub on referral_rewards (seal_subscription_id) where status in ('applying','applied');
+create index if not exists idx_referral_rewards_open on referral_rewards (status, created_at) where status in ('queued','applying','applied');
+create index if not exists idx_referral_rewards_referrer on referral_rewards (referrer_customer_id, created_at desc);
+create index if not exists idx_referral_rewards_next_check on referral_rewards (next_check_at) where status = 'queued';
 
 -- ============================================================
 -- 3. The World (events / moments / stories)
@@ -465,6 +533,50 @@ create table if not exists charge_now_locks (
   created_at           timestamptz not null default now()
 );
 
+-- Cada «Adelantar» que lanza el portal, para rescatarlo si la tarjeta lo rechaza
+-- después de que Seal acepte el cobro (2026-10-14). Estados y motivo en
+-- database/migrations/2026-10-14_charge_now_attempts.sql; diseño en
+-- lib/charge-now-recovery.ts.
+create table if not exists charge_now_attempts (
+  id                    bigserial primary key,
+  seal_subscription_id  text        not null,
+  customer_id           text        not null,
+  pre_charge_date       date,
+  requested_at          timestamptz not null default now(),
+  status                text        not null default 'requested'
+    check (status in ('requested','handling','retry_scheduled','date_restored','succeeded',
+                      'superseded','not_active','unhandled','sync_failed','expired')),
+  failed_attempt_id     text unique,
+  error_code            text,
+  retry_date            date,
+  handled_at            timestamptz,
+  note                  text
+);
+create index if not exists charge_now_attempts_sub_requested_idx
+  on charge_now_attempts (seal_subscription_id, requested_at desc);
+create index if not exists charge_now_attempts_open_idx
+  on charge_now_attempts (requested_at) where status = 'requested';
+
+-- Lo que pasa DESPUÉS de reactivar o reanudar desde el portal (2026-10-14): el
+-- cobro a mañana tras un impago y el aviso con la fecha buena, cuando Seal ya ha
+-- regenerado el calendario. Estados en
+-- database/migrations/2026-10-14_reactivation_followups.sql; diseño en
+-- lib/reactivation.ts.
+create table if not exists reactivation_followups (
+  seal_subscription_id  text        primary key,
+  customer_id           text        not null,
+  kind                  text        not null check (kind in ('portal','unpaid','support','resume')),
+  pull_to               date,
+  extra                 jsonb       not null default '{}'::jsonb,
+  status                text        not null default 'pending'
+    check (status in ('pending','handling','done','failed','expired')),
+  created_at            timestamptz not null default now(),
+  handled_at            timestamptz,
+  note                  text
+);
+create index if not exists reactivation_followups_pending_idx
+  on reactivation_followups (created_at) where status = 'pending';
+
 -- ============================================================
 -- 6. RLS policies
 -- ============================================================
@@ -479,6 +591,7 @@ alter table drops_balances         enable row level security;
 alter table claimed_rewards        enable row level security;
 alter table referral_codes         enable row level security;
 alter table referral_conversions   enable row level security;
+alter table referral_rewards       enable row level security;
 alter table events                 enable row level security;
 alter table event_bookmarks        enable row level security;
 alter table event_reservations     enable row level security;
@@ -491,6 +604,8 @@ alter table email_logs             enable row level security;
 alter table webhook_log            enable row level security;
 alter table auth_sessions          enable row level security;
 alter table charge_now_locks       enable row level security;
+alter table charge_now_attempts    enable row level security;
+alter table reactivation_followups enable row level security;
 -- NOTE: email_change_requests and rate_buckets are created in their own
 -- migration files (database/migrations/2026-05-22_*.sql) and enable RLS
 -- there. They are NOT created here, so don't add their ALTER statements to

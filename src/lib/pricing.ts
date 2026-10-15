@@ -1,36 +1,63 @@
 /**
  * Pricing — dynamic from Shopify, computed on the ESCALERA WEB (2026-08-22).
  *
- * La escalera ya NO se lee de las variantes por tramo (SL60..SL180 conservan sus
+ * La escalera NO se lee de las variantes por tramo (SL60..SL180 conservan sus
  * precios viejos en Shopify como solo-lectura para contratos existentes): se
- * COMPUTA desde dos precios de catálogo vivos — la variante de 1 caja (28,35) y
- * el producto PACK4 (85,05, pagas 3 y la 4ª gratis) — con la misma fórmula
- * (`ladderTotalCents`) que usa planTargetLines. Un solo origen: si el tier y las
- * líneas divergieran un céntimo, cada edición fallaría con mix_price_mismatch.
+ * COMPUTA desde dos precios de catálogo vivos, la variante de 1 caja y el producto
+ * PACK4 (pagas 3, la 4ª gratis), con la misma fórmula (`ladderTotalCents`) que usa
+ * planTargetLines. Un solo origen: si el tier y las líneas divergieran un céntimo,
+ * cada edición fallaría con mix_price_mismatch.
  *
- *   perBox        = [28.35, 56.70, 85.05, 85.05, 113.40, 141.75]
- *   compareAtPerBox = tachado coherente con la web: n × compareAt de 1 caja
- *                   (37,80) para 1-3, compareAt del pack (113,40) para 4, y
- *                   pack + (n−4) × 37,80 para 5-6.
+ * PRECIO EFECTIVO DE SUSCRIPCIÓN (6-oct-2026). El -25% se muda del precio de la
+ * variante a los 8 planes de venta, así que cada precio de la escalera es
+ * `precio de la variante × (1 − % del plan)`, con el % leído de los planes del mismo
+ * producto y en la MISMA petición GraphQL que el precio. Antes del cambio: 28,35 al
+ * 0%; después: 37,80 al 25%. Las dos dan 28,35 (y el pack, 85,05). La lógica pura,
+ * las guardas del cambio a medias y sus tests viven en pricing-core.ts.
  *
- * Cached in-memory for 5 minutes to avoid hitting Shopify Admin on every Plan
- * overlay open. Frequency does NOT affect per-shipment price — cadence is
- * independent.
+ *   perBox          = [28.35, 56.70, 85.05, 85.05, 113.40, 141.75]
+ *   compareAtPerBox = tachado coherente con la web, SIN descuento de plan: n × 37,80
+ *                     para 1-3, el compareAt del pack (151,20) para 4, y pack +
+ *                     (n−4) × 37,80 para 5-6. compareAt de la variante o, si no
+ *                     tiene, su precio crudo.
+ *
+ * Caché en memoria de 60 s por sabor (antes 5 min): el cambio de planes y precios se
+ * hace en ~1 minuto y una lectura cogida a medias no debe sobrevivir mucho más. Las
+ * lecturas a medias que se reconocen (planes que no coinciden, doble descuento, sin
+ * descuento, pack que no cuesta 3 cajas) lanzan y NO se cachean. Para ESCRIBIR
+ * precios en Seal se usa getLadderPricesForWrite, que nunca lee de la caché.
+ *
+ * Frequency does NOT affect per-shipment price — cadence is independent (los 8
+ * planes llevan el mismo %, y si no, pricing-core lanza).
  */
 
+import {
+  confirmLadderForWrite,
+  ladderDeltaCents,
+  ladderFromProducts,
+  PRICING_QUERY,
+  pricingTable,
+  type LadderSnapshot,
+  type ShopifyPricingProduct,
+} from "./pricing-core";
 import { DEFAULT_FLAVOR, FLAVORS, PACK4_PRODUCT_ID, type FlavorKey } from "./seal-plans";
-import { ladderTotalCents, MAX_BOXES, type LadderPrices } from "./mix";
+import { MAX_BOXES, type LadderPrices } from "./mix";
 import { shopifyAdmin } from "./shopify-admin";
 
+export { PricingConfigError } from "./pricing-core";
+
 export const CURRENCY = "EUR" as const;
-export const PRICING_LAST_UPDATED = "2026-08-22";
+export const PRICING_LAST_UPDATED = "2026-10-06";
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+/**
+ * 60 s. Con 5 minutos, una lectura cogida durante el cambio de planes y precios
+ * podía quedarse sirviendo (y, antes de la guarda de escritura, escribiendo) un
+ * precio equivocado hasta 5 minutos después de que el cambio hubiera terminado.
+ * El coste de bajarlo es una consulta a Admin por minuto, instancia y sabor.
+ */
+const CACHE_TTL_MS = 60 * 1000;
 
-interface LadderCache {
-  prices: LadderPrices;
-  oneBoxCompareCents: number | null;
-  pack4CompareCents: number | null;
+interface LadderCache extends LadderSnapshot {
   fetchedAt: number;
 }
 
@@ -39,98 +66,76 @@ interface LadderCache {
 // pack es común, pero cachearlo por sabor mantiene la invalidación simple.
 const _cache = new Map<FlavorKey, LadderCache>();
 
-interface VariantPrice {
-  priceCents: number;
-  compareAtCents: number | null;
-}
-
-const PRODUCT_PRICES_QUERY = `query litPricing($id: ID!) {
-  product(id: $id) {
-    variants(first: 50) {
-      edges { node { id price compareAtPrice } }
-    }
-  }
-}`;
-
-async function fetchVariantPrices(productId: string): Promise<Map<string, VariantPrice>> {
-  const data = await shopifyAdmin.graphql<{
-    product: {
-      variants: {
-        edges: Array<{ node: { id: string; price: string; compareAtPrice: string | null } }>;
-      };
-    } | null;
-  }>(PRODUCT_PRICES_QUERY, { id: `gid://shopify/Product/${productId}` });
-
-  if (!data.product) throw new Error(`Product ${productId} not found`);
-
-  const out = new Map<string, VariantPrice>();
-  for (const { node } of data.product.variants.edges) {
-    const numericId = node.id.replace(/^gid:\/\/shopify\/ProductVariant\//, "");
-    out.set(numericId, {
-      priceCents: Math.round(parseFloat(node.price) * 100),
-      compareAtCents: node.compareAtPrice ? Math.round(parseFloat(node.compareAtPrice) * 100) : null,
-    });
-  }
-  return out;
-}
-
-/** Los dos precios vivos de los que se deriva toda la escalera, en céntimos. */
+/** La escalera viva de un sabor, leída de Shopify ahora mismo (sin caché). */
 async function fetchLadder(flavor: FlavorKey): Promise<LadderCache> {
   const def = FLAVORS[flavor];
-  const [flavorPrices, packPrices] = await Promise.all([
-    fetchVariantPrices(def.productId),
-    fetchVariantPrices(PACK4_PRODUCT_ID),
-  ]);
+  const data = await shopifyAdmin.graphql<{
+    flavor: ShopifyPricingProduct | null;
+    pack: ShopifyPricingProduct | null;
+  }>(PRICING_QUERY, {
+    flavorId: `gid://shopify/Product/${def.productId}`,
+    packId: `gid://shopify/Product/${PACK4_PRODUCT_ID}`,
+  });
 
-  const oneBox = flavorPrices.get(def.variantByBoxCount[1]);
-  if (!oneBox) {
-    throw new Error(`1-box variant not found: ${def.variantByBoxCount[1]} (${flavor})`);
-  }
-
-  // Las 5 variantes de mezcla del pack deben costar lo mismo; si alguien las
-  // desalinea en Shopify, cobramos la MÁS BARATA (el redondeo solo puede
-  // favorecer al cliente) y dejamos rastro.
-  const packValues = [...packPrices.values()];
-  if (!packValues.length) throw new Error(`PACK4 product ${PACK4_PRODUCT_ID} has no variants`);
-  const pack4Cents = Math.min(...packValues.map((v) => v.priceCents));
-  if (packValues.some((v) => v.priceCents !== pack4Cents)) {
-    console.warn(
-      `[pricing] PACK4 variants have diverging prices (${packValues.map((v) => v.priceCents).join(", ")}c) — using ${pack4Cents}c`,
-    );
-  }
-  const pack4CompareCents = packValues
-    .map((v) => v.compareAtCents)
-    .filter((v): v is number => v !== null)
-    .reduce<number | null>((m, v) => (m === null ? v : Math.max(m, v)), null);
-
-  return {
-    prices: { oneBoxCents: oneBox.priceCents, pack4Cents },
-    oneBoxCompareCents: oneBox.compareAtCents,
-    pack4CompareCents,
-    fetchedAt: Date.now(),
-  };
+  const snapshot = ladderFromProducts({
+    label: flavor,
+    oneBoxVariantId: def.variantByBoxCount[1],
+    flavorProduct: data.flavor,
+    packProduct: data.pack,
+    warn: (msg) => console.warn(msg),
+  });
+  return { ...snapshot, fetchedAt: Date.now() };
 }
 
 async function getLadder(flavor: FlavorKey): Promise<LadderCache> {
   const cached = _cache.get(flavor);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached;
   const fresh = await fetchLadder(flavor);
+  if (cached && ladderDeltaCents(cached.prices, fresh.prices) > 1) {
+    console.warn(
+      `[pricing] ${flavor}: la escalera de suscripción cambió ${cached.prices.oneBoxCents}/` +
+        `${cached.prices.pack4Cents}c → ${fresh.prices.oneBoxCents}/${fresh.prices.pack4Cents}c ` +
+        `(variantes ${fresh.rawOneBoxCents}/${fresh.rawPack4Cents}c al ${fresh.planPercentage}%)`,
+    );
+  }
   _cache.set(flavor, fresh);
   return fresh;
 }
 
 /**
- * Los precios de catálogo (céntimos enteros) que planTargetLines necesita para
- * generar líneas. MISMO origen que getPricing/priceForBoxCount.
+ * Los precios de suscripción (céntimos enteros) para COMPARAR o ENSEÑAR: caché de
+ * 60 s. MISMO origen que getPricing/priceForBoxCount. Para escribir precios en Seal,
+ * getLadderPricesForWrite.
  */
 export async function getLadderPrices(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<LadderPrices> {
   return (await getLadder(flavor)).prices;
 }
 
 /**
- * Get pricing for all box counts of a flavor. Uses in-memory cache (5 min TTL).
- * `perBox[n-1]` es SIEMPRE la escalera web computada, nunca el precio crudo de
- * una variante por tramo.
+ * Los precios de suscripción para ESCRIBIR en Seal (plan route, cura del cron de
+ * renovación). Lee siempre en fresco y, si la escalera se ha movido respecto a la
+ * que esta instancia tenía en caché, relee una vez antes de fiarse (ver
+ * confirmLadderForWrite). Lanza PricingConfigError si Shopify está a medio cambiar.
+ */
+export async function getLadderPricesForWrite(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<LadderPrices> {
+  const { ladder, refetched } = await confirmLadderForWrite(
+    _cache.get(flavor) ?? null,
+    () => fetchLadder(flavor),
+    (msg) => console.warn(`${msg} (${flavor})`),
+  );
+  if (refetched) {
+    console.warn(
+      `[pricing] ${flavor}: escalera confirmada tras releer: ${ladder.prices.oneBoxCents}/${ladder.prices.pack4Cents}c`,
+    );
+  }
+  _cache.set(flavor, ladder);
+  return ladder.prices;
+}
+
+/**
+ * Get pricing for all box counts of a flavor. Uses in-memory cache (60 s TTL).
+ * `perBox[n-1]` es SIEMPRE la escalera web de suscripción computada, nunca el
+ * precio crudo de una variante.
  */
 export async function getPricing(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<{
   perBox: number[];
@@ -138,20 +143,7 @@ export async function getPricing(flavor: FlavorKey = DEFAULT_FLAVOR): Promise<{
   isPlaceholder: boolean;
   lastUpdated: string;
 }> {
-  const { prices, oneBoxCompareCents, pack4CompareCents } = await getLadder(flavor);
-
-  const perBox: number[] = [];
-  const compareAtPerBox: (number | null)[] = [];
-  for (let boxes = 1; boxes <= MAX_BOXES; boxes++) {
-    perBox.push(ladderTotalCents(boxes, prices) / 100);
-    let compareCents: number | null = null;
-    if (boxes < 4) {
-      compareCents = oneBoxCompareCents !== null ? boxes * oneBoxCompareCents : null;
-    } else if (pack4CompareCents !== null && oneBoxCompareCents !== null) {
-      compareCents = pack4CompareCents + (boxes - 4) * oneBoxCompareCents;
-    }
-    compareAtPerBox.push(compareCents !== null ? compareCents / 100 : null);
-  }
+  const { perBox, compareAtPerBox } = pricingTable(await getLadder(flavor));
   return { perBox, compareAtPerBox, isPlaceholder: false, lastUpdated: PRICING_LAST_UPDATED };
 }
 
@@ -170,7 +162,9 @@ export async function priceForBoxCount(
 }
 
 /**
- * Manually invalidate the cache (e.g., after admin updates Shopify variants).
+ * Vacía la caché de ESTA instancia. Solo sirve dentro del mismo proceso (scripts,
+ * tests): en Vercel cada instancia tiene la suya, así que tras un cambio de precios
+ * lo que manda es el TTL de 60 s y, para escribir, getLadderPricesForWrite.
  */
 export function invalidatePricingCache(): void {
   _cache.clear();

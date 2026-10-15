@@ -32,7 +32,7 @@ import {
   type FlavorComposition,
 } from "../src/lib/mix";
 import { getChargeTotalCents, getLines, getNextBillingAttempt, seal } from "../src/lib/seal";
-import { getLadderPrices } from "../src/lib/pricing";
+import { getLadderPricesForWrite } from "../src/lib/pricing";
 import { shopifyAdmin } from "../src/lib/shopify-admin";
 import { supabaseAdmin } from "../src/lib/supabase";
 
@@ -129,7 +129,8 @@ async function main() {
     // escalera vieja la REPRECIA — es un script del incidente de mixes de 2026-07
     // y quedó obsoleto; no reusar sin pensarlo dos veces.
     const target: FlavorComposition[] = [{ flavor: dominant, boxes }];
-    const prices = await getLadderPrices(dominant);
+    // Para escribir: lectura fresca y con las guardas del cambio a medias (6-oct-2026).
+    const prices = await getLadderPricesForWrite(dominant);
     const plan = planTargetLines(target, prices);
     const diff = diffLines(lines, plan.lines);
 

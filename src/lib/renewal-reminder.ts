@@ -64,9 +64,11 @@ import {
   repriceInPlace,
   shapeFor,
   shortLabel,
+  type SubscriptionLine,
 } from "./mix";
-import { BOX_COUNT_BY_VARIANT } from "./seal-plans";
-import { getLadderPrices } from "./pricing";
+import { BOX_COUNT_BY_VARIANT, PACK4_BY_VARIANT } from "./seal-plans";
+import { getLadderPrices, getLadderPricesForWrite, PricingConfigError } from "./pricing";
+import { ladderDeltaCents } from "./pricing-core";
 import {
   extractFlavorSummary,
   getBoxCount,
@@ -215,6 +217,57 @@ async function writeHealReceipt(after: SealSubscription, beforeCents: number, la
   }
 }
 
+/**
+ * ¿Tiene esta sub ACTIVA líneas que no cuadran? Devuelve el motivo o null (14-oct-2026). Puro,
+ * para el censo diario de `runBucket` y sus tests. Las firmas son las de los incidentes: más
+ * cajas de las que vende la escalera repartidas en varias líneas (Pack de 4 + 3 sueltas), la
+ * misma variante en dos líneas, dos Packs, o el modelo viejo mezclado con el nuevo. Una sola
+ * línea nunca cuenta: los contratos viejos de 9 o 12 cajas son así de verdad.
+ */
+export function lineAnomaly(s: SealSubscription): string | null {
+  if (mapStatus(s) !== "active") return null;
+  const lines = getLines(s);
+  if (lines.length < 2) return null;
+  const variants = lines.map((l) => String(l.variantId));
+  const dup = variants.find((v, i) => variants.indexOf(v) !== i);
+  if (dup) return `la variante ${dup} está en dos líneas`;
+  const isPack = (v: string) => !!PACK4_BY_VARIANT[v];
+  const boxesPerUnit = (v: string) => Number(BOX_COUNT_BY_VARIANT[v] ?? 1);
+  if (variants.filter(isPack).length > 1) return "más de un Pack";
+  const legacy = variants.some((v) => !isPack(v) && boxesPerUnit(v) > 1);
+  const modern = variants.some((v) => isPack(v) || boxesPerUnit(v) === 1);
+  if (legacy && modern) return "mezcla líneas del modelo viejo con las del nuevo";
+  const boxes = lines.reduce((sum, l) => sum + l.boxes, 0);
+  if (boxes > MAX_BOXES) return `${boxes} cajas en ${lines.length} líneas`;
+  return null;
+}
+
+/**
+ * ¿Tiene esta sub la pinta de un cambio de líneas que se quedó a medias? Devuelve el motivo
+ * o null (14-oct-2026). Ver "UN CAMBIO A MEDIAS NO SE CURA" en `assertMixPrice`.
+ */
+async function halfWrittenReason(s: SealSubscription, lines: SubscriptionLine[]): Promise<string | null> {
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from("subscription_line_repairs")
+      .select("status")
+      .eq("seal_subscription_id", String(s.id))
+      .in("status", ["pending", "failed"])
+      .limit(1);
+    if (!error && data?.length) return `tiene una reparación de líneas en estado ${data[0].status}`;
+  } catch {
+    // sin la tabla, se decide solo por las líneas
+  }
+  const isPack = (v: string) => !!PACK4_BY_VARIANT[v];
+  const boxesPerUnit = (v: string) => Number(BOX_COUNT_BY_VARIANT[v] ?? 1);
+  const legacy = lines.some((l) => !isPack(String(l.variantId)) && boxesPerUnit(String(l.variantId)) > 1);
+  const modern = lines.some((l) => isPack(String(l.variantId)) || boxesPerUnit(String(l.variantId)) === 1);
+  if (legacy && modern) {
+    return "mezcla líneas del modelo viejo con las del nuevo, la firma de un cambio que se quedó a medias";
+  }
+  return null;
+}
+
 async function assertMixPrice(
   s: SealSubscription,
   cfg: RenewalReminderConfig,
@@ -242,6 +295,20 @@ async function assertMixPrice(
         `[${cfg.label}] sub ${s.id}: ${realBoxes} cajas reales frente a ${boxCount} leídas ` +
           `(clamp de getBoxCount) — fuera de lo que la escalera sabe tarificar, no se compara`,
       );
+      // Más de 6 cajas es la firma de un add sin su remove (14-oct-2026: Pack de 4 + 3
+      // sueltas = 7). Hasta hoy solo quedaba en el log; ahora lo ve una persona antes del
+      // cobro. Las subs viejas de 9 o 12 cajas de verdad (SL90×3, SL90×4) también salen:
+      // es un aviso, no se toca nada.
+      if (realBoxes > MAX_BOXES) {
+        await alertSlackErrorAwaited({
+          path: cfg.path,
+          code: `renewal_too_many_boxes:${s.id}`,
+          msg:
+            `sub ${s.id}: ${realBoxes} cajas en ${lines.length} líneas (${lines.map((l) => `${l.variantId}×${l.quantity}`).join(", ")}), ` +
+            `más de las ${MAX_BOXES} que vende la escalera. Si no es un contrato viejo de verdad, son líneas de un ` +
+            `cambio a medias: revisar antes del cobro del ${chargeDate.slice(0, 10)}.`,
+        });
+      }
       return "no-comparable";
     }
     // Una variante fuera del registro cuenta como 1 caja del sabor por defecto (las
@@ -345,6 +412,25 @@ async function assertMixPrice(
     // (scripts/audit-ladder-drift.ts) es la herramienta para mirar esa población.
     if (actual < expected) return "por-debajo";
 
+    // ── UN CAMBIO A MEDIAS NO SE CURA (14-oct-2026) ──
+    //
+    // La cura baja precios EN SITIO. Sobre una sub con líneas de más (un add sin su remove)
+    // eso consolida el error: la 12433842 tiene la SL90 vieja y la SL30 que pidió, 4 cajas a
+    // 96,28; curada quedaría en 4 cajas a 85,05, cuando lo que pidió era 1 caja a 28,35. Así
+    // que si hay una reparación de líneas abierta o fallida, o el line-set mezcla el modelo
+    // viejo (SL60/SL90…) con el nuevo (sueltas de 30 o Pack), no se toca: a una persona.
+    const halfWritten = await halfWrittenReason(s, lines);
+    if (halfWritten) {
+      await alertSlackErrorAwaited({
+        path: cfg.path,
+        code: `renewal_half_written:${s.id}`,
+        msg:
+          `sub ${s.id}: cobra ${actual}c y su tramo es ${expected}c, pero ${halfWritten}. No se cura en sitio ` +
+          `(dejaría cobrando y enviando las cajas de más). Arreglar a mano antes del cobro del ${chargeDate.slice(0, 10)}.`,
+      });
+      return "sobre-cobro";
+    }
+
     // actual > expected: sobre-cobro respecto a la escalera web. Distinguir si el
     // line-set vivo ya es del modelo nuevo (mismas variantes que el target: pack
     // PACK4-* y/o cajas sueltas) — solo entonces curamos; un line-set del modelo
@@ -422,6 +508,36 @@ async function assertMixPrice(
       }));
     }
 
+    // ── LA ESCALERA SE CONFIRMA ANTES DE ESCRIBIR (6-oct-2026) ──
+    //
+    // `prices` sale de la caché de 60 s, que basta para COMPARAR pero no para escribir.
+    // Desde que el -25% vive en los planes, una lectura cogida a mitad del cambio de
+    // planes y precios (planes al 25% con la caja todavía a 28,35 → 21,26) haría que
+    // TODAS las subs a catálogo parecieran sobre-cobradas, y esta cura se las bajaría
+    // una a una. Las firmas de pricing-core paran ese caso al leer; esto es la segunda
+    // red: se relee en fresco y, si la escalera no es exactamente la misma con la que
+    // se ha decidido curar, no se cura. El cron de mañana lo vuelve a mirar.
+    if (editsToApply.length) {
+      const confirmed = await getLadderPricesForWrite(composition[0].flavor);
+      if (ladderDeltaCents(confirmed, prices) !== 0) {
+        console.warn(
+          `[${cfg.label}] sub ${s.id}: la escalera cambió entre la comparación ` +
+            `(${prices.oneBoxCents}/${prices.pack4Cents}c) y la cura ` +
+            `(${confirmed.oneBoxCents}/${confirmed.pack4Cents}c) — no se cura`,
+        );
+        await alertSlackErrorAwaited({
+          path: cfg.path,
+          code: "pricing_changed_before_heal",
+          msg:
+            `sub ${s.id}: parecía cobrar ${actual}c contra ${expected}c, pero los precios de ` +
+            `suscripción cambiaron entre la lectura y la cura (${prices.oneBoxCents}/${prices.pack4Cents}c → ` +
+            `${confirmed.oneBoxCents}/${confirmed.pack4Cents}c). No se ha tocado. Revisar si el ` +
+            `cobro del ${chargeDate.slice(0, 10)} es correcto.`,
+        });
+        return "no-comparable";
+      }
+    }
+
     console.error(`[${cfg.label}] mix price drift`, {
       sealId: s.id, actual, expected, boxCount, charge: chargeDate, healStrategy,
     });
@@ -475,6 +591,18 @@ async function assertMixPrice(
     });
     return "sobre-cobro";
   } catch (e) {
+    // Shopify no deja saber el precio de suscripción con certeza (planes que no
+    // coinciden, cambio a medias…): ni se compara ni se cura, y se avisa. El aviso se
+    // deduplica por código, así que una configuración rota da un mensaje, no uno por sub.
+    if (e instanceof PricingConfigError) {
+      await alertSlackErrorAwaited({
+        path: cfg.path,
+        code: `pricing_config:${e.code}`,
+        msg:
+          `sub ${s.id}: no se puede comparar el cobro con la escalera (${e.message}). ` +
+          `No se ha curado nada en esta pasada.`,
+      });
+    }
     // Never let the price check stop the reminder from going out.
     console.warn(`[${cfg.label}] price check failed for sub ${s.id}:`, e);
     return "no-comparable";
@@ -531,6 +659,31 @@ async function runBucket(
   //    lands in this bucket's window. (A failed page propagates → we fail loud
   //    rather than remind a truncated slice of the book.)
   const subs = await seal.listAllSubscriptions();
+
+  // ── CENSO DE LÍNEAS QUE NO CUADRAN (14-oct-2026) ──
+  //
+  // Nada miraba de forma periódica si alguna sub tenía líneas de más: solo el cron de
+  // reparación, y solo sobre las filas que se llegaron a armar. Así se quedaron la 12433842
+  // y la 13124288 desde julio (una SL90 vieja junto a la SL30 que pidieron, 96,28 en vez de
+  // 28,35). Esta tirada ya lee la cartera entera, así que el censo no cuesta llamadas: un
+  // aviso al día con la lista, hasta que se arreglen. Solo en la de 48 h.
+  if (cfg.checkMixPrice && !dryRun) {
+    const anomalies = subs
+      .map((s) => ({ s, why: lineAnomaly(s) }))
+      .filter((a): a is { s: SealSubscription; why: string } => a.why !== null);
+    if (anomalies.length) {
+      await alertSlackErrorAwaited({
+        path: cfg.path,
+        code: "line_anomalies",
+        msg:
+          `Censo diario: ${anomalies.length} sub(s) con líneas que no cuadran (posible cobro de más). ` +
+          anomalies
+            .slice(0, 20)
+            .map(({ s, why }) => `${s.id} (#${s.internal_id}): ${why}, cobra ${getChargeTotalCents(s)}c`)
+            .join(" · "),
+      });
+    }
+  }
 
   // Los importes preservados de toda la cartera, en UNA consulta: el bucle recorre
   // cientos de subs y no vamos a pedir una fila por cada una. Si la consulta falla, el
