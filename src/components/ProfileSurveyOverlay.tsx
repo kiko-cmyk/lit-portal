@@ -616,7 +616,11 @@ function DoneStep({
       setFailed(
         code === "gateway_timeout" || status === 504 || code === "change_unconfirmed" || code === "change_applying"
           ? "unknown"
-          : code === "seal_busy" || code === "plan_change_in_progress" || code === "change_in_progress"
+          : code === "seal_busy" ||
+              code === "plan_change_in_progress" ||
+              code === "change_in_progress" ||
+              code === "no_pending_attempt" ||
+              code === "repair_net_unavailable"
             ? "busy"
             : "failed",
       );

@@ -231,7 +231,10 @@ export function SkipOverlay({
         }),
       });
       onAdjusted(updated);
-      setAdjustedDate(updated.nextShipDate ?? offerNewShip?.toISOString() ?? null);
+      // Solo la fecha que el servidor deja sujeta (16-oct-2026). Si no viene, es que no pudo
+      // guardar la intención que la sostiene: prometer aquí la vista previa sería prometer algo
+      // que nadie va a cumplir. Sin fecha, la pantalla dice «Tu plan está actualizado».
+      setAdjustedDate(updated.nextShipDate ?? null);
       setStep("done-adjust");
       // Funnel "saved" event — fire and forget.
       api("/api/subscription/skip/track", {
@@ -267,6 +270,21 @@ export function SkipOverlay({
               ? t({
                   en: "We're finishing another update to your subscription. Wait a moment and try again.",
                   es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+                })
+            : code === "subscription_changed"
+              ? t({
+                  en: "Your subscription changed since this page loaded. Reload and try again.",
+                  es: "Tu suscripción ha cambiado desde que abriste esta página. Recárgala y vuelve a intentarlo.",
+                })
+            : code === "no_pending_attempt"
+              ? t({
+                  en: "We're still rescheduling your next deliveries. Try again in a couple of minutes; nothing has been changed.",
+                  es: "Estamos terminando de reorganizar tus próximos envíos. Inténtalo en un par de minutos; no hemos cambiado nada.",
+                })
+            : code === "repair_net_unavailable"
+              ? t({
+                  en: "We couldn't check your subscription just now, so we haven't changed anything. Try again in a moment.",
+                  es: "Ahora mismo no hemos podido comprobar tu suscripción, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
                 })
             : code === "seal_busy"
               ? t({

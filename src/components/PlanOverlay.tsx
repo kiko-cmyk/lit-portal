@@ -208,6 +208,15 @@ export function PlanOverlay({
             es: "No pudimos aplicar tu plan. Escríbenos y lo hacemos por ti.",
           }),
         );
+      } else if (err.code === "repair_net_unavailable") {
+        // Rechazado ANTES de tocar nada (16-oct-2026): no se pudo leer la red de escrituras a
+        // medias y, desde hoy, eso también frena los cambios de frecuencia.
+        setError(
+          t({
+            en: "We couldn't check your subscription just now, so we haven't changed anything. Try again in a moment.",
+            es: "Ahora mismo no hemos podido comprobar tu suscripción, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
+          }),
+        );
       } else if (err.code === "seal_busy") {
         // Rechazado ANTES de tocar nada (14-oct-2026): Seal seguía procesando un cambio
         // reciente de esta sub, y escribir encima es como se pierden los cambios.
