@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { after } from "next/server";
+import { randomUUID } from "node:crypto";
 import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { mixEnabledForCustomer } from "@/lib/flags";
@@ -8,8 +8,8 @@ import { processRepairIntent, waitUntilSeal, type RepairIntentRow } from "@/lib/
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { extendRequestDeadline, requestDeadlineLeft, runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { acquirePlanLock } from "@/lib/plan-lock";
-import { alertSlackError, alertSlackErrorAwaited } from "@/lib/alert";
-import { naturalNextShipDate, SEAL_INTERVAL_BY_FREQUENCY, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
+import { alertSlackError, alertSlackErrorAwaited, alertSlackNoticeAwaited } from "@/lib/alert";
+import { SEAL_INTERVAL_BY_FREQUENCY, spacedNextShipDate, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { ensureDiscoveryCreditAttached, pendingDiscoveryCreditForSub } from "@/lib/discovery-renewal-credit";
 import {
@@ -193,21 +193,30 @@ const patchPlan = async (
      *   - "preserve" (default): keep the current next-ship date (don't move the
      *     imminent order or undo a prior skip). This is the normal plan-change
      *     behaviour for the Change Plan overlay.
-     *   - "natural": let the next order land on Seal's natural regenerated date
-     *     (last completed charge + new interval). Used by the skip retention
-     *     flow when a customer chooses to space out their cadence instead of
-     *     skipping — the imminent order moves later as the customer expects.
+     *   - "fromNext": the customer is SPACING their cadence instead of skipping
+     *     (SkipOverlay «Ajustar mi plan», CancelTakeover, profile-survey offer).
+     *     The next order moves to current next − one current cycle + one new
+     *     cycle (`spacedNextShipDate`), which is exactly the date those screens
+     *     show. Never earlier than the date the customer already has.
+     *   - "natural": LEGACY alias of "fromNext", kept for JS bundles cached
+     *     before 2026-10-02. It used to mean "last completed charge + new
+     *     interval", which for anyone who had skipped landed in the past and
+     *     didn't match the screen. See `spacedNextShipDate`.
      */
-    reanchorMode?: "preserve" | "natural";
+    reanchorMode?: "preserve" | "fromNext" | "natural";
     /** Simulación: compute + return the projected result without mutating Seal. */
     dryRun?: boolean;
   };
   log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
 
   const dryRun = isDryRunRequest(req, body, ctx.customerId);
-  const reanchorMode: "preserve" | "natural" = body.reanchorMode === "natural" ? "natural" : "preserve";
-  // Pre-mutation subscription, captured during resolution below. Needed to read
-  // the last completed charge date when computing the natural re-anchor target.
+  // "natural" is the pre-2026-10-02 name for the same intent (space instead of
+  // skip); a bundle cached in a customer's browser can still send it, and it must
+  // get the date its own screen showed, which was always the fromNext one.
+  const reanchorMode: "preserve" | "fromNext" =
+    body.reanchorMode === "fromNext" || body.reanchorMode === "natural" ? "fromNext" : "preserve";
+  // Pre-mutation subscription, captured during resolution below. Needed for the
+  // paused guard, the stale-screen check and the current line-set.
   let preMutationSub: SealSubscription | null = null;
 
   if (
@@ -324,10 +333,10 @@ const patchPlan = async (
     mainItemVariantId = main.variant_id;
     currentFrequency = normalizeFrequency(matched.delivery_interval);
 
-    const nextAttempt = (matched.billing_attempts ?? []).find(
-      (ba) => !ba.completed_at && !ba.status && !ba.skipped_on,
-    );
-    nextAttemptDate = nextAttempt?.date ?? null;
+    // EARLIEST pending by date, not array order: Seal doesn't guarantee order, and
+    // since 2026-10-02 the spaced date we SAVE is built from this value. (Was an
+    // unsorted `.find()`; review of PR #122.)
+    nextAttemptDate = getNextBillingAttempt(matched)?.date ?? null;
   }
   log("sub-resolved", { sealSubscriptionId, mainItemNumericId, currentFrequency });
 
@@ -365,7 +374,7 @@ const patchPlan = async (
     // La frecuencia ACTUAL sale de Seal, no del body (14-oct-2026). Con una pestaña vieja
     // o una respuesta sintética el front puede mandar una que ya no es, y de ella salen
     // `planChanged` (y con él un cambio de intervalo que Seal regenera aunque sea el mismo),
-    // la fecha natural y el `from` del ledger.
+    // la fecha espaciada y el `from` del ledger.
     if (subForCheck?.delivery_interval) {
       currentFrequency = normalizeFrequency(subForCheck.delivery_interval);
     }
@@ -467,6 +476,59 @@ const patchPlan = async (
   // TODAS las salidas (incluidos los throw de las guardas y de las mutaciones) sin
   // tener que envolver el resto del handler en otro nivel de indentación.
   async function applyPlanChange(): Promise<Subscription> {
+  /**
+   * Writes the re-anchor intent and SAYS SO when it can't. `writeReanchorIntent`
+   * throws since 2026-10-05 (it used to swallow supabase-js's `{ error }`, so a
+   * failed write passed as written and this route logged "recorded" and promised
+   * the date anyway). The frequency change itself is already in Seal by the time
+   * we get here, so we don't fail the request: we tell #incidents, because with
+   * no intent nothing holds the schedule to the date the customer was shown.
+   */
+  // La fecha que dejó guardada el armado tras el intervalo (fase 1, #148) y si ya avisó
+  // de que no pudo. Si la escritura final falla pero la fase 1 entró, la intención EXISTE:
+  // no hay que avisar de «nada sujeta la fecha» ni perder la fecha prometida. Y si la fase 1
+  // ya avisó, la final no repite el aviso en otro canal.
+  let intentArmedDate: string | null = null;
+  let intentUnarmedAlerted = false;
+  async function recordReanchorIntent(preserveYYYYMMDD: string, phase: "verified" | "unverified"): Promise<string | null> {
+    try {
+      // Fuera del deadline si ya no queda presupuesto (#123, 2-oct): es la red del
+      // calendario, y con el presupuesto gastado la escritura nacería cortada a 0 ms.
+      // Devuelve la fecha que de verdad queda guardada: `writeReanchorIntent` nunca rebaja
+      // una intención pendiente (#148), así que puede ser posterior a la pedida.
+      const { preserveDate } = await afterBudget(
+        () => writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD),
+        SUPABASE_WRITE_RESERVE_MS,
+      );
+      return preserveDate;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("reanchor-intent-write-failed", { msg, phase, preserveYYYYMMDD, reanchorMode, armedBefore: intentArmedDate });
+      if (intentArmedDate) return intentArmedDate;
+      if (intentUnarmedAlerted) return null;
+      after(() =>
+        runWithoutRequestDeadline(() =>
+          alertSlackNoticeAwaited({
+            title: "Cambio de plan sin intención de re-anclaje",
+            icon: ":warning:",
+            channel: "incidents",
+            fields: {
+              suscripcion: String(sealSubscriptionId),
+              cliente: ctx.customerId,
+              "fecha a sujetar": preserveYYYYMMDD,
+              modo: reanchorMode,
+              fase: phase,
+              error: msg.slice(0, 200),
+              "que revisar":
+                "La frecuencia ya cambio en Seal, pero nada sujeta la proxima entrega a esa fecha. Comprobar el primer pendiente y reprogramarlo a mano si cae antes.",
+            },
+          }),
+        ),
+      );
+      return null;
+    }
+  }
+
 
   // Date we must keep as the next ship date after Seal regenerates its
   // billing_attempts. Prefer Seal's authoritative attempt date (read above /
@@ -934,22 +996,59 @@ const patchPlan = async (
   const planChanged = body.frequency !== undefined && body.frequency !== currentFrequency;
   const itemsChanged = !diff.noop;
 
-  // Skip retention "espaciar": with reanchorMode="natural" the next order should
-  // land on Seal's natural regenerated date (last completed charge + new
-  // interval) instead of being pinned to the current next-ship date. We compute
-  // that date and feed it as the preserve target, so the SAME re-anchor
-  // machinery (intent → dashboard drain → reanchorCadence) drives the schedule
-  // onto it and the Hub's silent re-poll works unchanged. reanchorCadence only
-  // ever shifts FORWARD by a uniform offset, so even if our calendar math is a
-  // day off Seal's, the result is bounded to that small delta — never a full
-  // extra cycle. (2026-06-19)
-  const naturalYYYYMMDD =
-    reanchorMode === "natural" && planChanged
-      ? naturalNextShipDate(preMutationSub, nextAttemptDate, currentFrequency, targetFrequency)
+  // Skip retention "espaciar": with reanchorMode="fromNext" the next order moves
+  // to current next − one current cycle + one new cycle, the date the screen
+  // showed. We feed it as the preserve target, so the SAME re-anchor machinery
+  // (intent → Seal webhook → reanchorCadence, with the dashboard re-poll and the
+  // cron drain as backstops) drives the schedule onto it. (2026-06-19, fromNext
+  // since 2026-10-02.)
+  //
+  // Until 2026-10-02 this was the "natural" date, counted from the last
+  // COMPLETED charge. For anyone who had skipped, that landed in the PAST: sub
+  // 12320700, 2mo → 3mo with next 4-oct, screen said 4-nov and the intent said
+  // 27-ago. A past date is always "within cutoff", so the webhook and the drain
+  // dropped the intent and the safety net did nothing. Nobody was charged early
+  // only because Seal happened to regenerate onto a sane date by itself.
+  //
+  // `spacedNextShipDate` returns null unless the date really moves the order
+  // later, so the fallback below keeps the date the customer already has: the
+  // next charge never goes backwards.
+  //
+  // The cycle we subtract is the LIVE one from Seal. A stale tab is one cycle off:
+  // the bot moves a customer 2mo → 3mo (next 4-Nov) while their tab still says 2mo;
+  // they ask for 4mo; 4-Nov − 2mo + 4mo = 4-Jan, a full cycle late, instead of the
+  // 4-Dec a fresh screen shows. (Review of PR #122.) Since #148 `currentFrequency`
+  // itself is read from Seal on both paths, so `liveFrequency` and `currentFrequency`
+  // agree; what still signals a stale tab is the FE's `body.currentFrequency`.
+  //
+  // No pending attempt (Seal still regenerating after another change) means no
+  // date to space from. Silently falling back to "preserve" would save the OLD
+  // date while the screen promised a later one, so refuse like the bot route does
+  // (`no_pending_attempt`); the customer retries in a minute.
+  const liveFrequency = preMutationSub
+    ? normalizeFrequency(preMutationSub.delivery_interval)
+    : currentFrequency;
+  if (reanchorMode === "fromNext" && planChanged) {
+    // Desde el #148 `currentFrequency` ya sale de Seal en las dos rutas, así que la señal de
+    // pestaña vieja es lo que mandó el FRONT (body.currentFrequency) frente a la viva.
+    if (body.currentFrequency && body.currentFrequency !== liveFrequency) {
+      log("stale-current-frequency", { fromBody: body.currentFrequency, live: liveFrequency });
+    }
+    if (!nextAttemptDate) {
+      throw new ApiHttpError(
+        409,
+        "no_pending_attempt",
+        "The next delivery is still being rescheduled; try again in a minute",
+      );
+    }
+  }
+  const spacedYYYYMMDD =
+    reanchorMode === "fromNext" && planChanged
+      ? spacedNextShipDate(nextAttemptDate, liveFrequency, targetFrequency)
       : null;
-  // Target the optimistic date + re-anchor intent at: natural date (skip
+  // Target the optimistic date + re-anchor intent at: the spaced date (skip
   // retention) when available, else the preserved current date (normal change).
-  const effectivePreserveYYYYMMDD = naturalYYYYMMDD ?? preserveYYYYMMDD;
+  const effectivePreserveYYYYMMDD = spacedYYYYMMDD ?? preserveYYYYMMDD;
 
   log("change-detected", {
     planChanged,
@@ -965,7 +1064,7 @@ const patchPlan = async (
     residual: targetPlan.residualCents,
     diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
     reanchorMode,
-    naturalYYYYMMDD,
+    spacedYYYYMMDD,
   });
   if (!itemsChanged && !planChanged) {
     log("no-op");
@@ -1215,11 +1314,13 @@ const patchPlan = async (
           writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD),
         );
         log("reanchor-intent-armed-after-interval", { preserveDate, reanchorMode, attempt });
+        intentArmedDate = preserveDate;
         return;
       } catch (e) {
         log("reanchor-intent-write-failed", { msg: String(e), attempt });
       }
     }
+    intentUnarmedAlerted = true;
     await alertSlackErrorAwaited({
       path: "/api/subscription/plan",
       code: `reanchor_intent_unarmed:${sealSubscriptionId}`,
@@ -1282,7 +1383,7 @@ const patchPlan = async (
       // Aceptado (o desconocido) pero Seal no lo enseña: puede entrar tarde o haberse
       // perdido. Las líneas NO se tocan. En modo "preserve" la fecha se protege igual (si el
       // intervalo no entra, el primer cobro sigue en esa fecha y la intención se cierra
-      // sola); en "natural" no, porque esa fecha es posterior y movería el envío.
+      // sola); en "fromNext" no, porque esa fecha es posterior y movería el envío.
       log("interval-not-visible", { expectedInterval, accepted: intervalAccepted });
       if (reanchorMode === "preserve") await armReanchorAfterIntervalChange();
       ledger.outcomeUnknown = true;
@@ -1304,7 +1405,7 @@ const patchPlan = async (
     // Ni antes ni más tarde: escrita ANTES del cambio, el cron de re-anclaje (cada 5 min,
     // sin edad mínima) podía leer el calendario viejo, darlo por bueno y borrarla. Ahora los
     // pendientes ya no existen, y el cron y el webhook esperan a la regeneración. Tampoco
-    // se arma si el intervalo falló: en modo `natural` la fecha es POSTERIOR a la actual y
+    // se arma si el intervalo falló: en modo `fromNext` la fecha es POSTERIOR a la actual y
     // movería el envío de un cambio que no entró. Las escrituras del final se quedan: son
     // el mismo upsert y cubren que esta no llegue.
     //
@@ -2213,15 +2314,14 @@ const patchPlan = async (
     // the preserved date so the customer sees it immediately.
     let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
     if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
-      // Fuera del deadline si ya no queda presupuesto: es la red del calendario, y sin ella
-      // el próximo cobro puede adelantarse. Con el presupuesto gastado se cortaba a 0 ms.
-      // (2-oct-2026)
-      await afterBudget(
-        () => writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD!),
-        SUPABASE_WRITE_RESERVE_MS,
-      ).catch((e) => log("reanchor-intent-write-failed", { msg: String(e) }));
-      finalNextShipDate = `${effectivePreserveYYYYMMDD}T13:00:00Z`; // optimistic; webhook/cron makes it real
-      log("reanchor-intent-recorded", { effectivePreserveYYYYMMDD, reanchorMode });
+      // Only promise the preserved date if the intent that makes it real exists.
+      // Without it, return what Seal shows (usually nothing yet, mid-regeneration)
+      // and the FE falls back to its preview; a human is told to re-anchor by hand.
+      const armedDate = await recordReanchorIntent(effectivePreserveYYYYMMDD, "verified");
+      if (armedDate) {
+        finalNextShipDate = `${armedDate}T13:00:00Z`; // optimistic; webhook/cron makes it real
+        log("reanchor-intent-recorded", { effectivePreserveYYYYMMDD, armedDate, reanchorMode });
+      }
     }
 
     log("done-verified", {
@@ -2245,12 +2345,16 @@ const patchPlan = async (
   // Solo si cambió la frecuencia (14-oct-2026): sin cambio de intervalo Seal no regenera el
   // calendario y escribir aquí la fecha viva podía PISAR una intención pendiente de un cambio
   // anterior con la fecha ya adelantada.
+  // Lo que se promete es lo que de verdad queda guardado, igual que en la salida verificada:
+  // `writeReanchorIntent` nunca rebaja una pendiente (puede ser posterior), y si no se pudo
+  // guardar no se promete nada (el front recarga el estado real).
+  let unverifiedPromise: string | null | undefined = effectivePreserveYYYYMMDD;
   if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
-    await afterBudget(
-      () => writeReanchorIntent(ctx.customerId, sealSubscriptionId, effectivePreserveYYYYMMDD!),
-      SUPABASE_WRITE_RESERVE_MS,
-    ).catch((e) => log("reanchor-intent-write-failed", { msg: String(e) }));
-    log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, verifyOutcome });
+    const armedDate = await recordReanchorIntent(effectivePreserveYYYYMMDD, "unverified");
+    unverifiedPromise = armedDate;
+    if (armedDate) {
+      log("reanchor-deferred-to-cron-unverified", { sealSubscriptionId, effectivePreserveYYYYMMDD, armedDate, verifyOutcome });
+    }
   }
   // No hemos podido leer Seal de vuelta (timeout, error o null), así que NO sabemos
   // si cumplió. Queda escrito para que el detector no lo confunda con un "verified".
@@ -2293,7 +2397,7 @@ const patchPlan = async (
     currentLines,
     expectedInterval,
     ctx.customerId,
-    effectivePreserveYYYYMMDD,
+    unverifiedPromise,
   );
   } // fin de applyPlanChange
 };
