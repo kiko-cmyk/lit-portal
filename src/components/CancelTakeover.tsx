@@ -503,6 +503,13 @@ function Solucion({
         es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
       });
     // Rechazado antes de tocar nada (14-oct-2026): Seal seguía con un cambio reciente.
+    // La pantalla iba con una frecuencia o unas líneas que ya no son (16-oct-2026).
+    if (code === "subscription_changed")
+      return t({ en: "Your subscription changed since this page loaded. Reload and try again.", es: "Tu suscripción ha cambiado desde que abriste esta página. Recárgala y vuelve a intentarlo." });
+    if (code === "no_pending_attempt")
+      return t({ en: "We're still rescheduling your next deliveries. Try again in a couple of minutes; nothing has been changed.", es: "Estamos terminando de reorganizar tus próximos envíos. Inténtalo en un par de minutos; no hemos cambiado nada." });
+    if (code === "repair_net_unavailable")
+      return t({ en: "We couldn't check your subscription just now, so we haven't changed anything. Try again in a moment.", es: "Ahora mismo no hemos podido comprobar tu suscripción, así que no hemos cambiado nada. Inténtalo de nuevo en un momento." });
     if (code === "seal_busy")
       return t({
         en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
