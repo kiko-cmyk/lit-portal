@@ -102,6 +102,34 @@ de renovación: `nextShipDate` (ISO crudo, no formatear), `nextShipDateLabel`
   botón no puede ser «Reactivar» al portal.
 - Ni una baja ni la otra se avisa si el cliente tiene otra sub activa o pausada.
 
+### 1.d Cambios que el cliente guarda en su suscripción (2026-10-19)
+
+Emails de confirmación de CRM (SUB-03, SUB-04 y SUB-05), en `lib/sub-change-events.ts`.
+Llevan la misma foto de la sub que 1.c, **después** del cambio, y `locale`. Un evento
+por cambio guardado, en el momento y solo cuando Seal lo confirma; nunca en dry run ni
+al guardar sin cambios. `uniqueId` por cambio: si dos caminos confirman el mismo,
+Klaviyo se queda con uno.
+
+| Event name (metric) | Cuándo se dispara | Properties propias |
+|---|---|---|
+| `subscription_address_updated` (`VmJJNy`) | `PATCH /api/subscription/address` y `POST /api/internal/subscription/address` (bot, solo modo `write`), con una dirección distinta de la que había (sin contar mayúsculas, espacios ni la provincia, que sale del CP) y ya visible en Seal | `address1`, `address2` (`""` si no hay), `city`, `zip`, `province`, `country`, `countryCode`, `firstName`, `lastName`, `nextShipDate`, `nextShipDateLabel`, `sealSubscriptionId`, `source` (`portal` \| `whatsapp_bot`) |
+| `subscription_plan_updated` (`TuFAWF`) | `PATCH /api/subscription/plan` cuando cambian las cajas o la frecuencia (aunque cambie también el sabor), y el bot al alargar la frecuencia (`/api/internal/subscription/frequency`) | `boxes` y `previousBoxes` (**número**), `frequency` y `previousFrequency` (código: `15d`, `1mo`, `45d`, `2mo`…`6mo`), `newFlavour`, `previousFlavour`, `flavourChanged`, `nextShipDate`, `nextShipDateLabel`, `sealSubscriptionId`, `source` |
+| `subscription_flavor_updated` (`SjgL4P`) | `PATCH /api/subscription/plan` cuando solo cambia el sabor o su reparto, con las mismas cajas y frecuencia | `newFlavour` y `previousFlavour` («Salty Watermelon»; una mezcla, «2× Lemon · 1× Watermelon»), `nextShipDate`, `nextShipDateLabel`, `sealSubscriptionId`, `source` |
+| `pickup_point_reminder` (`WYU7Cf`) | **Sin emisor todavía**: falta una fuente de estados del transportista (Shopify no tiene eventos de envío) | previstas: `orderNumber`, `trackingNumber`, `trackingUrl`, `pickupName`, `pickupAddress`, `daysAtPickup` (**número**) |
+
+- `source` del plan: `portal_plan` (pantallas de plan y sabor), `skip_overlay`,
+  `cancel_takeover`, `profile_survey` y `whatsapp_bot`.
+- `nextShipDate` es la fecha que se le enseña al cliente: la de Seal o, si cambió la
+  frecuencia, la que sujeta la intención de re-anclaje (`AAAA-MM-DDT13:00:00Z`). Sus 10
+  primeros caracteres son el día en España. Puede ir a `null` si la ruta no pudo
+  guardar esa intención (entonces tampoco promete fecha en pantalla).
+- Un cambio de plan que la ruta no confirma al momento (`change_applying`, o una
+  verificación que no responde) avisa cuando la reparación de líneas lo deja como se
+  pidió (`processRepairIntent`, desde el `after()` de la ruta o el cron
+  `mix-repair-drain`), minutos después en el peor caso. Si no llega a confirmarse, no
+  hay aviso.
+- No avisan los cambios que soporte hace a mano en Seal (no pasan por estas rutas).
+
 ---
 
 ## 2. Flows que hay que construir (Klaviyo dashboard)

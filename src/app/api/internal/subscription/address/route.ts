@@ -1,4 +1,5 @@
 import { after, NextResponse, type NextRequest } from "next/server";
+import { randomUUID } from "node:crypto";
 
 import {
   assertBeforeCutoff,
@@ -18,6 +19,7 @@ import { cutoffEndsAt } from "@/lib/cutoff";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
+import { notifyAddressUpdated } from "@/lib/sub-change-events";
 
 /**
  * POST /apps/portal/api/internal/subscription/address
@@ -202,11 +204,28 @@ async function handle(req: NextRequest, attempt: AddressAttempt) {
   // `verify: true`: aquí nadie mira una pantalla. El bot dice "hecho" y el
   // cliente se lo cree, así que un no-op silencioso de Seal sería una caja
   // saliendo a la dirección vieja sin que nadie se entere hasta que vuelva.
-  const { appliesFrom } = await writeAddress(sealSub, addr, { verify: true });
+  const { appliesFrom, refreshed } = await writeAddress(sealSub, addr, { verify: true });
 
   after(() =>
     runWithoutRequestDeadline(() =>
       syncShopifyDefaultAddress(String(sealSub.customer_id ?? ""), addr, PATH),
+    ),
+  );
+
+  // SUB-03, el mismo aviso que desde el portal. Solo aquí, en modo `write` y con la
+  // escritura verificada; la consulta y el dry run han salido arriba sin escribir.
+  after(() =>
+    runWithoutRequestDeadline(() =>
+      notifyAddressUpdated({
+        before: sealSub,
+        addr,
+        refreshed,
+        email: sealSub.email,
+        customerId: sealSub.customer_id ? String(sealSub.customer_id) : null,
+        source: "whatsapp_bot",
+        uniqueId: `address-change-${randomUUID()}`,
+        path: PATH,
+      }),
     ),
   );
 

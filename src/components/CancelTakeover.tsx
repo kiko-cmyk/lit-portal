@@ -559,6 +559,8 @@ function Solucion({
           mainItemId: subscription?.mainItemId,
           currentVariantId: subscription?.currentVariantId,
           currentFrequency: freq,
+          // Para el ledger y para filtrar el aviso de Klaviyo (SUB-04/05) de estas ofertas.
+          source: "cancel_takeover",
           ...body,
         }),
       });

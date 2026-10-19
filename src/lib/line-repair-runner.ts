@@ -22,6 +22,7 @@ import {
   seal,
   type SealSubscription,
 } from "./seal";
+import { notifyConfirmedRepair } from "./sub-change-events";
 import type { Subscription } from "./types";
 import { supabaseAdmin } from "./supabase";
 
@@ -234,7 +235,11 @@ export async function processRepairIntent(intent: RepairIntentRow, opts: RepairR
       sub,
       atTarget ? "el cambio había entrado entero" : "no entró nada: la sub sigue como la foto",
     );
-    if (closed && atTarget) await clearStalePreservation(intent.customer_id, subId, desired);
+    if (closed && atTarget) {
+      await clearStalePreservation(intent.customer_id, subId, desired);
+      // El cambio que la ruta no pudo confirmar al momento: ahora sí está. SUB-04 / SUB-05.
+      await notifyConfirmedRepair(intent, sub, path);
+    }
     if (closed && !atTarget) {
       // Se le dijo al cliente que su cambio se estaba aplicando (`change_applying`) y no ha
       // entrado: que lo sepa una persona (14-oct-2026). Solo pasa con intenciones viejas,
@@ -413,7 +418,10 @@ export async function processRepairIntent(intent: RepairIntentRow, opts: RepairR
           ? `escritura a medias completada (${opts.source})`
           : `escritura a medias devuelta a la foto (${opts.source})`,
       );
-      if (closed && plan.towards === "target") await clearStalePreservation(intent.customer_id, subId, desired);
+      if (closed && plan.towards === "target") {
+        await clearStalePreservation(intent.customer_id, subId, desired);
+        if (after) await notifyConfirmedRepair(intent, after, path);
+      }
       console.log("[line-repair] converged", {
         subId,
         towards: plan.towards,

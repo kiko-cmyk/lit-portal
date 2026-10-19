@@ -1,4 +1,5 @@
 import { after, type NextRequest } from "next/server";
+import { randomUUID } from "node:crypto";
 
 import {
   assertBeforeCutoff,
@@ -17,6 +18,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { mapToSubscription, seal } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import type { AppProxyContext } from "@/lib/shopify-app-proxy";
+import { notifyAddressUpdated } from "@/lib/sub-change-events";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { resolveActiveSubFast } from "@/lib/sub-resolve";
 
@@ -205,6 +207,26 @@ async function savePatchAddress(
     // exhausted deadline would abort the sync instantly.
     runWithoutRequestDeadline(() =>
       syncShopifyDefaultAddress(ctx.customerId, addr, PATH),
+    ),
+  );
+
+  // SUB-03, «Dirección actualizada». Solo aquí, con la escritura ya hecha: si Seal la
+  // rechaza, `writeAddress` lanza antes y no hay evento. Sin cambio respecto a la
+  // dirección que había, tampoco; y como aquí no se verifica, espera a VER la nueva en
+  // Seal antes de emitir. Ver `notifyAddressUpdated`.
+  const before = sealSub;
+  after(() =>
+    runWithoutRequestDeadline(() =>
+      notifyAddressUpdated({
+        before,
+        addr,
+        refreshed,
+        email,
+        customerId: ctx.customerId,
+        source: "portal",
+        uniqueId: `address-change-${randomUUID()}`,
+        path: PATH,
+      }),
     ),
   );
 

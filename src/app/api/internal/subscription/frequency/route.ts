@@ -1,4 +1,5 @@
 import { after, NextResponse, type NextRequest } from "next/server";
+import { randomUUID } from "node:crypto";
 
 import { alertSlackErrorAwaited } from "@/lib/alert";
 import { ApiHttpError } from "@/lib/api-helpers";
@@ -17,6 +18,7 @@ import { klaviyo } from "@/lib/klaviyo";
 import { mixBoxCount } from "@/lib/mix";
 import { acquirePlanLock } from "@/lib/plan-lock";
 import { getComposition, getNextBillingAttempt, normalizeFrequency, seal } from "@/lib/seal";
+import { classifyPlanChange, planChangeEventName, planChangeProps, planChangeUniqueId, sendSubChangeEvent } from "@/lib/sub-change-events";
 
 /**
  * POST /apps/portal/api/internal/subscription/frequency
@@ -277,6 +279,36 @@ async function handle(req: NextRequest, attempt: Attempt) {
         nextShipDate: result.nextShipDate,
       })
       .catch((e) => log("klaviyo-skip-retained-failed", { msg: e instanceof Error ? e.message : String(e) }));
+  }
+
+  // SUB-05, «Plan actualizado», el mismo aviso que el área personal. Solo con el cambio
+  // hecho y verificado (`changed`); la consulta y la propuesta han salido arriba sin
+  // escribir. Las cajas no cambian aquí: solo la frecuencia.
+  if (result.changed) {
+    const composition = getComposition(sealSub);
+    const before = { frequency: current, composition };
+    const target = { frequency: result.frequency, composition };
+    const kind = classifyPlanChange(before, target);
+    if (kind) {
+      const changedSub = { ...sealSub, delivery_interval: result.deliveryInterval };
+      const nextShipDate = result.nextShipDate;
+      after(() =>
+        runWithoutRequestDeadline(() =>
+          sendSubChangeEvent(planChangeEventName(kind), {
+            email: sealSub.email,
+            customerId,
+            sub: changedSub,
+            props: planChangeProps(kind, before, target, {
+              nextShipDate,
+              sealSubscriptionId: subId,
+              source: "whatsapp_bot",
+            }),
+            uniqueId: planChangeUniqueId(randomUUID()),
+            path: PATH,
+          }),
+        ),
+      );
+    }
   }
 
   log("done", { changed: result.changed, reanchor: result.reanchor, nextShipDate: result.nextShipDate });
