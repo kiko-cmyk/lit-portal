@@ -287,7 +287,33 @@ export async function writeFrequencyAudit(row: FrequencyAuditRow): Promise<void>
 }
 
 /** Todo lo que toca red, inyectable. Los valores por defecto son los reales. */
+/**
+ * ¿Responde la base donde vive la intención de re-anclaje? Una lectura de la misma tabla y
+ * la misma fila que va a escribir `writeReanchorIntent`. LANZA si no.
+ *
+ * Existe para mirarlo ANTES de tocar Seal (19-oct-2026, revisión de Kiko del #150): con
+ * Supabase sin responder, `changeFrequencyOnly` cambiaba el intervalo (el apunte del ledger
+ * se traga su error), Seal borraba los pendientes, y la intención fallaba después con un 502
+ * reanchor_intent_failed: cero pendientes, cero intenciones y nada que sujete la fecha. Es
+ * el mismo hueco que el #150 cierra en el plan route. `db` solo existe para los tests.
+ */
+export async function probeReanchorStore(
+  customerId: string,
+  sealSubscriptionId: number,
+  db: Pick<ReturnType<typeof supabaseAdmin>, "from"> = supabaseAdmin(),
+): Promise<void> {
+  const { error } = await db
+    .from("subscription_reanchor_intents")
+    .select("preserve_date")
+    .eq("customer_id", customerId)
+    .eq("seal_subscription_id", String(sealSubscriptionId))
+    .maybeSingle();
+  if (error) throw new Error(`reanchor store unreachable for sub ${sealSubscriptionId}: ${error.message}`);
+}
+
 export interface FrequencyChangeDeps {
+  /** Lanza si la base de las intenciones de re-anclaje no responde. Ver `probeReanchorStore`. */
+  probeReanchorStore: (customerId: string, id: number) => Promise<void>;
   editSubscription: (id: number, edits: Record<string, unknown>) => Promise<void>;
   readBack: (id: number, signal: AbortSignal) => Promise<SealSubscription | null>;
   writeAudit: (row: FrequencyAuditRow) => Promise<void>;
@@ -297,6 +323,7 @@ export interface FrequencyChangeDeps {
 
 export function defaultFrequencyChangeDeps(): FrequencyChangeDeps {
   return {
+    probeReanchorStore: (customerId, id) => probeReanchorStore(customerId, id),
     editSubscription: (id, edits) => seal.editSubscription(id, edits),
     readBack: (id, signal) => seal.getSubscriptionById(id, signal),
     writeAudit: writeFrequencyAudit,
@@ -419,6 +446,23 @@ export async function changeFrequencyOnly(
       },
       appliesFrom: preserve,
     });
+
+  // SIN BASE NO SE TOCA SEAL (19-oct-2026). La intención de re-anclaje es lo único que
+  // sujeta la fecha que el bot le promete al cliente, y vive en Supabase. Si la base no
+  // responde, no se escribe nada en Seal: 409 `repair_net_unavailable`, nada cambiado, el bot
+  // puede reintentar o pasar a una persona. 409 y no 5xx, como en el plan route, para que
+  // quien llama sepa que es un «no» seguro y no un «no sé si entró». Va antes del apunte del
+  // ledger, que se traga sus errores y no sirve de señal.
+  try {
+    await deps.probeReanchorStore(customerId, id);
+  } catch (e) {
+    log("reanchor-store-unavailable", { msg: e instanceof Error ? e.message : String(e) });
+    throw new ApiHttpError(
+      409,
+      "repair_net_unavailable",
+      "Could not reach the store that holds the reanchor intent; nothing was changed. Try again in a moment.",
+    );
+  }
 
   // El apunte va ANTES de tocar Seal: una petición que muera después de mutar
   // deja al menos la intención, y «intent sin verified» es lo que delata un
