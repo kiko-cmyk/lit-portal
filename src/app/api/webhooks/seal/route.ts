@@ -10,7 +10,7 @@ import { reanchorConverged } from "@/lib/frequency-core";
 import { tryWithPlanLock } from "@/lib/plan-lock";
 import { klaviyo } from "@/lib/klaviyo";
 import { discoveryRenewalCreditOnSealEvent } from "@/lib/discovery-renewal-credit";
-import { consumeReferralRewardsForSub } from "@/lib/referral-reward";
+import { consumeReferralRewardsForSub, reserveCodeForActiveSub } from "@/lib/referral-reward";
 import { consumeRetentionDiscountIfCharged } from "@/lib/retention-discount";
 import {
   getNextBillingAttempt,
@@ -124,6 +124,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     switch (topic) {
       case "subscription.created":
         await syncSubscription(sub);
+        // Su código de referido, sin esperar a que abra la tarjeta (2026-10-19): con él
+        // salen los banners de los emails. Solo reserva; nunca lanza.
+        await reserveCodeForActiveSub(sub);
         await applyReanchorIfPending(sub);
         // Discovery Set + suscripción en el mismo pedido: este es el momento en
         // que por fin existe la sub a la que aplicar los 4,99 € (en orders/paid
@@ -220,6 +223,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       case "subscription.resumed":
       case "subscription.reactivated":
         await syncSubscription(sub);
+        // Quien vuelve también recibe su código de referido si no lo tenía
+        // (2026-10-19). Solo reserva; nunca lanza.
+        await reserveCodeForActiveSub(sub);
         // Una sub que vuelve a estar activa puede ser donde esperan los 10 € de un
         // referido (2026-10-10): el cron la vuelve a mirar en su pasada siguiente
         // en vez de dentro de días. Solo adelanta la mirada; nunca aplica.

@@ -5,8 +5,10 @@ import { runAsBackgroundJob } from "@/lib/http-timeout";
 import {
   issuePendingCodes,
   qualifyPendingBacklog,
+  reserveMissingCodes,
   runRewardSweep,
   type IssueSummary,
+  type ReserveSummary,
   type SweepTally,
 } from "@/lib/referral-reward";
 
@@ -30,7 +32,10 @@ import {
  *      (55 s), no contra el corte de la fase.
  *   2. Conversiones (hasta los 38 s): cualifica las que se quedaron pendientes y
  *      repara las cualificadas que se quedaron sin recompensa.
- *   3. Códigos (hasta los 46 s): da de alta en Shopify los `pending` (como mucho
+ *   3. Reservas (hasta los 42 s, 2026-10-19): reserva código a los activos de la caché
+ *      `subscriptions` que no lo tienen, como mucho 25 por pasada. Es la red del
+ *      webhook de Seal, que lo reserva al activarse la sub (`reserveCodeForActiveSub`).
+ *   4. Códigos (hasta los 46 s): da de alta en Shopify los `pending` (como mucho
  *      40 por pasada; el backfill grande va por script).
  *
  * Parámetros, para el E2E (los dos siguen exigiendo CRON_SECRET):
@@ -57,6 +62,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const errors: string[] = [];
     let rewards: SweepTally = {};
     let qualify: SweepTally = {};
+    let reserve: ReserveSummary | null = null;
     let issue: IssueSummary | null = null;
     let decisions: unknown[] = [];
 
@@ -78,6 +84,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         qualify = await qualifyPendingBacklog(20, started + 38_000);
       } catch (e) {
         errors.push(`qualify: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (!onlySubId) {
+      try {
+        reserve = await reserveMissingCodes({ max: 25, dryRun, deadlineMs: started + 42_000 });
+      } catch (e) {
+        errors.push(`reserve: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 
@@ -107,13 +121,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         .join(", ");
     const rewardLine = notable(rewards);
     const qualifyLine = notable(qualify);
-    if (!dryRun && (rewardLine || qualifyLine || (issue?.activated ?? 0) > 0 || (issue?.failed ?? 0) > 0)) {
+    if (
+      !dryRun &&
+      (rewardLine ||
+        qualifyLine ||
+        (reserve?.reserved ?? 0) > 0 ||
+        (issue?.activated ?? 0) > 0 ||
+        (issue?.failed ?? 0) > 0)
+    ) {
       await alertSlackNoticeAwaited({
         title: "Referidos: pasada del cron",
         icon: ":handshake:",
         fields: {
           recompensas: rewardLine || "-",
           conversiones: qualifyLine || "-",
+          codigos_reservados: reserve?.reserved ?? 0,
+          activos_sin_codigo: reserve?.missing ?? "-",
+          cache_activa_seal_no: reserve?.notActive ?? 0,
           codigos_activados: issue?.activated ?? 0,
           codigos_pendientes: issue?.stillPending ?? 0,
           codigos_fallidos: issue?.failed ?? 0,
@@ -128,6 +152,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       ms: Date.now() - started,
       rewards,
       conversions: qualify,
+      reserve,
       codes: issue,
       ...(dryRun ? { decisions } : {}),
       ...(errors.length ? { errors } : {}),
