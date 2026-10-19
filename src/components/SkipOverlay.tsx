@@ -228,6 +228,8 @@ export function SkipOverlay({
           // (Was "natural" = last charge + new interval until 2026-10-02, which
           // for anyone who had skipped did NOT match this preview.)
           reanchorMode: "fromNext",
+          // Para el ledger y para filtrar el aviso de Klaviyo (SUB-04/05) de este ajuste.
+          source: "skip_overlay",
         }),
       });
       onAdjusted(updated);

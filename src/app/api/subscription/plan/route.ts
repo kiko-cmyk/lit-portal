@@ -47,6 +47,14 @@ import {
   SELLING_PLAN_BY_FREQUENCY,
 } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
+import {
+  classifyPlanChange,
+  planChangeEventName,
+  planChangeProps,
+  planChangeUniqueId,
+  planEventSource,
+  sendSubChangeEvent,
+} from "@/lib/sub-change-events";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import { requestedSubIdFrom } from "@/lib/sub-resolve";
@@ -704,6 +712,15 @@ const patchPlan = async (
   })();
 
   const targetBoxCount = mixBoxCount(targetComposition);
+
+  // El aviso de Klaviyo que toca a este cambio (2026-10-19): SUB-05 «Plan actualizado» si
+  // cambian las cajas o la frecuencia, SUB-04 «Sabor actualizado» si solo cambia el sabor
+  // o su reparto, y ninguno si no cambia nada. Se emite solo cuando Seal lo confirma
+  // (`sendPlanEvent`, más abajo), nunca en dry run, y con el `requestId` de la petición.
+  const planEventBefore = { frequency: currentFrequency, composition: currentComposition };
+  const planEventAfter = { frequency: targetFrequency, composition: targetComposition };
+  const planEventKind = currentComposition.length ? classifyPlanChange(planEventBefore, planEventAfter) : null;
+
   const targetSellingPlanNumeric = SELLING_PLAN_BY_FREQUENCY[targetFrequency];
   if (!targetSellingPlanNumeric) {
     throw new ApiHttpError(500, "selling_plan_not_mapped", `No selling plan for ${targetFrequency}`);
@@ -1199,6 +1216,43 @@ const patchPlan = async (
     }
   };
   ledger.close = writeAudit;
+
+  /**
+   * SUB-04 / SUB-05 con la sub ya CONFIRMADA en Seal y la fecha que se le promete al
+   * cliente. Lo llaman la salida verificada y la comprobación de detrás de una
+   * verificación sin respuesta; un cambio que se termina en segundo plano lo avisa
+   * `processRepairIntent` al converger, con el mismo `uniqueId`. Nunca lanza.
+   */
+  const sendPlanEvent = (sub: SealSubscription, nextShipDate: string | null) =>
+    planEventKind
+      ? sendSubChangeEvent(planChangeEventName(planEventKind), {
+          email: sub.email || preMutationSub?.email,
+          customerId: ctx.customerId,
+          sub,
+          props: planChangeProps(planEventKind, planEventBefore, planEventAfter, {
+            nextShipDate,
+            sealSubscriptionId,
+            source: planEventSource(body.source),
+          }),
+          uniqueId: planChangeUniqueId(ledger.requestId),
+          path: "/api/subscription/plan",
+        })
+      : Promise.resolve();
+
+  /** ¿Enseña Seal exactamente lo pedido? Las mismas comprobaciones que la verificación. */
+  const sealShowsTarget = (s: SealSubscription): boolean => {
+    const wanted = new Map(targetPlan.lines.map((l) => [String(l.variantId), l]));
+    const lines = getLines(s);
+    return (
+      s.status === "ACTIVE" &&
+      sameSealInterval(s.delivery_interval, expectedInterval) &&
+      lines.length === targetPlan.lines.length &&
+      lines.every((l) => {
+        const t = wanted.get(String(l.variantId));
+        return !!t && Number(l.quantity) === t.quantity && priceToCents(l.unitPrice) === t.unitPriceCents;
+      })
+    );
+  };
 
   /** Escribe (o limpia) el precio preservado y SUS cajas, siempre juntos. Best effort. */
   const writePreservedColumnsNow = async (values: {
@@ -2427,6 +2481,13 @@ const patchPlan = async (
       finalChargeCents: actualCents,
       finalNextShipDate,
     });
+    // SUB-04 / SUB-05: verificado en Seal (`writeAudit("verified")`, arriba), con la misma
+    // fecha que se le enseña al cliente en la respuesta.
+    if (planEventKind) {
+      const confirmed = verified;
+      const promised = finalNextShipDate;
+      after(() => runWithoutRequestDeadline(() => sendPlanEvent(confirmed, promised)));
+    }
     return { ...mapToSubscription(verified, ctx.customerId), nextShipDate: finalNextShipDate };
   }
 
@@ -2479,6 +2540,19 @@ const patchPlan = async (
       const armedAt = ledger.armedAt;
       after(() => runWithoutRequestDeadline(() => finishInBackground(armedAt)));
     }
+    // El aviso de Klaviyo lo da `processRepairIntent` al cerrar la red como aplicada.
+  } else if (planEventKind) {
+    // Solo frecuencia: sin líneas no hay red que lo confirme después. Se mira aquí detrás
+    // un rato y, si Seal ya enseña lo pedido, se avisa con la fecha que se le promete.
+    const promised = unverifiedPromise ? `${unverifiedPromise}T13:00:00Z` : null;
+    after(() =>
+      runWithoutRequestDeadline(async () => {
+        const seen = await waitUntilSeal(sealSubscriptionId, sealShowsTarget, UNVERIFIED_CONFIRM_MS, 2_000);
+        const confirmed = seen ? await seal.getSubscriptionById(sealSubscriptionId).catch(() => null) : null;
+        if (confirmed && sealShowsTarget(confirmed)) await sendPlanEvent(confirmed, promised);
+        else log("plan-event-not-confirmed", { verifyOutcome });
+      }),
+    );
   }
 
   log("done-unverified", {
@@ -2551,6 +2625,9 @@ const RESPOND_BY_MS = 11_000;
 const REMOVE_AND_VERIFY_MS = 4_500;
 /** Tras cambiar el intervalo, cuánto se espera a VERLO en Seal antes de tocar líneas. */
 const INTERVAL_VISIBLE_MS = 8_000;
+/** Cuánto espera el `after()` a ver en Seal un cambio de solo frecuencia que la verificación
+ *  no pudo leer, antes de darlo por no confirmado y no avisar. */
+const UNVERIFIED_CONFIRM_MS = 20_000;
 /** Cuánto sigue el `after()` esperando a ver lo añadido antes de dejárselo al cron. */
 const BACKGROUND_VISIBLE_MS = 40_000;
 
