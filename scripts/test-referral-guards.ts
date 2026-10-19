@@ -92,10 +92,10 @@ check(
 console.log("\n── webhook de Seal: solo consume ──\n");
 
 check(
-  "importa solo consumeReferralRewardsForSub",
-  /import \{ consumeReferralRewardsForSub \} from "@\/lib\/referral-reward"/.test(sealHook) &&
+  "importa solo consumeReferralRewardsForSub y reserveCodeForActiveSub",
+  /import \{ consumeReferralRewardsForSub, reserveCodeForActiveSub \} from "@\/lib\/referral-reward"/.test(sealHook) &&
     !/runRewardSweep|applyReward|detachAllRewards/.test(code(sealHook)),
-  "Aplicar es cosa SOLO del cron: apply de Seal no es idempotente y dos aplicadores serían 20 € en un cobro.",
+  "Aplicar es cosa SOLO del cron: apply de Seal no es idempotente y dos aplicadores serían 20 € en un cobro. Reservar un código (desde el 19-oct) no mueve dinero.",
 );
 
 {
@@ -442,6 +442,64 @@ check(
     "la tarjeta espera al código y no promete plazos",
     /Generando tu código…/.test(card) && /tries < 18/.test(card) && !/unas horas/.test(card),
     "El cliente tiene que ver su código en cuanto entra, no un «estará listo en unas horas».",
+  );
+}
+
+console.log("\n── código al activarse la suscripción (2026-10-19) ──\n");
+{
+  const hook = code(sealHook);
+  const created = hook.slice(hook.indexOf('case "subscription.created":'), hook.indexOf('case "subscription.updated":'));
+  const back = hook.slice(hook.indexOf('case "subscription.resumed":'), hook.indexOf('case "subscription.shipping_address_updated":'));
+  for (const [name, body] of [
+    ["alta", created],
+    ["reactivación y reanudación", back],
+  ] as const) {
+    const iSync = body.indexOf("await syncSubscription(sub);");
+    const iReserve = body.indexOf("await reserveCodeForActiveSub(sub);");
+    check(
+      `webhook de Seal, ${name}: reserva el código DESPUÉS de syncSubscription`,
+      iSync >= 0 && iReserve > iSync,
+      "El dueño sale de la caché que syncSubscription acaba de escribir; antes, la sub podría no estar en ella.",
+    );
+  }
+  const onActive = code(fnBody(reward, "export async function reserveCodeForActiveSub("));
+  check(
+    "reserveCodeForActiveSub: el dueño sale de la caché y solo con la sub activa",
+    /\.from\("subscriptions"\)/.test(onActive) &&
+      /data\.status !== "active"\) return;/.test(onActive) &&
+      /await ensurePendingCode\(String\(data\.customer_id\)/.test(onActive),
+    "No del customer_id del payload: la caché solo lo acepta cuando cuadra con lo que ya sabe.",
+  );
+  check(
+    "reserveCodeForActiveSub nunca lanza",
+    /try \{[\s\S]*\} catch \(e\) \{/.test(onActive),
+    "Un fallo aquí no puede tumbar el webhook de Seal (lo reintentaría con todos sus pasos).",
+  );
+  const net = code(fnBody(reward, "export async function reserveMissingCodes("));
+  check(
+    "la red solo reserva: no escribe en Shopify",
+    /ensurePendingCode\(/.test(net) && !/bulkAddFriendCodes|createRewardDiscount|deleteCodeDiscount|deleteFriendRedeemCode/.test(net),
+    "El alta en Shopify la hace solo issuePendingCodes, con su tope de 40 por pasada.",
+  );
+  check(
+    "la red confirma en Seal que la sub sigue activa ANTES de reservar",
+    /s\?\.status === "ACTIVE"/.test(net) &&
+      /throwTransient: true/.test(net) &&
+      net.indexOf('s?.status === "ACTIVE"') < net.indexOf("await ensurePendingCode("),
+    "La caché puede ir por detrás (1.535 «activos» frente a 1.424 en Klaviyo el 19-oct): sin esto, ex suscriptores recibirían código.",
+  );
+  check(
+    "la red respeta su tope y el dry run",
+    /if \(opts\.dryRun\) return summary;/.test(net) && /queue\.slice\(0, opts\.max\)/.test(net),
+    "Cada reserva lee el cliente en Shopify: sin tope, la primera pasada intentaría ~1.300.",
+  );
+  const sweep = code(cron);
+  const iReserve = sweep.indexOf("reserveMissingCodes({ max: 25, dryRun");
+  const iIssue = sweep.indexOf("issuePendingCodes({ max: 40, dryRun");
+  check(
+    "el cron reserva ANTES de dar de alta",
+    iReserve > 0 && iIssue > iReserve,
+    "Así un código reservado en la pasada puede darse de alta en la misma.",
   );
 }
 

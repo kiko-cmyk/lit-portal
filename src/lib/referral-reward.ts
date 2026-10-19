@@ -43,6 +43,7 @@ import {
   canStartApply,
   checkApplyPostcondition,
   chooseCandidate,
+  customersMissingCode,
   decideRewardAction,
   eurosToCents,
   generateReferralCode,
@@ -197,6 +198,142 @@ export async function ensurePendingCode(customerId: string, firstName: string | 
     if (error.code !== "23505") throw new Error(`referral_codes reserve: ${error.message}`);
   }
   throw new Error(`referral_codes: 6 colisiones seguidas para ${customerId}`);
+}
+
+/**
+ * El código de una suscripción que acaba de activarse (2026-10-19): nueva, reactivada o
+ * reanudada, venga de donde venga (checkout, portal, admin de Seal). Hasta hoy solo se
+ * reservaba en el primer pedido con suscripción (`orders/paid`) o al abrir la tarjeta,
+ * así que quien volvía, o una sub creada desde el admin de Seal, se quedaba sin el
+ * banner de `{{ person.referral_code }}` en los emails.
+ *
+ * Lo llama el webhook de Seal DESPUÉS de `syncSubscription`, y el dueño sale de la caché
+ * que esa llamada acaba de escribir, no del `customer_id` del payload: la caché solo lo
+ * acepta cuando cuadra con lo que ya sabe (ver `syncSubscription`).
+ *
+ * Solo reserva la fila `pending`. La da de alta la pasada del cron, que sube además
+ * `referral_code` al perfil de Klaviyo. Un B2B se reserva igual y la emisión lo deja
+ * `disabled`. Nunca lanza: si falla, lo recoge `reserveMissingCodes` en la pasada.
+ */
+export async function reserveCodeForActiveSub(sub: { id: number | string; first_name?: string | null }): Promise<void> {
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from("subscriptions")
+      .select("customer_id, status")
+      .eq("seal_subscription_id", String(sub.id))
+      .maybeSingle();
+    if (error) throw new Error(`subscriptions: ${error.message}`);
+    if (!data?.customer_id || data.status !== "active") return;
+    await ensurePendingCode(String(data.customer_id), sub.first_name?.trim() || null);
+  } catch (e) {
+    console.warn(LOG, "no se pudo reservar el código al activarse la sub (lo recoge el cron)", sub.id, errMsg(e));
+  }
+}
+
+/** Todas las filas de una consulta, de 1.000 en 1.000 (el tope de filas de Supabase). */
+async function readAllRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const SIZE = 1000;
+  const out: T[] = [];
+  for (let from = 0; ; from += SIZE) {
+    const { data, error } = await page(from, from + SIZE - 1);
+    if (error) throw new Error(error.message);
+    out.push(...(data ?? []));
+    if ((data?.length ?? 0) < SIZE) return out;
+  }
+}
+
+export interface ReserveSummary {
+  /** Clientes con suscripción activa EN LA CACHÉ y sin código, antes de esta pasada. */
+  missing: number;
+  reserved: number;
+  /** La caché decía activa y Seal no: sin código (la caché va por detrás). */
+  notActive: number;
+  /** No se pudo leer Seal o Shopify, o falló la reserva: se reintenta en la siguiente. */
+  failed: number;
+}
+
+/**
+ * La red del cron (2026-10-19): reserva código a quien tiene una suscripción activa en la
+ * caché `subscriptions` y todavía no lo tiene (`customersMissingCode`). Cubre un webhook
+ * de Seal que no llegó o falló, y cualquier sub que se active sin pasar por
+ * `reserveCodeForActiveSub`.
+ *
+ * La caché puede ir por detrás de Seal (el 19-oct tenía 1.535 clientes «activos» y el
+ * segmento de Klaviyo, 1.424), así que antes de reservar se confirma en Seal que alguna
+ * de sus subs sigue ACTIVE. Como mucho `max` por pasada, porque cada una lee Seal y
+ * Shopify, y solo LEE: el alta la sigue haciendo `issuePendingCodes`, 40 por pasada.
+ *
+ * OJO: la primera vez encuentra a TODOS los activos sin código (1.401 el 19-oct). Sin el
+ * backfill del runbook (paso 7) delante, esto es el backfill, a `max` reservas y 40
+ * altas por pasada.
+ */
+export async function reserveMissingCodes(opts: {
+  max: number;
+  dryRun?: boolean;
+  deadlineMs?: number;
+}): Promise<ReserveSummary> {
+  const sb = supabaseAdmin();
+  const active = await readAllRows<{ customer_id: string; seal_subscription_id: string }>((from, to) =>
+    sb
+      .from("subscriptions")
+      .select("customer_id, seal_subscription_id")
+      .eq("status", "active")
+      .order("seal_subscription_id")
+      .range(from, to),
+  );
+  const codes = await readAllRows<{ customer_id: string; status: string }>((from, to) =>
+    sb.from("referral_codes").select("customer_id, status").order("customer_id").range(from, to),
+  );
+  const subsOf = new Map<string, string[]>();
+  for (const r of active) {
+    const id = String(r.customer_id);
+    subsOf.set(id, [...(subsOf.get(id) ?? []), String(r.seal_subscription_id)]);
+  }
+  const missing = customersMissingCode(
+    active.map((r) => String(r.customer_id)),
+    codes,
+  );
+  const summary: ReserveSummary = { missing: missing.length, reserved: 0, notActive: 0, failed: 0 };
+  if (opts.dryRun) return summary;
+
+  // En orden aleatorio: un cliente que falla siempre no puede tapar a los demás pasada
+  // tras pasada.
+  const queue = [...missing];
+  for (let i = queue.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [queue[i], queue[j]] = [queue[j], queue[i]];
+  }
+  for (const customerId of queue.slice(0, opts.max)) {
+    if (opts.deadlineMs !== undefined && Date.now() > opts.deadlineMs) break;
+    try {
+      // Activa de verdad, según Seal. `throwTransient`: un 429 no puede leerse como «no
+      // existe»; cuenta como fallo y se reintenta.
+      let live = false;
+      for (const subId of subsOf.get(customerId) ?? []) {
+        const s = await seal.getSubscriptionById(Number(subId), undefined, { throwTransient: true });
+        if (s?.status === "ACTIVE") {
+          live = true;
+          break;
+        }
+      }
+      if (!live) {
+        summary.notActive++;
+        continue;
+      }
+      // El nombre es solo para el código (`MARIA7KQ2`). Un cliente que ya no existe en
+      // Shopify se reserva igual: la emisión lo marca `failed` a la tercera, y así deja
+      // de salir aquí.
+      const basics = await readCustomerBasics(customerId);
+      await ensurePendingCode(customerId, basics?.firstName ?? null);
+      summary.reserved++;
+    } catch (e) {
+      summary.failed++;
+      console.warn(LOG, "no se pudo reservar el código del cliente", customerId, errMsg(e));
+    }
+  }
+  return summary;
 }
 
 /** ¿Código del formato de antes del 13-oct (nombre + solo cifras: `JUAN65`, `AMIGO1234`)? */

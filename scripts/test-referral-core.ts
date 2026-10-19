@@ -21,6 +21,7 @@ import {
   CHARGE_MOVED_AWAY_MS,
   checkApplyPostcondition,
   chooseCandidate,
+  customersMissingCode,
   decideRewardAction,
   eurosToCents,
   generateReferralCode,
@@ -103,6 +104,29 @@ check("códigos de recompensa: LITREF- + 8 sin ambiguos", rewardOk);
 check("isRewardCode", isRewardCode(" litref-abcd2345 ") && !isRewardCode("MARIA27"));
 check("renovación de Seal", isRenewalSource("subscription_contract_checkout_one") && !isRenewalSource("web") && !isRenewalSource(null));
 check("etiqueta B2B, sin mirar B2B_ACCOUNT_ONLY", hasB2BTag([" B2B "]) && !hasB2BTag(["b2b-lead", "vip"]) && !hasB2BTag(null));
+
+// Quién se queda sin código (2026-10-19): la red del cron y el backfill.
+const codeRows = [
+  { customer_id: "111", status: "active" },
+  { customer_id: "222", status: "pending" },
+  { customer_id: "333", status: "disabled" },
+  { customer_id: "444", status: "failed" },
+  { customer_id: "555", status: "retired" },
+];
+check(
+  "sin código: los activos sin fila y los que solo tienen la retirada de prueba",
+  eq(customersMissingCode(["111", "222", "333", "444", "555", "666"], codeRows), ["555", "666"]),
+  "pending y active ya tienen código; disabled (B2B) y failed ya tienen decisión: no se reservan otra vez.",
+);
+check(
+  "sin código: un cliente con dos subs activas sale una vez",
+  eq(customersMissingCode(["666", "666", "777"], []), ["666", "777"]),
+);
+check(
+  "sin código: ids vacíos, «0» o que no son de Shopify no cuentan",
+  eq(customersMissingCode(["", "0", "abc", " 888 "], []), ["888"]),
+  "Una sub sin cliente enlazado trae customer_id «0»: no es nadie.",
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n── compartir ──\n");

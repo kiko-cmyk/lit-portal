@@ -22,9 +22,9 @@ Cualquier alerta de dinero lleva el id de la recompensa en su código de Slack.
 | `src/lib/referral-shopify.ts` | Descuento padre, alta de códigos en bloque, descuentos `LITREF`, lectura de pedidos y clientes |
 | `src/lib/referral-reward.ts` | Orquestación: registrar, cualificar, emitir, aplicar, consumir, retirar, revocar |
 | `src/app/api/webhooks/shopify/route.ts` | `orders/paid`: registra la conversión y, en `after()`, cualifica |
-| `src/app/api/webhooks/seal/route.ts` | Consume premios tras un cobro (nunca aplica) |
+| `src/app/api/webhooks/seal/route.ts` | Consume premios tras un cobro (nunca aplica). Desde el 19-oct reserva además el código de una sub nueva, reactivada o reanudada (`reserveCodeForActiveSub`), venga de donde venga |
 | `src/app/api/subscription/plan/route.ts` | Retira el premio (y cualquier `LITREF` suelto) antes de un alta y baja de líneas. Si no puede, 409 `referral_reward_busy` sin tocar nada |
-| `src/app/api/cron/referral-sweep/route.ts` | Cron: aplica, consume y retira premios, cualifica pendientes y emite códigos. Cada 4 h desde el crontab del VPS; Vercel (Hobby, solo crons diarios) lo lanza además a las 06:50 UTC como red |
+| `src/app/api/cron/referral-sweep/route.ts` | Cron: aplica, consume y retira premios, cualifica pendientes, reserva código a los activos de la caché que no lo tienen (25 por pasada, desde el 19-oct) y emite códigos (40 por pasada). Cada 4 h desde el crontab del VPS; Vercel (Hobby, solo crons diarios) lo lanza además a las 06:50 UTC como red |
 | `src/app/api/referral/code/route.ts` | Los datos de la tarjeta (solo lee) |
 | `src/app/api/referral/track/route.ts` | «Ha compartido» (solo el canal, para el KPI) |
 | `src/components/ReferralCard.tsx` | Tarjeta «TRAE A ALGUIEN Y LLÉVATE 10€», solo con la suscripción activa: en Suscripción debajo de «Próximos pedidos» (el Hub ya no enseña «Mis pedidos») y en Cuenta debajo de «Mis pedidos» |
@@ -66,6 +66,8 @@ Tras cambiar cualquiera, hay que hacer **Redeploy**: Vercel no aplica cambios de
    - Cron externo cada 4 h en el crontab del usuario `kiko` del VPS (37.27.200.214), clonando con `sed` la línea de `mix-repair-drain` (lleva comillas anidadas y la lectura del `.env` con `LIT_PORTAL_CRON_SECRET`): `50 */4 * * *` contra `/api/cron/referral-sweep`. Sin él todo funciona, pero con una o dos pasadas por cobro en vez de una docena, y un código nuevo puede tardar hasta un día en darse de alta (la tarjeta dice «en unas horas»). Tiene que estar antes del paso 8.
    - `REFERRAL_REWARDS=allowlist` y E2E 3 a 6 y 8.
 7. **Backfill completo:** `--reserve` y después `--issue` (sigue en bucle hasta que no queda ningún `pending`). Comprobar que el preflight da `códigos colgados` igual a las filas `active`. Va ANTES del paso 8: el cron emite como mucho 40 códigos por pasada, y sin el backfill la tarjeta diría «estará listo en unas horas» a casi todo el mundo durante días.
+   - **OJO con Klaviyo (19-oct):** la clave privada del `.env.local` da 401 (revocada). Corrido en local, `--issue` da de alta los códigos en Shopify pero NO sube `referral_code` a los perfiles (el script solo avisa), y sin esa propiedad no sale el banner de los emails. Antes de correrlo: una clave buena en el entorno, o subir después la propiedad por importación masiva.
+   - Desde el 19-oct, el cron reserva solo a los activos sin código (25 por pasada) y los da de alta a 40 por pasada: sin el script, el relleno se hace igual, pero tarda días.
 8. `REFERRALS=on`, `REFERRAL_REWARDS=on` y Redeploy. Campaña de lanzamiento al segmento «`referral_code` is set».
 
 ## E2E (Seal solo se toca en subs del equipo)

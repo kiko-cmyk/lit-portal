@@ -253,6 +253,29 @@ export function hasB2BTag(tags: string[] | null | undefined): boolean {
   return (tags ?? []).some((t) => t.trim().toLowerCase() === "b2b");
 }
 
+/**
+ * Los clientes con suscripción activa que todavía no tienen código (2026-10-19): sin fila
+ * en `referral_codes`, o solo con la `retired` de prueba de abril, que
+ * `ensurePendingCode` sustituye. Los demás estados ya tienen su código (`pending`,
+ * `active`) o una decisión tomada (`disabled` de un B2B, `failed`) y no se tocan. Sin
+ * repetidos (un cliente con dos subs sale una vez) y en el orden de entrada.
+ */
+export function customersMissingCode(
+  activeCustomerIds: Iterable<string>,
+  codeRows: Array<{ customer_id: string; status: string }>,
+): string[] {
+  const settled = new Set(codeRows.filter((r) => r.status !== "retired").map((r) => String(r.customer_id)));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of activeCustomerIds) {
+    const id = String(raw ?? "").trim();
+    if (!/^\d+$/.test(id) || id === "0" || seen.has(id)) continue;
+    seen.add(id);
+    if (!settled.has(id)) out.push(id);
+  }
+  return out;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Compartir
 // ═══════════════════════════════════════════════════════════════════════════
