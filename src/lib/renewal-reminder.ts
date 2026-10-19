@@ -109,17 +109,17 @@ export type RenewalReminderConfig = {
   /** Route path, for the Slack alerts. */
   path: string;
   /**
-   * Send the saved shipping address in the event. Only the 7d email prints it
-   * (its whole point is "confirm your address before we ship"); the 48h email
-   * doesn't, and shipping it there would copy a postal address into twice as
-   * many Klaviyo event payloads for nothing.
+   * Send the saved shipping address in the event. Both buckets turn it on: the
+   * 7d email exists to have it confirmed before picking, and the 48h shipping
+   * notice prints "va a esta dirección". Without it the template falls back to
+   * the Klaviyo profile address, which need not be the subscription's.
    */
   withShippingAddress?: boolean;
   /** Run the mix price-drift assertion. 48h only — see the check itself. */
   checkMixPrice?: boolean;
 };
 
-/** Shipping address exactly as the 7d template reads it (`event.shippingAddress.*`). */
+/** Shipping address exactly as the 48h and 7d templates read it (`event.shippingAddress.*`). */
 export type ReminderAddress = {
   firstName: string;
   lastName: string;

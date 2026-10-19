@@ -21,6 +21,10 @@ import { runRenewalReminder } from "@/lib/renewal-reminder";
  *
  * This bucket also carries the mix price-drift assertion: it is the last full
  * scan of the Seal book before the card is hit.
+ *
+ * `withShippingAddress` is on because the 48h email prints where the box goes
+ * ("va a esta dirección"). Without it the template falls back to the Klaviyo
+ * profile address, which need not be the one on the subscription.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   return runRenewalReminder(req, {
@@ -31,5 +35,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     label: "renewal-reminder 48h",
     path: "/api/cron/renewal-reminder",
     checkMixPrice: true,
+    withShippingAddress: true,
   });
 }
