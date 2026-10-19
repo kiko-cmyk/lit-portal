@@ -16,6 +16,8 @@
  *     corte de 24 h; y si falla, el cambio ya hecho no se deshace ni se esconde;
  *   - `writeReanchorIntent` LANZA cuando Supabase devuelve `{ error }` (antes se lo
  *     tragaba y una intención no escrita pasaba por escrita);
+ *   - con Supabase sin responder, `changeFrequencyOnly` no toca Seal: 409
+ *     `repair_net_unavailable` sin edit, sin apunte y sin intención (19-oct-2026);
  *   - en modo `fromNext` (el del bot desde el 2026-10-01) la fecha se cuenta desde
  *     la próxima entrega, a quien ya saltó no se le niega el cambio, y sin
  *     intención de re-anclaje escrita no hay «hecho» (`reanchor_intent_failed`);
@@ -35,6 +37,7 @@ import {
   type FrequencyChangeDeps,
   isFrequency,
   longerOptionsFromNext,
+  probeReanchorStore,
   SEAL_INTERVAL_BY_FREQUENCY,
   shiftedNextShipDate,
   spacedNextShipDate,
@@ -112,10 +115,15 @@ function fakeDeps(o: {
   editError?: "rejected" | "timeout";
   readBack?: FrequencyChangeDeps["readBack"];
   intentFails?: boolean;
+  /** Supabase sin responder ANTES de tocar Seal (19-oct-2026). */
+  storeDown?: boolean;
 } = {}) {
   const calls = { edits: [] as Record<string, unknown>[], audits: [] as string[], intents: [] as string[], sleeps: [] as number[] };
   let editFails = o.editFails ?? 0;
   const deps: FrequencyChangeDeps = {
+    probeReanchorStore: async () => {
+      if (o.storeDown) throw new Error("supabase down");
+    },
     editSubscription: async (_id, edits) => {
       calls.edits.push(edits);
       if (editFails > 0) {
@@ -308,6 +316,52 @@ const run = async () => {
       "reanchor_intent_failed",
     );
     check("y la auditoría lo apunta", calls.audits.at(-1) === "reanchor_intent_failed", calls.audits.join(","));
+  }
+
+  // ── Supabase sin responder: no se toca Seal (19-oct-2026) ─────────────────
+  //
+  // Kiko lo ejecutó con Seal falso y Supabase devolviendo 500: editSubscription a
+  // 3 meses, 502 reanchor_intent_failed, cero pendientes y cero intenciones. Es la
+  // ruta que va a usar Permut para espaciar.
+  for (const [modo, args] of [
+    ["fromNext", baseFromNext],
+    ["preserve", { ...base, reanchorMode: "preserve" as const }],
+  ] as const) {
+    const { deps, calls } = fakeDeps({ storeDown: true });
+    await rejects(
+      `base caída (${modo}): repair_net_unavailable antes de tocar Seal`,
+      changeFrequencyOnly(args, deps),
+      "repair_net_unavailable",
+    );
+    check(
+      `base caída (${modo}): ni edit, ni apunte, ni intención`,
+      calls.edits.length === 0 && calls.audits.length === 0 && calls.intents.length === 0,
+      `edits ${calls.edits.length}, audits ${calls.audits.join(",")}, intents ${calls.intents.length}`,
+    );
+  }
+  {
+    const { deps, calls } = fakeDeps({ storeDown: true });
+    const r = await changeFrequencyOnly({ ...base, sealSub: sub({ delivery_interval: "2 months" }), target: "2mo" }, deps);
+    check("base caída y ya en el objetivo: sigue siendo «nada que hacer»", !r.changed && calls.edits.length === 0);
+  }
+  {
+    const db = (error: { message: string } | null) =>
+      ({
+        from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error }) }) }) }) }),
+      }) as unknown as Parameters<typeof probeReanchorStore>[2];
+    let lanzo = false;
+    try {
+      await probeReanchorStore("27136755892573", 12320700, db({ message: "TimeoutError: fetch deadline" }));
+    } catch {
+      lanzo = true;
+    }
+    let ok = true;
+    try {
+      await probeReanchorStore("27136755892573", 12320700, db(null));
+    } catch {
+      ok = false;
+    }
+    check("probeReanchorStore lanza con { error } y pasa sin él", lanzo && ok);
   }
 
   // ── área personal: la fecha que se escribe (2026-10-02) ─────────────────
