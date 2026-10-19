@@ -422,6 +422,30 @@ const patchPlan = async (
 
   }
 
+  // PESTAÑA VIEJA EN LA FRECUENCIA (16-oct-2026). Desde el #148 `currentFrequency` sale de
+  // Seal, pero PlanOverlay, «Ajustar mi plan» y «menos cajas» mandan siempre la `frequency`
+  // que enseña la pestaña. Si el bot de WhatsApp le ha pasado a alguien de 2 a 3 meses y,
+  // desde una pestaña abierta antes, baja de 2 a 1 caja, llega `frequency: "2mo"` y el
+  // servidor lo lee como un cambio de frecuencia: deshace lo que acordó por WhatsApp. Ahora
+  // que el bot cambia ritmos, es lo más probable. Mismo trato que las líneas de arriba: si
+  // lo que vio la pantalla ya no es lo que hay, se recarga antes de escribir nada.
+  // (Propuesta de Kiko tras revisar el camino del cobro.)
+  // Solo cuando la petición trae `frequency`: un cambio de sabor sin cadencia no la toca, y
+  // pararlo sería un 409 de más (revisión de Kiko del #150).
+  if (
+    preMutationSub &&
+    body.frequency !== undefined &&
+    body.currentFrequency &&
+    body.currentFrequency !== currentFrequency
+  ) {
+    log("subscription-changed-frequency", { fromBody: body.currentFrequency, live: currentFrequency });
+    throw new ApiHttpError(
+      409,
+      "subscription_changed",
+      "This subscription's frequency changed since the page loaded; reload and try again",
+    );
+  }
+
   // Cutoff against next billing attempt date (only when we have it from
   // the slow path; on fast path we trust the FE's cutoff state which is
   // already enforced at the QuickActionButton level via `disabled={withinCutoff}`).
@@ -697,13 +721,26 @@ const patchPlan = async (
     currentLines.length === 0 || !sameComposition(targetComposition, currentComposition);
 
   // GUARDA CIEGA = NO SE DECIDE PRECIO (2-oct-2026). Si la guarda de escrituras a medias no
-  // pudo leer su tabla (Supabase parpadeó), dejó pasar sin saber si esta foto está rota. Un
-  // cambio de solo frecuencia es seguro igual: replica las líneas vivas y no toca precios.
-  // Uno de composición no: decide precio sobre la foto, y si había una red ajena viva, el
-  // pre-armado de abajo además la pisaría. Esperar a que la base responda cuesta segundos.
-  if (ledger.guardBlind && compositionChanged) {
+  // pudo leer su tabla (Supabase parpadeó), dejó pasar sin saber si esta foto está rota. Uno
+  // de composición no puede seguir: decide precio sobre la foto, y si había una red ajena
+  // viva, el pre-armado de abajo además la pisaría. Esperar a que la base responda cuesta
+  // segundos.
+  //
+  // Y TAMPOCO UNO DE FRECUENCIA (16-oct-2026). No toca precios, pero Seal regenera el
+  // calendario desde el último intento pasado más el intervalo nuevo y se come los saltos
+  // que el cliente tenía por delante: lo único que sujeta la fecha es la intención de
+  // re-anclaje, que vive en esta misma base. Con Supabase sin responder, el cambio salía,
+  // la intención no se escribía y el cobro podía adelantarse (así cobró 16 días antes la
+  // 5145913, aunque aquella vez por la fecha natural). Vale para `fromNext` y para
+  // `preserve`: bajar a una frecuencia más corta también depende de la intención.
+  //
+  // 409 y no 503 (revisión de Kiko del #150): el App Proxy cambia cualquier 5xx por la
+  // página de la tienda y el front lo lee como gateway_timeout («puede que tu cambio se haya
+  // aplicado»), cuando aquí no se ha tocado nada. Con 409, como seal_busy, el texto llega.
+  const frequencyChanging = body.frequency !== undefined && body.frequency !== currentFrequency;
+  if (ledger.guardBlind && (compositionChanged || frequencyChanging)) {
     throw new ApiHttpError(
-      503,
+      409,
       "repair_net_unavailable",
       "Could not check for an unfinished change on this subscription; nothing was changed. Try again in a moment.",
     );
@@ -1019,7 +1056,8 @@ const patchPlan = async (
   // they ask for 4mo; 4-Nov − 2mo + 4mo = 4-Jan, a full cycle late, instead of the
   // 4-Dec a fresh screen shows. (Review of PR #122.) Since #148 `currentFrequency`
   // itself is read from Seal on both paths, so `liveFrequency` and `currentFrequency`
-  // agree; what still signals a stale tab is the FE's `body.currentFrequency`.
+  // agree, and since 16-oct a stale tab (`body.currentFrequency` ≠ live) is refused
+  // up front with `subscription_changed`, so it never reaches this sum.
   //
   // No pending attempt (Seal still regenerating after another change) means no
   // date to space from. Silently falling back to "preserve" would save the OLD
@@ -1029,11 +1067,6 @@ const patchPlan = async (
     ? normalizeFrequency(preMutationSub.delivery_interval)
     : currentFrequency;
   if (reanchorMode === "fromNext" && planChanged) {
-    // Desde el #148 `currentFrequency` ya sale de Seal en las dos rutas, así que la señal de
-    // pestaña vieja es lo que mandó el FRONT (body.currentFrequency) frente a la viva.
-    if (body.currentFrequency && body.currentFrequency !== liveFrequency) {
-      log("stale-current-frequency", { fromBody: body.currentFrequency, live: liveFrequency });
-    }
     if (!nextAttemptDate) {
       throw new ApiHttpError(
         409,
@@ -1331,6 +1364,51 @@ const patchPlan = async (
     });
   };
 
+  /** El suelo de `fromNext` cuando Seal no enseña el intervalo: la fecha que el cliente ya
+   *  tenía (`preserveYYYYMMDD`), nunca la espaciada. Ver el `!intervalVisible` de abajo. */
+  const armFloorAfterUnseenInterval = async () => {
+    if (!preserveYYYYMMDD || isWithinCutoff(`${preserveYYYYMMDD}T13:00:00Z`)) return;
+    let floorArmed: string | null = null;
+    try {
+      const { preserveDate } = await runWithoutRequestDeadline(() =>
+        writeReanchorIntent(ctx.customerId, sealSubscriptionId, preserveYYYYMMDD),
+      );
+      floorArmed = preserveDate;
+      intentArmedDate = preserveDate;
+      log("reanchor-floor-armed-unseen-interval", { preserveDate, spaced: effectivePreserveYYYYMMDD });
+    } catch (e) {
+      log("reanchor-floor-write-failed", { msg: e instanceof Error ? e.message : String(e) });
+    }
+    // A qué fecha hay que llevar el primer cobro si el intervalo acaba entrando: la prometida,
+    // salvo que ya hubiera una intención posterior (`writeReanchorIntent` nunca rebaja). Con
+    // una del 20-dic armada, pedir «subir al 4-dic» sería BAJARLO. (Revisión de Kiko del #150.)
+    const target =
+      floorArmed && effectivePreserveYYYYMMDD && floorArmed > effectivePreserveYYYYMMDD
+        ? floorArmed
+        : effectivePreserveYYYYMMDD;
+    after(() =>
+      runWithoutRequestDeadline(() =>
+        alertSlackNoticeAwaited({
+          title: "Espaciado sin confirmar: Seal no enseña el intervalo nuevo",
+          icon: ":warning:",
+          channel: "incidents",
+          fields: {
+            suscripcion: String(sealSubscriptionId),
+            cliente: ctx.customerId,
+            "intervalo pedido": expectedInterval,
+            "fecha que tenia": preserveYYYYMMDD,
+            "fecha prometida": effectivePreserveYYYYMMDD,
+            suelo: floorArmed ? `armado en ${floorArmed}` : "NO se pudo armar",
+            "que revisar":
+              `Mirar la sub en Seal en unos minutos y OTRA VEZ al cabo de unas horas, aunque el intervalo no haya entrado: ` +
+              `el suelo se da por cumplido a los 5 min y, si Seal aplica el intervalo más tarde, regenera sin ancla. ` +
+              `Si el intervalo entró, llevar el primer cobro al ${target ?? "?"}. Si no entró en ninguna de las dos, no hay que hacer nada.`,
+          },
+        }),
+      ),
+    );
+  };
+
   // ───── Step 1: change delivery_interval FIRST (if needed) ─────
   //
   // Send ONLY delivery_interval. We used to send billing_interval too,
@@ -1386,6 +1464,14 @@ const patchPlan = async (
       // sola); en "fromNext" no, porque esa fecha es posterior y movería el envío.
       log("interval-not-visible", { expectedInterval, accepted: intervalAccepted });
       if (reanchorMode === "preserve") await armReanchorAfterIntervalChange();
+      // En "fromNext" (16-oct-2026): la fecha espaciada no se puede armar (si el intervalo
+      // nunca entra movería el envío), pero sin NADA armado, si Seal aplica el intervalo
+      // tarde, regenera desde el último intento pasado y puede caer antes incluso de la
+      // fecha que ya tenía. Se arma esa como SUELO: si el intervalo no entra, el primer
+      // cobro ya está ahí y la intención converge sola; si entra, el re-anclaje no deja
+      // que caiga antes. Y se avisa, porque entonces lo prometido era la espaciada y una
+      // persona tiene que subirla a mano. (Propuesta de Kiko.)
+      if (reanchorMode === "fromNext") await armFloorAfterUnseenInterval();
       ledger.outcomeUnknown = true;
       throw new ApiHttpError(
         409,
@@ -1893,8 +1979,13 @@ const patchPlan = async (
   //
   // SIN RED NO HAY SALTO (2-oct-2026). Hasta hoy, si este upsert fallaba, la ruta lo
   // apuntaba en el log y seguía con el add+remove igual: justo el swap que la red existe
-  // para proteger, hecho sin ella. Ahora se para aquí, antes de tocar las líneas. Si el
-  // intervalo ya cambió, el reintento del cliente lo verá hecho y solo hará las líneas.
+  // para proteger, hecho sin ella. Ahora se para aquí, antes de tocar las líneas.
+  //
+  // Si el intervalo YA cambió (Step 1), no se puede decir «no hemos cambiado nada»: sale
+  // `variant_change_failed_after_interval`, que el front traduce como «hemos cambiado la
+  // frecuencia, pero no las cajas». Y el reintento tiene que ser desde una página
+  // recargada: desde el mismo overlay manda la frecuencia vieja y la guarda de pestaña vieja
+  // lo para con `subscription_changed`. (Revisión de Kiko del #150, 16-oct-2026.)
   //
   // TAMBIÉN CON SOLO EDITS (14-oct-2026): Seal también puede perder un `edit_items`, y sin
   // red la verificación lo veía pero nadie lo terminaba.
@@ -1903,9 +1994,11 @@ const patchPlan = async (
     if (!armed) {
       await reattachCarriedDiscounts();
       throw new ApiHttpError(
-        503,
-        "repair_net_unavailable",
-        "Could not record the repair intent; the lines were not touched. Try again in a moment.",
+        409,
+        planChanged ? "variant_change_failed_after_interval" : "repair_net_unavailable",
+        planChanged
+          ? "The frequency changed but the repair intent could not be recorded, so the lines were not touched"
+          : "Could not record the repair intent; the lines were not touched. Try again in a moment.",
       );
     }
   }
@@ -2315,12 +2408,15 @@ const patchPlan = async (
     let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
     if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
       // Only promise the preserved date if the intent that makes it real exists.
-      // Without it, return what Seal shows (usually nothing yet, mid-regeneration)
-      // and the FE falls back to its preview; a human is told to re-anchor by hand.
+      // Without it, promise NO date (16-oct-2026): what Seal shows mid-regeneration has
+      // nothing holding it and can land before the customer's date. The FE then says
+      // "plan updated" with no date, and a human is told to re-anchor by hand.
       const armedDate = await recordReanchorIntent(effectivePreserveYYYYMMDD, "verified");
       if (armedDate) {
         finalNextShipDate = `${armedDate}T13:00:00Z`; // optimistic; webhook/cron makes it real
         log("reanchor-intent-recorded", { effectivePreserveYYYYMMDD, armedDate, reanchorMode });
+      } else {
+        finalNextShipDate = null;
       }
     }
 

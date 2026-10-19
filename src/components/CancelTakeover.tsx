@@ -503,6 +503,15 @@ function Solucion({
         es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
       });
     // Rechazado antes de tocar nada (14-oct-2026): Seal seguía con un cambio reciente.
+    // La pantalla iba con una frecuencia o unas líneas que ya no son (16-oct-2026).
+    if (code === "subscription_changed")
+      return t({ en: "Your plan has changed since you opened this page. Reload it to see how it is now; if it won't let you change it, write to us.", es: "Tu plan ha cambiado desde que abriste esta página. Recárgala para ver cómo está ahora; si no te deja cambiarlo, escríbenos." });
+    if (code === "no_pending_attempt")
+      return t({ en: "We're still rescheduling your next deliveries. Try again in a couple of minutes; nothing has been changed.", es: "Estamos terminando de reorganizar tus próximos envíos. Inténtalo en un par de minutos; no hemos cambiado nada." });
+    if (code === "variant_change_failed_after_interval")
+      return t({ en: "We changed the frequency, but not the boxes. Reload the page and change the boxes again.", es: "Hemos cambiado la frecuencia, pero no las cajas. Recarga la página y vuelve a cambiar las cajas." });
+    if (code === "repair_net_unavailable")
+      return t({ en: "We couldn't check your plan just now, so we haven't changed anything. Try again in a moment.", es: "Ahora mismo no hemos podido comprobar tu plan, así que no hemos cambiado nada. Inténtalo de nuevo en un momento." });
     if (code === "seal_busy")
       return t({
         en: "We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed.",
@@ -907,7 +916,10 @@ function Solucion({
         <button
           type="button"
           disabled={busy || longer.length === 0}
-          onClick={() => applyPlan({ frequency: offerFreq, boxCount, reanchorMode: "fromNext" })}
+          // Solo la frecuencia, como la encuesta (16-oct-2026). Con el boxCount de la pestaña, si
+          // el cliente había bajado de 2 a 1 caja desde otro sitio, espaciar desde aquí le volvía
+          // a poner 2: el servidor lo leía como un cambio de composición. (Revisión de Kiko, #150.)
+          onClick={() => applyPlan({ frequency: offerFreq, reanchorMode: "fromNext" })}
           className="lp2-cta"
         >
           {busy ? <T en="Saving…" es="Guardando…" /> : <T en="Space out my deliveries" es="Espaciar mis entregas" />}

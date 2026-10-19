@@ -231,7 +231,10 @@ export function SkipOverlay({
         }),
       });
       onAdjusted(updated);
-      setAdjustedDate(updated.nextShipDate ?? offerNewShip?.toISOString() ?? null);
+      // Solo la fecha que el servidor deja sujeta (16-oct-2026). Si no viene, es que no pudo
+      // guardar la intención que la sostiene: prometer aquí la vista previa sería prometer algo
+      // que nadie va a cumplir. Sin fecha, la pantalla dice «Tu plan está actualizado».
+      setAdjustedDate(updated.nextShipDate ?? null);
       setStep("done-adjust");
       // Funnel "saved" event — fire and forget.
       api("/api/subscription/skip/track", {
@@ -267,6 +270,26 @@ export function SkipOverlay({
               ? t({
                   en: "We're finishing another update to your subscription. Wait a moment and try again.",
                   es: "Estamos terminando otro cambio en tu suscripción. Espera un momento y vuelve a intentarlo.",
+                })
+            : code === "subscription_changed"
+              ? t({
+                  en: "Your plan has changed since you opened this page. Reload it to see how it is now; if it won't let you change it, write to us.",
+                  es: "Tu plan ha cambiado desde que abriste esta página. Recárgala para ver cómo está ahora; si no te deja cambiarlo, escríbenos.",
+                })
+            : code === "no_pending_attempt"
+              ? t({
+                  en: "We're still rescheduling your next deliveries. Try again in a couple of minutes; nothing has been changed.",
+                  es: "Estamos terminando de reorganizar tus próximos envíos. Inténtalo en un par de minutos; no hemos cambiado nada.",
+                })
+            : code === "variant_change_failed_after_interval"
+              ? t({
+                  en: "We changed the frequency, but not the boxes. Reload the page and change the boxes again.",
+                  es: "Hemos cambiado la frecuencia, pero no las cajas. Recarga la página y vuelve a cambiar las cajas.",
+                })
+            : code === "repair_net_unavailable"
+              ? t({
+                  en: "We couldn't check your plan just now, so we haven't changed anything. Try again in a moment.",
+                  es: "Ahora mismo no hemos podido comprobar tu plan, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
                 })
             : code === "seal_busy"
               ? t({

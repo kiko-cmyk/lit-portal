@@ -559,7 +559,7 @@ function DoneStep({
   // Qué pasó al fallar (14-oct-2026). Antes cualquier error decía "no hemos podido
   // cambiarlo", que es falso cuando el resultado es desconocido (pudo entrar) y dejaba el
   // botón para mandarlo otra vez encima.
-  const [failed, setFailed] = useState<false | "unknown" | "busy" | "failed">(false);
+  const [failed, setFailed] = useState<false | "unknown" | "busy" | "changed" | "net" | "failed">(false);
   const [dismissed, setDismissed] = useState(false);
 
   const offer = result.cadenceOffer;
@@ -616,8 +616,17 @@ function DoneStep({
       setFailed(
         code === "gateway_timeout" || status === 504 || code === "change_unconfirmed" || code === "change_applying"
           ? "unknown"
-          : code === "seal_busy" || code === "plan_change_in_progress" || code === "change_in_progress"
+          : code === "seal_busy" ||
+              code === "plan_change_in_progress" ||
+              code === "change_in_progress" ||
+              code === "no_pending_attempt"
             ? "busy"
+            : // Con texto propio (16-oct-2026, revisión de Kiko): «busy» habla de un cambio
+              // anterior y «failed» manda a Mi plan, que en esta misma pestaña da otro 409.
+              code === "subscription_changed"
+              ? "changed"
+              : code === "repair_net_unavailable"
+                ? "net"
             : "failed",
       );
     } finally {
@@ -804,6 +813,16 @@ function DoneStep({
                 <T
                   en="We're still saving a previous change to your subscription. Try again in a couple of minutes; nothing has been changed."
                   es="Estamos terminando de guardar un cambio anterior en tu suscripción. Inténtalo en un par de minutos; no hemos cambiado nada."
+                />
+              ) : failed === "changed" ? (
+                <T
+                  en="Your plan has changed since you opened this page. Reload it to see how it is now; if it won't let you change it, write to us."
+                  es="Tu plan ha cambiado desde que abriste esta página. Recárgala para ver cómo está ahora; si no te deja cambiarlo, escríbenos."
+                />
+              ) : failed === "net" ? (
+                <T
+                  en="We couldn't check your plan just now, so we haven't changed anything. Try again in a moment."
+                  es="Ahora mismo no hemos podido comprobar tu plan, así que no hemos cambiado nada. Inténtalo de nuevo en un momento."
                 />
               ) : (
                 <T
