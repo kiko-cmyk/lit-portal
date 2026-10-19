@@ -176,8 +176,8 @@ export function PlanOverlay({
       } else if (err.code === "subscription_changed" || err.code === "mix_requires_explicit_intent") {
         setError(
           t({
-            en: "Your subscription changed since this page loaded. Reload and try again.",
-            es: "Tu suscripción cambió desde que se cargó esta página. Recárgala y vuelve a intentarlo.",
+            en: "Your plan has changed since you opened this page. Reload it to see how it is now; if it won't let you change it, write to us.",
+            es: "Tu plan ha cambiado desde que abriste esta página. Recárgala para ver cómo está ahora; si no te deja cambiarlo, escríbenos.",
           }),
         );
       } else if (err.code === "mix_price_mismatch") {
@@ -213,8 +213,8 @@ export function PlanOverlay({
         // medias y, desde hoy, eso también frena los cambios de frecuencia.
         setError(
           t({
-            en: "We couldn't check your subscription just now, so we haven't changed anything. Try again in a moment.",
-            es: "Ahora mismo no hemos podido comprobar tu suscripción, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
+            en: "We couldn't check your plan just now, so we haven't changed anything. Try again in a moment.",
+            es: "Ahora mismo no hemos podido comprobar tu plan, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
           }),
         );
       } else if (err.code === "seal_busy") {
@@ -246,8 +246,8 @@ export function PlanOverlay({
       } else if (err.code === "variant_change_failed_after_interval") {
         setError(
           t({
-            en: "We changed the frequency, but not the boxes. Try again in a few minutes to change them.",
-            es: "Hemos cambiado la frecuencia, pero no las cajas. Inténtalo de nuevo en unos minutos para cambiarlas.",
+            en: "We changed the frequency, but not the boxes. Reload the page and change the boxes again.",
+            es: "Hemos cambiado la frecuencia, pero no las cajas. Recarga la página y vuelve a cambiar las cajas.",
           }),
         );
       } else if (

@@ -273,18 +273,23 @@ export function SkipOverlay({
                 })
             : code === "subscription_changed"
               ? t({
-                  en: "Your subscription changed since this page loaded. Reload and try again.",
-                  es: "Tu suscripción ha cambiado desde que abriste esta página. Recárgala y vuelve a intentarlo.",
+                  en: "Your plan has changed since you opened this page. Reload it to see how it is now; if it won't let you change it, write to us.",
+                  es: "Tu plan ha cambiado desde que abriste esta página. Recárgala para ver cómo está ahora; si no te deja cambiarlo, escríbenos.",
                 })
             : code === "no_pending_attempt"
               ? t({
                   en: "We're still rescheduling your next deliveries. Try again in a couple of minutes; nothing has been changed.",
                   es: "Estamos terminando de reorganizar tus próximos envíos. Inténtalo en un par de minutos; no hemos cambiado nada.",
                 })
+            : code === "variant_change_failed_after_interval"
+              ? t({
+                  en: "We changed the frequency, but not the boxes. Reload the page and change the boxes again.",
+                  es: "Hemos cambiado la frecuencia, pero no las cajas. Recarga la página y vuelve a cambiar las cajas.",
+                })
             : code === "repair_net_unavailable"
               ? t({
-                  en: "We couldn't check your subscription just now, so we haven't changed anything. Try again in a moment.",
-                  es: "Ahora mismo no hemos podido comprobar tu suscripción, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
+                  en: "We couldn't check your plan just now, so we haven't changed anything. Try again in a moment.",
+                  es: "Ahora mismo no hemos podido comprobar tu plan, así que no hemos cambiado nada. Inténtalo de nuevo en un momento.",
                 })
             : code === "seal_busy"
               ? t({

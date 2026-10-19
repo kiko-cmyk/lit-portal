@@ -430,7 +430,14 @@ const patchPlan = async (
   // que el bot cambia ritmos, es lo más probable. Mismo trato que las líneas de arriba: si
   // lo que vio la pantalla ya no es lo que hay, se recarga antes de escribir nada.
   // (Propuesta de Kiko tras revisar el camino del cobro.)
-  if (preMutationSub && body.currentFrequency && body.currentFrequency !== currentFrequency) {
+  // Solo cuando la petición trae `frequency`: un cambio de sabor sin cadencia no la toca, y
+  // pararlo sería un 409 de más (revisión de Kiko del #150).
+  if (
+    preMutationSub &&
+    body.frequency !== undefined &&
+    body.currentFrequency &&
+    body.currentFrequency !== currentFrequency
+  ) {
     log("subscription-changed-frequency", { fromBody: body.currentFrequency, live: currentFrequency });
     throw new ApiHttpError(
       409,
@@ -726,10 +733,14 @@ const patchPlan = async (
   // la intención no se escribía y el cobro podía adelantarse (así cobró 16 días antes la
   // 5145913, aunque aquella vez por la fecha natural). Vale para `fromNext` y para
   // `preserve`: bajar a una frecuencia más corta también depende de la intención.
+  //
+  // 409 y no 503 (revisión de Kiko del #150): el App Proxy cambia cualquier 5xx por la
+  // página de la tienda y el front lo lee como gateway_timeout («puede que tu cambio se haya
+  // aplicado»), cuando aquí no se ha tocado nada. Con 409, como seal_busy, el texto llega.
   const frequencyChanging = body.frequency !== undefined && body.frequency !== currentFrequency;
   if (ledger.guardBlind && (compositionChanged || frequencyChanging)) {
     throw new ApiHttpError(
-      503,
+      409,
       "repair_net_unavailable",
       "Could not check for an unfinished change on this subscription; nothing was changed. Try again in a moment.",
     );
@@ -1368,6 +1379,13 @@ const patchPlan = async (
     } catch (e) {
       log("reanchor-floor-write-failed", { msg: e instanceof Error ? e.message : String(e) });
     }
+    // A qué fecha hay que llevar el primer cobro si el intervalo acaba entrando: la prometida,
+    // salvo que ya hubiera una intención posterior (`writeReanchorIntent` nunca rebaja). Con
+    // una del 20-dic armada, pedir «subir al 4-dic» sería BAJARLO. (Revisión de Kiko del #150.)
+    const target =
+      floorArmed && effectivePreserveYYYYMMDD && floorArmed > effectivePreserveYYYYMMDD
+        ? floorArmed
+        : effectivePreserveYYYYMMDD;
     after(() =>
       runWithoutRequestDeadline(() =>
         alertSlackNoticeAwaited({
@@ -1382,7 +1400,9 @@ const patchPlan = async (
             "fecha prometida": effectivePreserveYYYYMMDD,
             suelo: floorArmed ? `armado en ${floorArmed}` : "NO se pudo armar",
             "que revisar":
-              "En unos minutos mirar la sub en Seal. Si el intervalo entro, subir el primer cobro a la fecha prometida. Si no entro, no hay que hacer nada.",
+              `Mirar la sub en Seal en unos minutos y OTRA VEZ al cabo de unas horas, aunque el intervalo no haya entrado: ` +
+              `el suelo se da por cumplido a los 5 min y, si Seal aplica el intervalo más tarde, regenera sin ancla. ` +
+              `Si el intervalo entró, llevar el primer cobro al ${target ?? "?"}. Si no entró en ninguna de las dos, no hay que hacer nada.`,
           },
         }),
       ),
@@ -1959,8 +1979,13 @@ const patchPlan = async (
   //
   // SIN RED NO HAY SALTO (2-oct-2026). Hasta hoy, si este upsert fallaba, la ruta lo
   // apuntaba en el log y seguía con el add+remove igual: justo el swap que la red existe
-  // para proteger, hecho sin ella. Ahora se para aquí, antes de tocar las líneas. Si el
-  // intervalo ya cambió, el reintento del cliente lo verá hecho y solo hará las líneas.
+  // para proteger, hecho sin ella. Ahora se para aquí, antes de tocar las líneas.
+  //
+  // Si el intervalo YA cambió (Step 1), no se puede decir «no hemos cambiado nada»: sale
+  // `variant_change_failed_after_interval`, que el front traduce como «hemos cambiado la
+  // frecuencia, pero no las cajas». Y el reintento tiene que ser desde una página
+  // recargada: desde el mismo overlay manda la frecuencia vieja y la guarda de pestaña vieja
+  // lo para con `subscription_changed`. (Revisión de Kiko del #150, 16-oct-2026.)
   //
   // TAMBIÉN CON SOLO EDITS (14-oct-2026): Seal también puede perder un `edit_items`, y sin
   // red la verificación lo veía pero nadie lo terminaba.
@@ -1969,9 +1994,11 @@ const patchPlan = async (
     if (!armed) {
       await reattachCarriedDiscounts();
       throw new ApiHttpError(
-        503,
-        "repair_net_unavailable",
-        "Could not record the repair intent; the lines were not touched. Try again in a moment.",
+        409,
+        planChanged ? "variant_change_failed_after_interval" : "repair_net_unavailable",
+        planChanged
+          ? "The frequency changed but the repair intent could not be recorded, so the lines were not touched"
+          : "Could not record the repair intent; the lines were not touched. Try again in a moment.",
       );
     }
   }
@@ -2381,12 +2408,15 @@ const patchPlan = async (
     let finalNextShipDate: string | null = getNextBillingAttempt(verified)?.date ?? null;
     if (planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff(`${effectivePreserveYYYYMMDD}T13:00:00Z`)) {
       // Only promise the preserved date if the intent that makes it real exists.
-      // Without it, return what Seal shows (usually nothing yet, mid-regeneration)
-      // and the FE falls back to its preview; a human is told to re-anchor by hand.
+      // Without it, promise NO date (16-oct-2026): what Seal shows mid-regeneration has
+      // nothing holding it and can land before the customer's date. The FE then says
+      // "plan updated" with no date, and a human is told to re-anchor by hand.
       const armedDate = await recordReanchorIntent(effectivePreserveYYYYMMDD, "verified");
       if (armedDate) {
         finalNextShipDate = `${armedDate}T13:00:00Z`; // optimistic; webhook/cron makes it real
         log("reanchor-intent-recorded", { effectivePreserveYYYYMMDD, armedDate, reanchorMode });
+      } else {
+        finalNextShipDate = null;
       }
     }
 
