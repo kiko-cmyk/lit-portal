@@ -65,6 +65,29 @@ export function flavourLabel(composition: FlavorComposition[]): string {
 }
 
 /**
+ * ¿Cambia también el sabor? Los sabores y su reparto, NO las cajas: de 1 a 2 cajas de
+ * Watermelon no es cambiar de sabor, ni subir una mezcla de 2+1 a 4+2. Hasta el 19-oct
+ * se comparaba la composición entera y un cambio de cajas salía como cambio de sabor
+ * (visto en la prueba real: «Watermelon → Watermelon» con `flavourChanged: true`).
+ */
+export function flavourChanged(before: FlavorComposition[], after: FlavorComposition[]): boolean {
+  const shares = (c: FlavorComposition[]) => {
+    const boxes = new Map<string, number>();
+    for (const x of c) boxes.set(x.flavor, (boxes.get(x.flavor) ?? 0) + x.boxes);
+    const total = [...boxes.values()].reduce((s, n) => s + n, 0) || 1;
+    return new Map([...boxes].map(([flavor, n]) => [flavor, n / total]));
+  };
+  const a = shares(before);
+  const b = shares(after);
+  if (a.size !== b.size) return true;
+  for (const [flavor, share] of a) {
+    const other = b.get(flavor);
+    if (other === undefined || Math.abs(other - share) > 1e-9) return true;
+  }
+  return false;
+}
+
+/**
  * Las pantallas que usan la ruta de plan, para poder filtrarlas en Klaviyo.
  *
  * El `source` llega del cuerpo de la petición, así que solo pasan los valores
@@ -108,7 +131,7 @@ export function planChangeProps(
           previousFrequency: before.frequency,
           // De regalo para el email de plan, por si quiere decir que cambió también el sabor.
           ...flavours,
-          flavourChanged: !sameComposition(before.composition, after.composition),
+          flavourChanged: flavourChanged(before.composition, after.composition),
         }
       : flavours),
     ...shipDateProps(ctx.nextShipDate),

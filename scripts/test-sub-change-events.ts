@@ -118,6 +118,24 @@ async function main() {
     "El email traduce el código («cada 2 meses»): nada de «2 months».",
   );
   check(
+    "plan: más cajas del mismo sabor NO es cambio de sabor",
+    ev.planChangeProps("plan", s("1mo", W(1)), s("1mo", W(2)), {
+      nextShipDate: SEAL_DATE,
+      sealSubscriptionId: 1,
+      source: "portal_plan",
+    }).flavourChanged === false,
+    "Prueba real del 19-oct: de 1 a 2 cajas de Watermelon salía con flavourChanged: true.",
+  );
+  check(
+    "flavourChanged: los sabores y su reparto, no las cajas",
+    ev.flavourChanged(MIX(2, 1), MIX(4, 2)) === false &&
+      ev.flavourChanged(L(2), W(2)) === true &&
+      ev.flavourChanged(MIX(2, 1), MIX(1, 2)) === true &&
+      ev.flavourChanged(L(3), MIX(2, 1)) === true &&
+      ev.flavourChanged(L(1), L(3)) === false,
+    "Una mezcla 2+1 que pasa a 4+2 sigue siendo el mismo reparto; 2+1 → 1+2 no.",
+  );
+  check(
     "fecha: ISO de Seal tal cual y su etiqueta",
     planProps.nextShipDate === SEAL_DATE && planProps.nextShipDateLabel === "12 de noviembre",
     `nextShipDate=${planProps.nextShipDate} label=${planProps.nextShipDateLabel}`,
