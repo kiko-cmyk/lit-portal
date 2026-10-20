@@ -115,7 +115,6 @@ Klaviyo se queda con uno.
 | `subscription_address_updated` (`VmJJNy`) | `PATCH /api/subscription/address` y `POST /api/internal/subscription/address` (bot, solo modo `write`), con una dirección distinta de la que había (sin contar mayúsculas, espacios ni la provincia, que sale del CP) y ya visible en Seal | `address1`, `address2` (`""` si no hay), `city`, `zip`, `province`, `country`, `countryCode`, `firstName`, `lastName`, `nextShipDate`, `nextShipDateLabel`, `sealSubscriptionId`, `source` (`portal` \| `whatsapp_bot`) |
 | `subscription_plan_updated` (`TuFAWF`) | `PATCH /api/subscription/plan` cuando cambian las cajas o la frecuencia (aunque cambie también el sabor), y el bot al alargar la frecuencia (`/api/internal/subscription/frequency`) | `boxes` y `previousBoxes` (**número**), `frequency` y `previousFrequency` (código: `15d`, `1mo`, `45d`, `2mo`…`6mo`), `newFlavour`, `previousFlavour`, `flavourChanged`, `nextShipDate`, `nextShipDateLabel`, `sealSubscriptionId`, `source` |
 | `subscription_flavor_updated` (`SjgL4P`) | `PATCH /api/subscription/plan` cuando solo cambia el sabor o su reparto, con las mismas cajas y frecuencia | `newFlavour` y `previousFlavour` («Salty Watermelon»; una mezcla, «2× Lemon · 1× Watermelon»), `nextShipDate`, `nextShipDateLabel`, `sealSubscriptionId`, `source` |
-| `pickup_point_reminder` (`WYU7Cf`) | **Sin emisor todavía**: falta una fuente de estados del transportista (Shopify no tiene eventos de envío) | previstas: `orderNumber`, `trackingNumber`, `trackingUrl`, `pickupName`, `pickupAddress`, `daysAtPickup` (**número**) |
 
 - `source` del plan: `portal_plan` (pantallas de plan y sabor), `skip_overlay`,
   `cancel_takeover`, `profile_survey` y `whatsapp_bot`.
@@ -129,6 +128,21 @@ Klaviyo se queda con uno.
   `mix-repair-drain`), minutos después en el peor caso. Si no llega a confirmarse, no
   hay aviso.
 - No avisan los cambios que soporte hace a mano en Seal (no pasan por estas rutas).
+
+### 1.e Pedido sin recoger en el punto de recogida (2026-10-20)
+
+Email SUB-08 de CRM, en `lib/pickup-reminder.ts`, desde el cron diario
+`/api/cron/pickup-reminder`. Vale para cualquier pedido de la tarifa «GLS Punto de
+Recogida», de suscripción o de compra suelta. La llegada al punto y la recogida salen del
+seguimiento de Sendcloud (`SENDCLOUD_PUBLIC_KEY`, `SENDCLOUD_SECRET_KEY`); el nombre y la
+dirección del punto, de la dirección de envío del pedido. Un evento por pedido
+(`uniqueId` `pickup:{orderId}` y fila en `email_logs` con `template_id = 'pickup_reminder'`).
+Solo se envía con `PICKUP_REMINDER` en `on` (o en `allowlist`, a los clientes de la lista):
+apagado, el cron devuelve lo que mandaría.
+
+| Event name (metric) | Cuándo se dispara | Properties propias |
+|---|---|---|
+| `pickup_point_reminder` (`WYU7Cf`) | El paquete lleva 3 días naturales (hora de Madrid) en el punto sin recoger, ni devuelto, ni con `deliveredAt` en Shopify; hasta 10 días, si el cron lo ve tarde | `orderNumber` («#12345»), `trackingNumber`, `trackingUrl` (si Shopify la tiene), `pickupName` (sin el «PS » de GLS), `pickupAddress` («Calle Mayor 5, 28013 Madrid»), `daysAtPickup` (**número**, siempre 3), `pickupArrivedAt` (ISO), `locale` |
 
 ---
 

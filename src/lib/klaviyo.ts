@@ -107,10 +107,9 @@ export type KlaviyoEvent =
   | "subscription_address_updated"
   | "subscription_flavor_updated"
   | "subscription_plan_updated"
-  // Pedido que lleva 3 días en un punto de recogida sin recoger (SUB-08). SIN EMISOR
-  // todavía: no hay fuente de estados del transportista (Shopify no tiene ningún
-  // evento de envío). Existe para que el cron que lo emita no tenga que tocar esto.
-  // `daysAtPickup` tiene que ir como NÚMERO: el flow lo filtra así.
+  // Pedido que lleva 3 días en un punto de recogida sin recoger (SUB-08, 2026-10-20).
+  // Lo emite el cron diario `pickup-reminder` (lib/pickup-reminder) con el seguimiento
+  // de Sendcloud, una vez por pedido. `daysAtPickup` va como NÚMERO: el flow lo filtra así.
   | "pickup_point_reminder";
 
 // Transient-failure retry budget. Klaviyo throttles /events/ (429) and can 5xx
