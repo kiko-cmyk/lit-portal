@@ -14,6 +14,7 @@ import {
 } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { assertNoPendingLineRepair } from "@/lib/line-repair-runner";
+import { addPromoBottleBeforeCharge, removePromoBottleAfterRejection } from "@/lib/promo-bottle";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import { pickRequestedSub, requestedSubIdFrom } from "@/lib/sub-resolve";
@@ -156,6 +157,14 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     preChargeDate,
   });
 
+  // La botella de la promo, ANTES del cobro (20-oct-2026): el pedido del Adelantar lo
+  // crea Seal desde la sub y no pasa por el carrito, así que solo entra si ya está en la
+  // sub. Nunca lanza; sin botella el Adelantar sigue igual. Ver lib/promo-bottle.ts.
+  const promoBottle = await addPromoBottleBeforeCharge(sub, {
+    customerId: ctx.customerId,
+    path: "/api/subscription/charge-now",
+  });
+
   // Charge now + reset the schedule so the cadence re-anchors on today.
   try {
     await seal.chargeNow(sub.id, { resetSchedule: true });
@@ -173,6 +182,14 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     const explicitRejection =
       alreadyScheduled || (err instanceof SealApiError && err.status >= 200 && err.status < 500);
     let syncOwned = explicitRejection;
+    // Cobro rechazado: la botella recién puesta saldría gratis en la próxima renovación.
+    // Con «ya hay un cobro en curso» se queda, porque ese cobro sí va a salir.
+    if (explicitRejection && !alreadyScheduled) {
+      await removePromoBottleAfterRejection(sub.id, promoBottle, {
+        customerId: ctx.customerId,
+        path: "/api/subscription/charge-now",
+      });
+    }
     if (explicitRejection && intentId !== null) {
       // Se marca la fila antes de mover nada, para que el rescate asíncrono no
       // mueva el mismo calendario a la vez; si el webhook ya la había reclamado,
@@ -286,10 +303,12 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
     .trackEvent("subscription_charge_now", email, {
       newNextShipDate,
       sealSubscriptionId: String(sub.id),
+      // Si el pedido lleva la botella de la promo (puesta ahora o ya a mano en la sub).
+      promoBottle: promoBottle.kind === "added" || promoBottle.kind === "added_unseen" || promoBottle.kind === "already",
     })
     .catch((err) => console.warn("[charge-now] klaviyo event failed:", err));
 
-  return { charged: true, newNextShipDate };
+  return { charged: true, newNextShipDate, promoBottle: promoBottle.kind };
 });
 
 /**

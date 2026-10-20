@@ -163,6 +163,12 @@ export function ChargeNowOverlay({
               es="Vamos a procesar tu pedido. Tu nuevo calendario de envíos se recalculará en unos instantes."
             />
           </p>
+          {/* Promo de la botella (20-oct-2026): solo si la botella ya estaba en la sub antes del cobro. */}
+          {(done.promoBottle === "added" || done.promoBottle === "already") && (
+            <div className="lp2-notice mt-4">
+              <T en="Your free bottle goes in this order too." es="Y la botella de regalo va en este pedido." />
+            </div>
+          )}
           <button type="button" onClick={onClose} className="lp2-cta lp2-cta--still mt-7">
             <T en="Back to LIT" es="Volver a LIT" />
           </button>

@@ -178,6 +178,8 @@ export interface ChargeNowResponse {
   // Estimada (hoy + un ciclo). El calendario real lo reconcilia el re-poll
   // tras la regeneración asíncrona de billing_attempts en Seal.
   newNextShipDate: string | null;
+  /** La botella de la promo (lib/promo-bottle.ts): si se puso en la sub antes del cobro. */
+  promoBottle?: "inactive" | "already" | "added" | "added_unseen" | "failed";
 }
 
 export interface CancelStep1Response {
