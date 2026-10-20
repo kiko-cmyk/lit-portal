@@ -154,9 +154,8 @@ export function referralRewardsScope(): { mode: "off" } | { mode: "on" } | { mod
  * (SUB-08, lib/pickup-reminder.ts, 2026-10-20).
  *
  * Gatea solo el ENVÍO. Con `off`, que es el valor por defecto, el cron hace todo lo
- * demás (lee Shopify y Sendcloud y decide) y devuelve lo que mandaría sin mandar
- * nada: así se compara en producción lo que dice Sendcloud con el seguimiento de GLS
- * antes de que salga ningún email. Con `allowlist` solo se manda a los clientes de
+ * demás (lee Shopify y Hive y decide) y publica en Slack lo que mandaría sin mandar
+ * nada: así se ve en producción qué saldría antes de que salga ningún email. Con `allowlist` solo se manda a los clientes de
  * `PICKUP_REMINDER_ALLOWLIST` (ids de cliente de Shopify), para la prueba interna.
  */
 export function pickupReminderScope(): { mode: "off" } | { mode: "on" } | { mode: "allowlist"; ids: string[] } {

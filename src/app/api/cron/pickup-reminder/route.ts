@@ -10,7 +10,7 @@ import { runPickupReminders } from "@/lib/pickup-reminder";
  * Diario (2026-10-20). Avisa a quien lleva 3 días sin recoger su pedido en un punto
  * de GLS (evento `pickup_point_reminder`, email SUB-08). Ver lib/pickup-reminder.ts.
  *
- * Sin claves de Sendcloud no hace nada. Con PICKUP_REMINDER apagado lo decide todo y
+ * Sin HIVE_API_KEY no hace nada. Con PICKUP_REMINDER apagado lo decide todo y
  * devuelve lo que mandaría, sin mandarlo. `?dry_run=1` no escribe nada en Klaviyo ni
  * en Supabase, con el flag como esté.
  */

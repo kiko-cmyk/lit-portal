@@ -11,31 +11,34 @@
  *   recurrentes y de compras sueltas por igual.
  * - El punto: la dirección de envío del pedido, que es la del punto (`company` =
  *   «PS COPISTERIA BCN», «GLS Locker 24/7 …»). Es el mismo nombre que enseña GLS.
- * - Llegada y recogida: el seguimiento de Sendcloud (lib/sendcloud.ts). Shopify no
- *   tiene la llegada, y su `deliveredAt` (que es la recogida) falta a veces; aun
- *   así, si lo tiene, el pedido ya está recogido y no se avisa.
+ * - Si espera en el punto: Hive (lib/hive.ts), con `delivery_status` =
+ *   `awaiting_customer_pickup`. LIT no tiene cuenta propia de Sendcloud ni de GLS:
+ *   las etiquetas las saca Hive.
  *
- * ── Lo que se comprobó antes de escribir esto (20-oct) ──
- * En el seguimiento de GLS de 32 pedidos de la tarifa desde el 21-sep, el transportista
- * distingue siempre «Deposited in PS …» (llega al punto) de «Delivered» (lo recoge el
- * cliente). De los 22 que llegaron al punto, uno tardó 4 días en recogerse y dos
- * esperaban con 3 y 4 días. Lo que falta por ver con las claves es cómo traduce
- * Sendcloud esos dos estados a `phase`; se espera `pup` y `delivered`. Si Sendcloud
- * no diera `pup`, esto no manda nada: sin llegada al punto no hay aviso. Por eso el
- * envío va detrás de PICKUP_REMINDER (lib/flags.ts), apagado por defecto: el cron
- * dice lo que mandaría y se compara con GLS antes de encenderlo.
+ * ── Lo que se comprobó contra el seguimiento de GLS (20-oct) ──
+ * 33 envíos de la tarifa desde el 21-sep. Hive acierta con todos los que esperan,
+ * pero a veces no se entera de la recogida: 3 de los 18 recogidos seguían como
+ * `awaiting_customer_pickup` (los mismos 3 sin `deliveredAt` en Shopify, que lo
+ * escribe Hive). No hay otra fuente para cazarlos, así que el email lleva «Si ya lo
+ * has recogido, ignora este mensaje» (Juan, 20-oct). Los que llevan colgados más de
+ * MAX_DAYS no se avisan: a esas alturas, o se recogió o el punto ya lo devolvió.
  *
  * ── Días ──
- * Días naturales de Madrid entre la llegada al punto y hoy. Un paquete que llega el
- * jueves a las 11:00 cuenta 3 días el domingo, sea la hora que sea, y el cron diario
- * lo avisa esa mañana. Si el cron lo detecta más tarde, se manda igual con 3 (el
- * flow solo arranca con 3), salvo que pasen de MAX_DAYS: a esas alturas el punto ya
- * lo está devolviendo y el email llegaría tarde.
+ * Hive no guarda la hora de llegada al punto, solo `updated_at`, la de su última
+ * actualización: en los 4 que esperaban de verdad el 20-oct caía entre media hora y
+ * dos horas y media después de la llegada que da GLS, el mismo día. Si Hive volviera a tocar el envío sin cambiar
+ * de estado, la cuenta empezaría de nuevo: el aviso saldría más tarde, nunca antes.
+ * Se cuentan días naturales de Madrid: un paquete que llega el jueves cuenta 3 días
+ * el domingo, sea la hora que sea, y el cron diario lo avisa esa mañana. Si el cron lo
+ * ve más tarde, se manda igual con 3, que es lo único con lo que arranca el flow.
+ *
+ * El envío va detrás de PICKUP_REMINDER (lib/flags.ts), apagado por defecto: apagado,
+ * el cron dice en Slack lo que mandaría.
  */
 
 import { klaviyo } from "@/lib/klaviyo";
 import { pickupReminderScope } from "@/lib/flags";
-import { getSendcloudTracking, sendcloudConfigured, type SendcloudTrackingEvent } from "@/lib/sendcloud";
+import { getHiveShipmentsByOrderIds, hiveConfigured, type HiveShipment } from "@/lib/hive";
 import { shopifyAdmin } from "@/lib/shopify-admin";
 import { customerLocale } from "@/lib/sub-event-props";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -56,56 +59,33 @@ export function isPickupShipping(titles: Array<string | null | undefined>): bool
   return titles.some((t) => /punto de recogida/i.test(t ?? ""));
 }
 
+/**
+ * ¿Este envío de Hive va a un punto de GLS? Si Hive mandó el pedido con otro
+ * transportista (pasó con #11596, por CTT), el punto de la dirección no es donde está
+ * el paquete, y el email diría un sitio que no es.
+ */
+export function isGlsPickupShipment(s: Pick<HiveShipment, "shipment_provider" | "shipping_method">): boolean {
+  return /parcel\s*point/i.test(s.shipping_method ?? "") || /^gls/i.test(s.shipment_provider ?? "");
+}
+
 export type PickupState =
   | { state: "waiting"; arrivedAt: string }
-  | { state: "collected"; arrivedAt: string | null; collectedAt: string }
+  | { state: "collected"; collectedAt: string }
   | { state: "returned"; at: string }
   | { state: "not_at_point" };
 
-/** El paquete se ha movido: sale del punto. Si vuelve a `pup`, la espera empieza de nuevo. */
-const MOVING_PHASES = new Set(["dropped", "accepted", "sorted", "in_transit", "customs", "in_delivery", "attempted"]);
-/** Ya no se puede recoger: devuelto, rechazado o anulado. */
-const GONE_EXCEPTIONS = new Set([
-  "dropoff_expiration",
-  "returned_sender",
-  "refused",
-  "cancelled",
-  "cancelled_upstream",
-]);
-
-/**
- * Dónde está el paquete según los eventos de Sendcloud, en el orden en que pasaron.
- *
- * Las excepciones que no lo sacan del punto no cambian nada: `off_radar` («sin
- * novedades en días») es justo lo que pasa mientras espera, y `pup_expiration`
- * («se acaba el plazo de recogida») dice que sigue allí.
- */
-export function pickupState(events: SendcloudTrackingEvent[]): PickupState {
-  const sorted = events
-    .filter((e) => e && e.event_type !== "claim" && typeof e.event_at === "string")
-    .slice()
-    .sort((a, b) => Date.parse(a.event_at) - Date.parse(b.event_at));
-  let state: PickupState = { state: "not_at_point" };
-  let arrivedAt: string | null = null;
-  for (const e of sorted) {
-    const phase = (e.phase ?? "").toLowerCase();
-    const exception = (e.exception ?? "").toLowerCase();
-    if (phase === "delivered" || phase === "delivery_forced") {
-      state = { state: "collected", arrivedAt, collectedAt: e.event_at };
-    } else if (GONE_EXCEPTIONS.has(exception)) {
-      state = { state: "returned", at: e.event_at };
-      arrivedAt = null;
-    } else if (phase === "pup" || exception === "pup_expiration") {
-      if (state.state !== "waiting") {
-        arrivedAt = e.event_at;
-        state = { state: "waiting", arrivedAt };
-      }
-    } else if (MOVING_PHASES.has(phase)) {
-      state = { state: "not_at_point" };
-      arrivedAt = null;
-    }
+/** Dónde está el paquete según Hive. */
+export function pickupState(
+  s: Pick<HiveShipment, "delivery_status" | "delivered_at" | "updated_at">,
+): PickupState {
+  if (s.delivered_at || s.delivery_status === "delivered") {
+    return { state: "collected", collectedAt: s.delivered_at ?? s.updated_at };
   }
-  return state;
+  if (s.delivery_status === "returned_to_sender" || s.delivery_status === "return_initiated") {
+    return { state: "returned", at: s.updated_at };
+  }
+  if (s.delivery_status === "awaiting_customer_pickup") return { state: "waiting", arrivedAt: s.updated_at };
+  return { state: "not_at_point" };
 }
 
 const madridDay = new Intl.DateTimeFormat("en-CA", {
@@ -229,10 +209,9 @@ async function listPickupOrders(now: number): Promise<ShopifyPickupOrder[]> {
 }
 
 export interface PickupReminderTally {
-  sendcloud: boolean;
+  hive: boolean;
   mode: "off" | "allowlist" | "on";
   orders: number;
-  checked: number;
   notified: number;
   skipped: Record<string, number>;
   failed: number;
@@ -251,20 +230,20 @@ export async function runPickupReminders(opts: { dryRun?: boolean; now?: number 
   const now = opts.now ?? Date.now();
   const scope = pickupReminderScope();
   const tally: PickupReminderTally = {
-    sendcloud: sendcloudConfigured(),
+    hive: hiveConfigured(),
     mode: scope.mode,
     orders: 0,
-    checked: 0,
     notified: 0,
     skipped: {},
     failed: 0,
     preview: [],
   };
   const skip = (why: string) => (tally.skipped[why] = (tally.skipped[why] ?? 0) + 1);
-  if (!tally.sendcloud) return tally;
+  if (!tally.hive) return tally;
 
   const orders = await listPickupOrders(now);
   tally.orders = orders.length;
+  if (orders.length === 0) return tally;
 
   // Los ya avisados. Si esta lectura falla se para todo: un set vacío volvería a
   // avisar a todos (el uniqueId de Klaviyo frenaría el email, pero no la fila).
@@ -279,67 +258,68 @@ export async function runPickupReminders(opts: { dryRun?: boolean; now?: number 
     ((sent ?? []) as Array<{ metadata: { orderId?: string } | null }>).map((r) => String(r.metadata?.orderId ?? "")),
   );
 
-  for (const order of orders) {
-    if (done.has(order.legacyResourceId)) {
+  // Una sola consulta a Hive para todos los pendientes (50 pedidos por petición).
+  const pending = orders.filter((o) => {
+    if (done.has(o.legacyResourceId)) {
       skip("ya_avisado");
-      continue;
+      return false;
     }
-    // Un paquete por pedido en la práctica; si hubiera varios, basta uno esperando.
-    const shipped = order.fulfillments.filter((f) => f.status === "SUCCESS" && f.trackingInfo[0]?.number);
-    if (shipped.length === 0) {
-      skip(order.fulfillments.length === 0 ? "sin_enviar" : "sin_seguimiento");
-      continue;
+    if (o.fulfillments.length === 0) {
+      skip("sin_enviar");
+      return false;
     }
-    // Con `deliveredAt` en Shopify ya está recogido: ni se pregunta a Sendcloud.
-    const notCollected = shipped.filter((f) => !f.deliveredAt);
-    if (notCollected.length === 0) {
-      skip("recogido_segun_shopify");
-      continue;
-    }
-    // Antes de 3 días desde que sale del almacén no puede llevar 3 en el punto.
-    const shipments = notCollected.filter((f) => Date.parse(f.createdAt) <= now - REMIND_AFTER_DAYS * DAY);
+    return true;
+  });
+  if (pending.length === 0) return tally;
+  const byOrder = new Map<string, HiveShipment[]>();
+  for (const s of await getHiveShipmentsByOrderIds(pending.map((o) => o.legacyResourceId))) {
+    const list = byOrder.get(String(s.merchant_order_id)) ?? [];
+    list.push(s);
+    byOrder.set(String(s.merchant_order_id), list);
+  }
+
+  let processed = 0;
+  for (const order of pending) {
+    const shipments = (byOrder.get(order.legacyResourceId) ?? []).filter(
+      (s) => s.status === "shipped" && s.tracking_number,
+    );
     if (shipments.length === 0) {
-      skip("enviado_hace_poco");
-      continue;
-    }
-    if (tally.checked >= MAX_PER_RUN) {
-      skip("tope_por_tirada");
+      skip("no_esta_en_hive");
       continue;
     }
 
+    // Un paquete por pedido en la práctica; si hubiera varios, basta uno esperando.
     let hit: { arrivedAt: string; days: number; trackingNumber: string; trackingUrl: string | null } | null = null;
-    let why = "sin_seguimiento";
-    let broke = false;
-    for (const f of shipments) {
-      const trackingNumber = f.trackingInfo[0]!.number!;
-      tally.checked++;
-      let tracking;
-      try {
-        tracking = await getSendcloudTracking(trackingNumber);
-      } catch (err) {
-        console.warn("[pickup-reminder] Sendcloud falló; mañana se reintenta", {
-          order: order.name,
-          msg: err instanceof Error ? err.message : String(err),
-        });
-        broke = true;
-        continue;
-      }
-      if (!tracking) {
-        why = "no_es_de_sendcloud";
-        continue;
-      }
-      const decision = decideReminder({ state: pickupState(tracking.events), shopifyDeliveredAt: f.deliveredAt, now });
+    let why = "no_es_de_gls";
+    for (const s of shipments) {
+      if (!isGlsPickupShipment(s)) continue;
+      const fulfillment = order.fulfillments.find((f) => f.trackingInfo.some((t) => t.number === s.tracking_number));
+      const decision = decideReminder({
+        state: pickupState(s),
+        shopifyDeliveredAt: fulfillment?.deliveredAt ?? null,
+        now,
+      });
       if (decision.send) {
-        hit = { arrivedAt: decision.arrivedAt, days: decision.days, trackingNumber, trackingUrl: f.trackingInfo[0]?.url ?? null };
+        hit = {
+          arrivedAt: decision.arrivedAt,
+          days: decision.days,
+          trackingNumber: s.tracking_number!,
+          trackingUrl:
+            fulfillment?.trackingInfo.find((t) => t.number === s.tracking_number)?.url ?? s.tracking_url ?? null,
+        };
         break;
       }
       why = decision.why;
     }
     if (!hit) {
-      if (broke) tally.failed++;
-      else skip(why);
+      skip(why);
       continue;
     }
+    if (processed >= MAX_PER_RUN) {
+      skip("tope_por_tirada");
+      continue;
+    }
+    processed++;
 
     const addr = order.shippingAddress;
     const name = pickupName(addr?.company);

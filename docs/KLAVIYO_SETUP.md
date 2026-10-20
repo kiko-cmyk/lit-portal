@@ -133,16 +133,17 @@ Klaviyo se queda con uno.
 
 Email SUB-08 de CRM, en `lib/pickup-reminder.ts`, desde el cron diario
 `/api/cron/pickup-reminder`. Vale para cualquier pedido de la tarifa «GLS Punto de
-Recogida», de suscripción o de compra suelta. La llegada al punto y la recogida salen del
-seguimiento de Sendcloud (`SENDCLOUD_PUBLIC_KEY`, `SENDCLOUD_SECRET_KEY`); el nombre y la
-dirección del punto, de la dirección de envío del pedido. Un evento por pedido
+Recogida», de suscripción o de compra suelta. Si el paquete espera en el punto lo dice Hive
+(`delivery_status` = `awaiting_customer_pickup`, con `HIVE_API_KEY`); el nombre y la dirección
+del punto, la dirección de envío del pedido. Hive a veces no se entera de la recogida (3 de
+18 recogidos el 20-oct), por eso el email lleva «Si ya lo has recogido, ignora este mensaje». Un evento por pedido
 (`uniqueId` `pickup:{orderId}` y fila en `email_logs` con `template_id = 'pickup_reminder'`).
 Solo se envía con `PICKUP_REMINDER` en `on` (o en `allowlist`, a los clientes de la lista):
 apagado, el cron devuelve lo que mandaría.
 
 | Event name (metric) | Cuándo se dispara | Properties propias |
 |---|---|---|
-| `pickup_point_reminder` (`WYU7Cf`) | El paquete lleva 3 días naturales (hora de Madrid) en el punto sin recoger, ni devuelto, ni con `deliveredAt` en Shopify; hasta 10 días, si el cron lo ve tarde | `orderNumber` («#12345»), `trackingNumber`, `trackingUrl` (si Shopify la tiene), `pickupName` (sin el «PS » de GLS), `pickupAddress` («Calle Mayor 5, 28013 Madrid»), `daysAtPickup` (**número**, siempre 3), `pickupArrivedAt` (ISO), `locale` |
+| `pickup_point_reminder` (`WYU7Cf`) | El envío de GLS lleva 3 días naturales (hora de Madrid) como `awaiting_customer_pickup` en Hive, sin `deliveredAt` en Shopify; hasta 10 días, si el cron lo ve tarde | `orderNumber` («#12345»), `trackingNumber`, `trackingUrl` (si Shopify la tiene), `pickupName` (sin el «PS » de GLS), `pickupAddress` («Calle Mayor 5, 28013 Madrid»), `daysAtPickup` (**número**, siempre 3), `pickupArrivedAt` (ISO), `locale` |
 
 ---
 
