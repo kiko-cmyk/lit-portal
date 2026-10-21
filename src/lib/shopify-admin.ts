@@ -496,6 +496,8 @@ class ShopifyAdminClient {
     cancelledAt: string | null;
     displayFulfillmentStatus: string;
     displayFinancialStatus: string;
+    /** Etiquetas del pedido. Solo para decisiones del servidor: la ruta de detalle no las devuelve. */
+    tags: string[];
     customer: { email: string | null; phone: string | null; firstName: string | null; lastName: string | null } | null;
     shippingAddress: {
       firstName: string | null; lastName: string | null;
@@ -543,6 +545,7 @@ class ShopifyAdminClient {
         cancelledAt: string | null;
         displayFulfillmentStatus: string;
         displayFinancialStatus: string;
+        tags: string[];
         customer: { id: string; email: string | null; phone: string | null; firstName: string | null; lastName: string | null } | null;
         shippingAddress: {
           firstName: string | null; lastName: string | null;
@@ -585,7 +588,7 @@ class ShopifyAdminClient {
       `query orderDetail($id: ID!) {
          order(id: $id) {
            id name createdAt cancelledAt
-           displayFulfillmentStatus displayFinancialStatus
+           displayFulfillmentStatus displayFinancialStatus tags
            customer { id email phone firstName lastName }
            shippingAddress { firstName lastName address1 address2 city zip province country phone }
            billingAddress  { firstName lastName address1 address2 city zip province country phone }
@@ -625,6 +628,7 @@ class ShopifyAdminClient {
       cancelledAt: o.cancelledAt,
       displayFulfillmentStatus: o.displayFulfillmentStatus,
       displayFinancialStatus: o.displayFinancialStatus,
+      tags: o.tags ?? [],
       customer: o.customer
         ? {
             email: o.customer.email,

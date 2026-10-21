@@ -19,15 +19,30 @@ import { shopifyAdmin } from "@/lib/shopify-admin";
 export interface FirstOrderState {
   displayFulfillmentStatus: string;
   cancelledAt: string | null;
+  tags?: string[];
+}
+
+const HIVE_STAGE_PREFIX = "hive_fulfillment_stage:";
+
+/**
+ * Pedido cancelado en Hive aunque en Shopify siga pagado y sin enviar (#12194, 21-oct-2026):
+ * nunca llegará a FULFILLED. Hive deja una sola etiqueta de etapa en el pedido; si se vuelve a
+ * mandar al almacén cambia de etapa, así que solo cuenta si `cancelled` es la única.
+ */
+export function cancelledInHive(tags: readonly string[] = []): boolean {
+  const stages = tags.filter((t) => t.startsWith(HIVE_STAGE_PREFIX));
+  return stages.length === 1 && stages[0] === `${HIVE_STAGE_PREFIX}cancelled`;
 }
 
 /**
  * ¿Se puede adelantar con el pedido origen en este estado? Sí cuando ya ha salido, y también
- * cuando no va a salir nunca (cancelado, o con todo devuelto al stock): sin primer envío no hay
- * botella doble. Cualquier otro estado (UNFULFILLED, PARTIALLY_FULFILLED, ON_HOLD…) espera.
+ * cuando no va a salir nunca (cancelado en Shopify o en Hive, o con todo devuelto al stock):
+ * sin primer envío no hay botella doble. Cualquier otro estado (UNFULFILLED,
+ * PARTIALLY_FULFILLED, ON_HOLD…) espera.
  */
 export function firstOrderAllowsChargeNow(order: FirstOrderState): boolean {
   if (order.cancelledAt) return true;
+  if (cancelledInHive(order.tags)) return true;
   return order.displayFulfillmentStatus === "FULFILLED" || order.displayFulfillmentStatus === "RESTOCKED";
 }
 

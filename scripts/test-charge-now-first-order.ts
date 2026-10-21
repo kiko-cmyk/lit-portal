@@ -60,6 +60,33 @@ async function main() {
   );
   check("todo devuelto al stock: sí", allows("RESTOCKED"), "Tampoco va a salir.");
 
+  const withTags = (tags: string[], displayFulfillmentStatus = "UNFULFILLED") =>
+    fo.firstOrderAllowsChargeNow({ displayFulfillmentStatus, cancelledAt: null, tags });
+  check(
+    "cancelado solo en Hive (#12194): sí",
+    withTags(["hive_fulfillment_stage:cancelled", "Order-3", "seal_new_subscription"]),
+    "En Shopify sigue pagado y sin enviar, pero no va a salir nunca.",
+  );
+  check(
+    "cancelado en Hive y vuelto a mandar al almacén: no",
+    !withTags(["hive_fulfillment_stage:cancelled", "hive_fulfillment_stage:open"]) &&
+      !withTags(["hive_fulfillment_stage:cancelled", "hive_fulfillment_stage:shipped"]),
+    "Con otra etapa de Hive el pedido puede salir con sus etiquetas.",
+  );
+  check(
+    "otras etapas de Hive o sin etiquetas: manda Shopify",
+    !withTags(["hive_fulfillment_stage:open", "botella"]) &&
+      !withTags(["hive_fulfillment_stage:shipped"]) &&
+      !withTags([]) &&
+      withTags(["hive_fulfillment_stage:shipped"], "FULFILLED"),
+    "Solo la cancelación de Hive se adelanta a Shopify.",
+  );
+  check(
+    "una etiqueta parecida no cuenta",
+    !withTags(["hive_fulfillment_stage:cancelled_partial"]) && !withTags(["cancelled"]),
+    "Tiene que ser exactamente hive_fulfillment_stage:cancelled.",
+  );
+
   console.log("\n── si Shopify no contesta ──\n");
   const now = Date.parse("2026-10-21T12:00:00Z");
   check(
@@ -117,6 +144,24 @@ async function main() {
   check("ya salió: pasa", (await outcome(recent)) === "ok", "");
   detail = order("UNFULFILLED", "777", "2026-10-21T09:00:00Z");
   check("cancelado: pasa", (await outcome(recent)) === "ok", "");
+  detail = { ...(order("UNFULFILLED") as object), tags: ["hive_fulfillment_stage:cancelled"] } as Detail;
+  check(
+    "cancelado solo en Hive: pasa, con las etiquetas que da getOrderDetail",
+    (await outcome(recent)) === "ok",
+    "assertFirstOrderShipped tiene que pasar las etiquetas a la regla.",
+  );
+  const SHOPIFY_ADMIN = code(readFileSync("src/lib/shopify-admin.ts", "utf8"));
+  check(
+    "getOrderDetail pide las etiquetas a Shopify",
+    /displayFulfillmentStatus displayFinancialStatus tags\b/.test(SHOPIFY_ADMIN) && SHOPIFY_ADMIN.includes("tags: o.tags ?? []"),
+    "Sin ellas la cancelación en Hive no se ve.",
+  );
+  const ORDER_ROUTE = code(readFileSync("src/app/api/orders/[id]/route.ts", "utf8"));
+  check(
+    "la ruta de detalle de pedido no devuelve las etiquetas al cliente",
+    !/\btags\b/.test(ORDER_ROUTE) && !ORDER_ROUTE.includes("...raw"),
+    "Son internas (B2B, campañas, etapas de Hive).",
+  );
 
   detail = order("UNFULFILLED", "999");
   check(
