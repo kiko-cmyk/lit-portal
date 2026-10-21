@@ -1,5 +1,6 @@
 import { alertSlackError } from "@/lib/alert";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
+import { assertFirstOrderShipped } from "@/lib/charge-now-first-order";
 import { claimChargeNowIntent, hasOpenChargeNowIntent, recordChargeNowIntent } from "@/lib/charge-now-recovery";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
@@ -104,6 +105,11 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
       "A charge for this subscription is already being processed. Try again in a few minutes.",
     );
   }
+
+  // Primer pedido aún en el almacén (21-oct-2026, Kiko): la renovación nacería con sus
+  // etiquetas y la de `botella` haría que Hive metiera una segunda. 409 hasta que salga.
+  // Ver lib/charge-now-first-order.ts.
+  await assertFirstOrderShipped(sub, ctx.customerId);
 
   // Idempotency mutex: acquire a per-subscription lock BEFORE calling Seal so
   // two near-simultaneous charge-now requests can't both reach Seal and

@@ -80,6 +80,23 @@ export function ChargeNowOverlay({
             es: "No hemos podido confirmar si tu pedido se ha cobrado. No lo repitas: en unos minutos lo verás en Mis pedidos o te llegará el email de confirmación. Si no aparece, escríbenos.",
           }),
         );
+      } else if (code === "first_order_not_shipped") {
+        // Primer pedido aún en el almacén (21-oct-2026): volver a pulsar no sirve hasta que salga.
+        setLocked(true);
+        setError(
+          t({
+            en: "Your first order hasn't left the warehouse yet. You'll be able to bring the next one forward as soon as it ships, usually within a day or two.",
+            es: "Tu primer pedido todavía no ha salido del almacén. Podrás adelantar el siguiente en cuanto salga, normalmente en uno o dos días.",
+          }),
+        );
+      } else if (code === "first_order_unverified") {
+        // No se ha podido comprobar el primer pedido: no se ha cobrado nada, puede reintentar.
+        setError(
+          t({
+            en: "We couldn't check your first order right now. Nothing has been charged. Please try again in a few minutes.",
+            es: "Ahora mismo no hemos podido comprobar tu primer pedido. No se ha cobrado nada. Inténtalo de nuevo en unos minutos.",
+          }),
+        );
       } else if (code === "change_applying") {
         setLocked(true);
         setError(
