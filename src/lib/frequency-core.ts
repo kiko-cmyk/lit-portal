@@ -242,8 +242,14 @@ export const REANCHOR_SETTLE_MS = 5 * 60_000;
  *  soltar la intención. Ver `reanchorConverged` (21-oct-2026). */
 export const REANCHOR_STABLE_MS = 30 * 60_000;
 
-/** Las marcas de tiempo de la intención: cuándo se armó y cuándo se tocó por última vez
- *  (`updated_at`: el drain, el webhook y el Hub lo ponen al mover el calendario). */
+/** Las marcas de tiempo de la intención: cuándo se armó y cuándo se tocó por última vez.
+ *
+ *  `updated_at` lo ponen el drain, el webhook y el Hub al MOVER el calendario, y TAMBIÉN el
+ *  `bumpAttempt` del drain cuando Seal no contesta, cuando aún no hay pendientes (Seal
+ *  regenerando) o cuando `reanchorCadence` falla sin llegar al máximo. Es a propósito: si
+ *  Seal está regenerando o no se puede leer, vigilar 30 min más es justo lo que queremos.
+ *  No quitarlo de `bumpAttempt`. No alarga nada sin fin: el TTL del drain cuenta desde
+ *  `created_at`. (Revisión de Kiko del #159.) */
 export interface ReanchorIntentTimes {
   created_at?: string | null;
   updated_at?: string | null;
