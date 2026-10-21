@@ -502,7 +502,7 @@ async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | nu
   const sb = supabaseAdmin();
   const { data: intent } = await sb
     .from("subscription_reanchor_intents")
-    .select("customer_id, preserve_date, status, created_at")
+    .select("customer_id, preserve_date, status, created_at, updated_at")
     .eq("seal_subscription_id", String(sealSubId))
     .eq("status", "pending")
     .maybeSingle();
@@ -565,7 +565,7 @@ async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | nu
     //
     // Salvo la igualdad exacta con una intención recién armada: puede ser el calendario
     // VIEJO en una lectura atrasada, ver `reanchorConverged`. Se deja para después.
-    if (!reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+    if (!reanchorConverged(firstDay, preserve, intent as { created_at: string | null; updated_at: string | null })) {
       console.log("[seal-webhook] reanchor: igualdad con intención reciente, se espera", { sealSubId, preserve });
       return;
     }
@@ -595,6 +595,16 @@ async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | nu
     return;
   }
   console.log("[seal-webhook] reanchor shifted schedule", { sealSubId, preserve, moved: res.value, from: firstDay });
+  // La hora del movimiento (21-oct-2026): la intención no se suelta hasta que la fecha aguanta
+  // `REANCHOR_STABLE_MS` desde aquí, por si Seal vuelve a regenerar. El drain ya lo hacía.
+  if (res.value > 0) {
+    await sb
+      .from("subscription_reanchor_intents")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("customer_id", intent.customer_id)
+      .eq("seal_subscription_id", String(sealSubId))
+      .eq("created_at", intent.created_at as string);
+  }
 }
 
 /** Seal's attempt object on billing_attempt/* payloads. Verified 2026-07-29. */

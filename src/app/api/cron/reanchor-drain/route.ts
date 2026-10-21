@@ -51,7 +51,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sb = supabaseAdmin();
   const { data: intents, error } = await sb
     .from("subscription_reanchor_intents")
-    .select("customer_id, seal_subscription_id, preserve_date, attempts, created_at")
+    .select("customer_id, seal_subscription_id, preserve_date, attempts, created_at, updated_at")
     .eq("status", "pending");
   if (error) throw new Error(`reanchor-drain: ${error.message}`);
 
@@ -176,7 +176,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // viejo en una lectura atrasada): se deja para la pasada siguiente. Ver
     // `reanchorConverged`.
     if (firstDay >= preserve) {
-      if (!reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+      if (!reanchorConverged(firstDay, preserve, intent as { created_at: string | null; updated_at: string | null })) {
         deferred++;
         continue;
       }

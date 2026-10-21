@@ -1,6 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
-import { reanchorConverged } from "@/lib/frequency-core";
+import { reanchorConverged, reanchorEqualityTooFresh } from "@/lib/frequency-core";
 import { maskPendingLineRepair } from "@/lib/line-repair-runner";
 import { tryWithPlanLock } from "@/lib/plan-lock";
 import { langFromRequest } from "@/lib/request-lang";
@@ -127,7 +127,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   try {
     const { data: intent } = await sb
       .from("subscription_reanchor_intents")
-      .select("preserve_date, seal_subscription_id, created_at")
+      .select("preserve_date, seal_subscription_id, created_at, updated_at")
       .eq("customer_id", ctx.customerId)
       .eq("seal_subscription_id", String(sub.id))
       .eq("status", "pending")
@@ -148,13 +148,24 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
           seal.reanchorCadence(subId, preserve),
         );
         if (res.ran) {
+          // La hora del movimiento, como el drain y el webhook (21-oct-2026). Ver
+          // `reanchorConverged`.
+          if (res.value > 0) {
+            await sb
+              .from("subscription_reanchor_intents")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("customer_id", ctx.customerId)
+              .eq("seal_subscription_id", String(sub.id))
+              .eq("created_at", intent.created_at as string);
+          }
           const refreshed = await seal.getSubscriptionById(subId);
           if (refreshed) sub = refreshed;
         }
         reanchorPending = true;
         promisedNextDate = preserve;
       } else if (firstDay && firstDay >= preserve) {
-        if (reanchorConverged(firstDay, preserve, intent.created_at as string | null)) {
+        const times = intent as { created_at: string | null; updated_at: string | null };
+        if (reanchorConverged(firstDay, preserve, times)) {
           // Already on/after preserve — converged, clear the intent.
           await sb
             .from("subscription_reanchor_intents")
@@ -162,10 +173,15 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
             .eq("customer_id", ctx.customerId)
             .eq("seal_subscription_id", String(sub.id))
             .eq("created_at", intent.created_at as string);
-        } else {
+        } else if (reanchorEqualityTooFresh(firstDay, preserve, times)) {
           // Igualdad exacta con una intención recién armada: puede ser el calendario
           // viejo en una lectura atrasada. Se sigue enseñando la fecha prometida.
           reanchorPending = true;
+          promisedNextDate = preserve;
+        } else {
+          // La fecha ya está en su sitio y la intención solo vigila hasta que aguante
+          // `REANCHOR_STABLE_MS` (21-oct-2026): sin el aviso «actualizando tu calendario» ni
+          // el re-sondeo, que si no durarían media hora.
           promisedNextDate = preserve;
         }
       } else {

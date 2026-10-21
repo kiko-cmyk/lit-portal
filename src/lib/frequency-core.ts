@@ -233,33 +233,74 @@ export async function writeReanchorIntent(
   return { preserveDate };
 }
 
-/** Cuánto tiene que vivir una intención antes de dar por bueno "el primer cobro ya está
- *  justo en la fecha prometida". Ver `reanchorConverged`. */
+/** Cuánto tiene que vivir una intención antes de que una igualdad exacta pueda ser algo
+ *  más que el calendario VIEJO en una lectura atrasada. Ver `reanchorConverged`. También
+ *  marca cuánto dura el aviso «actualizando tu calendario» del Hub. */
 export const REANCHOR_SETTLE_MS = 5 * 60_000;
+
+/** Cuánto tiene que aguantar la fecha prometida desde NUESTRO último movimiento antes de
+ *  soltar la intención. Ver `reanchorConverged` (21-oct-2026). */
+export const REANCHOR_STABLE_MS = 30 * 60_000;
+
+/** Las marcas de tiempo de la intención: cuándo se armó y cuándo se tocó por última vez
+ *  (`updated_at`: el drain, el webhook y el Hub lo ponen al mover el calendario). */
+export interface ReanchorIntentTimes {
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+const isoMs = (iso: string | null | undefined) => (iso ? new Date(iso).getTime() : NaN);
 
 /**
  * ¿Ha convergido el re-anclaje? Lo usan los tres que lo aplican (webhook de Seal,
  * `hub/dashboard` y `reanchor-drain`), para que decidan lo mismo.
  *
- * Por qué no basta `primer cobro >= fecha prometida` (14-oct-2026): la fecha prometida
- * ES el primer cobro del calendario VIEJO. Una lectura de Seal atrasada, tomada justo
- * después del cambio de intervalo y antes de que Seal borre y regenere, cumple la
- * condición al milímetro, y la intención se borraba antes de la regeneración, que luego
- * adelantaba el cobro sin nadie que lo corrigiera. Así que la igualdad exacta solo cuenta
- * cuando la intención ya tiene unos minutos: para entonces Seal ha regenerado (30 s a
- * 4,5 min, medido en la sub de prueba) y una igualdad es de verdad nuestro re-anclaje.
- * Esperar de más no cuesta nada: mientras tanto el Hub ya enseña la fecha prometida.
+ * Primer cobro POSTERIOR a la fecha prometida: convergido al momento. Una segunda
+ * regeneración de Seal sale del mismo ancla (el último intento pasado) y da la misma fecha.
+ *
+ * IGUALDAD EXACTA: hace falta que la fecha haya aguantado `REANCHOR_STABLE_MS` desde nuestro
+ * último movimiento (21-oct-2026). Seal puede regenerar el calendario DOS veces tras un
+ * cambio de intervalo: en la prueba del bot con la 14030060 (3 → 4 meses, 09:03:35 UTC), el
+ * re-anclaje dejó el 1-abr a las 09:04:46, Seal volvió a borrar y regenerar en el 1-feb entre
+ * las 09:04:52 y las 09:05:17 sin nada en su log, y el webhook lo volvió a llevar al 1-abr a
+ * las 09:07:47. La intención se borró a las ~09:10 porque solo contaban 5 min desde que se
+ * ARMÓ: una segunda regeneración un poco más tardía habría llegado sin nada que sujetara la
+ * fecha. Contar desde el último MOVIMIENTO cubre justo eso. (Kiko lo vio en esa prueba.)
+ *
+ * Y la igualdad con una intención recién armada nunca cuenta (14-oct-2026): la fecha
+ * prometida puede ser el primer cobro del calendario VIEJO en una lectura tomada antes de
+ * que Seal borre y regenere. Esperar de más no cuesta nada: la intención solo vigila.
  */
 export function reanchorConverged(
   firstPendingYYYYMMDD: string,
   preserveYYYYMMDD: string,
-  intentCreatedAtIso: string | null | undefined,
+  intent: ReanchorIntentTimes,
   now: number = Date.now(),
 ): boolean {
   if (firstPendingYYYYMMDD > preserveYYYYMMDD) return true;
   if (firstPendingYYYYMMDD < preserveYYYYMMDD) return false;
-  const created = intentCreatedAtIso ? new Date(intentCreatedAtIso).getTime() : NaN;
-  return Number.isFinite(created) && now - created >= REANCHOR_SETTLE_MS;
+  const created = isoMs(intent.created_at);
+  if (!Number.isFinite(created)) return false;
+  const touched = isoMs(intent.updated_at);
+  const lastMove = Number.isFinite(touched) ? Math.max(created, touched) : created;
+  return now - created >= REANCHOR_SETTLE_MS && now - lastMove >= REANCHOR_STABLE_MS;
+}
+
+/**
+ * ¿Es una igualdad que todavía puede ser el calendario VIEJO? Solo los primeros
+ * `REANCHOR_SETTLE_MS` desde que se armó la intención. El Hub enseña «actualizando tu
+ * calendario» (y re-sondea) solo entonces; después, si la fecha ya está en su sitio, la
+ * enseña sin aviso aunque la intención siga vigilando hasta `REANCHOR_STABLE_MS`.
+ */
+export function reanchorEqualityTooFresh(
+  firstPendingYYYYMMDD: string,
+  preserveYYYYMMDD: string,
+  intent: ReanchorIntentTimes,
+  now: number = Date.now(),
+): boolean {
+  if (firstPendingYYYYMMDD !== preserveYYYYMMDD) return false;
+  const created = isoMs(intent.created_at);
+  return !Number.isFinite(created) || now - created < REANCHOR_SETTLE_MS;
 }
 
 export interface FrequencyAuditRow {
