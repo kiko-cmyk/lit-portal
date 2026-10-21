@@ -15,7 +15,7 @@
  *     cambio añadiendo, si tiene los datos de alta, en vez de cerrarlo como "no entró nada".
  */
 
-import { reanchorConverged, REANCHOR_SETTLE_MS } from "@/lib/frequency-core";
+import { reanchorConverged, reanchorEqualityTooFresh, REANCHOR_SETTLE_MS, REANCHOR_STABLE_MS } from "@/lib/frequency-core";
 import { extendRequestDeadline, requestDeadlineLeft, runWithRequestDeadline } from "@/lib/http-timeout";
 import {
   isRemoveAllItemsRejection,
@@ -185,13 +185,46 @@ function eq<T>(actual: T, expected: T, msg: string) {
 {
   const now = Date.parse("2026-10-14T13:20:00Z");
   const ago = (ms: number) => new Date(now - ms).toISOString();
-  ok(reanchorConverged("2027-02-01", "2027-01-20", ago(10_000), now), "primer cobro POSTERIOR = convergido");
-  ok(!reanchorConverged("2026-12-20", "2027-01-20", ago(60 * 60_000), now), "primer cobro ANTERIOR = no");
-  ok(!reanchorConverged("2027-01-20", "2027-01-20", ago(60_000), now),
+  const t = (createdAgo: number, movedAgo?: number) => ({
+    created_at: ago(createdAgo),
+    updated_at: movedAgo === undefined ? ago(createdAgo) : ago(movedAgo),
+  });
+  ok(reanchorConverged("2027-02-01", "2027-01-20", t(10_000), now), "primer cobro POSTERIOR = convergido");
+  ok(!reanchorConverged("2026-12-20", "2027-01-20", t(60 * 60_000), now), "primer cobro ANTERIOR = no");
+  ok(!reanchorConverged("2027-01-20", "2027-01-20", t(60_000), now),
     "igualdad exacta con la intención recién armada = puede ser el calendario viejo: no");
-  ok(reanchorConverged("2027-01-20", "2027-01-20", ago(REANCHOR_SETTLE_MS + 1_000), now),
-    "igualdad exacta pasados unos minutos = convergido");
-  ok(!reanchorConverged("2027-01-20", "2027-01-20", null, now), "sin fecha de la intención no se borra a ciegas");
+  ok(!reanchorConverged("2027-01-20", "2027-01-20", { created_at: null, updated_at: null }, now),
+    "sin fecha de la intención no se borra a ciegas");
+
+  // 21-oct-2026: la igualdad tiene que AGUANTAR desde nuestro último movimiento.
+  ok(!reanchorConverged("2027-01-20", "2027-01-20", t(REANCHOR_SETTLE_MS + 1_000), now),
+    "igualdad a los 5 min de armarla ya NO basta");
+  ok(!reanchorConverged("2027-01-20", "2027-01-20", t(60 * 60_000, 10 * 60_000), now),
+    "armada hace 1 h pero movida hace 10 min = puede volver a regenerar: no");
+  ok(reanchorConverged("2027-01-20", "2027-01-20", t(60 * 60_000, REANCHOR_STABLE_MS + 1_000), now),
+    "movida hace más de REANCHOR_STABLE_MS y sigue en su sitio = convergido");
+  ok(reanchorConverged("2027-01-20", "2027-01-20", { created_at: ago(REANCHOR_STABLE_MS + 1_000), updated_at: null }, now),
+    "sin updated_at cuenta desde que se armó");
+
+  // La prueba del bot con la 14030060 (21-oct): armada 09:03:39, movida 09:04:46, Seal
+  // regenera en el 1-feb hacia las 09:05:17, el webhook la vuelve a mover a las 09:07:47.
+  // Con la regla de 5 min desde que se armó, el drain la soltaba a las ~09:10.
+  {
+    const at = (hhmmss: string) => Date.parse(`2026-10-21T${hhmmss}Z`);
+    const intent = { created_at: "2026-10-21T09:03:39Z", updated_at: "2026-10-21T09:07:47Z" };
+    ok(!reanchorConverged("2027-04-01", "2027-04-01", intent, at("09:10:00")),
+      "14030060: a las 09:10 la intención sigue vigilando (antes se borraba)");
+    ok(!reanchorConverged("2027-04-01", "2027-04-01", intent, at("09:30:00")),
+      "14030060: a las 09:30 todavía no han pasado 30 min desde el último movimiento");
+    ok(reanchorConverged("2027-04-01", "2027-04-01", intent, at("09:38:00")),
+      "14030060: a las 09:38 la fecha lleva 30 min estable: se suelta");
+  }
+
+  // El aviso «actualizando tu calendario» del Hub sigue durando solo los primeros minutos.
+  ok(reanchorEqualityTooFresh("2027-01-20", "2027-01-20", t(60_000), now), "igualdad a 1 min: aviso");
+  ok(!reanchorEqualityTooFresh("2027-01-20", "2027-01-20", t(REANCHOR_SETTLE_MS + 1_000), now),
+    "igualdad pasados 5 min: sin aviso aunque la intención siga viva");
+  ok(!reanchorEqualityTooFresh("2026-12-20", "2027-01-20", t(60_000), now), "sin igualdad no es «demasiado reciente»");
 }
 
 // ── Censo diario: firmas de líneas que no cuadran (casos reales del censo del 14-oct) ──
