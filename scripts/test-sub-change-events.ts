@@ -425,9 +425,11 @@ async function main() {
     PLAN.includes("uniqueId: planChangeUniqueId(ledger.requestId)"),
     "El mismo id que las filas del ledger: si dos caminos lo confirman, Klaviyo se queda con uno.",
   );
+  // Desde LIT-625 la puerta puede fijar el origen (`opts.eventSource`, el bot pasa
+  // `whatsapp_bot`); lo que manda la pantalla sigue pasando por la lista.
   check(
     "plan: el source de la pantalla pasa por la lista conocida",
-    PLAN.includes("source: planEventSource(body.source)"),
+    PLAN.includes("source: opts.eventSource ?? planEventSource(body.source)"),
     "portal_plan, skip_overlay, cancel_takeover o profile_survey.",
   );
   check(
