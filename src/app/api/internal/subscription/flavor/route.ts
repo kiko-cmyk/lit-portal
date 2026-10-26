@@ -4,7 +4,7 @@ import { alertSlackErrorAwaited } from "@/lib/alert";
 import { ApiHttpError } from "@/lib/api-helpers";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { isWithinCutoff } from "@/lib/cutoff";
-import { checkFlavorWrite, flavorOptions, resolveFlavorTarget } from "@/lib/flavor-core";
+import { checkFlavorWrite, discountCodesThatMustSurvive, flavorOptions, resolveFlavorTarget } from "@/lib/flavor-core";
 import { runWithoutRequestDeadline, runWithRequestDeadline } from "@/lib/http-timeout";
 import { compositionLabel, type FlavorComposition, mixBoxCount } from "@/lib/mix";
 import { changePlan } from "@/lib/plan-core";
@@ -46,7 +46,19 @@ import { flavorLabel } from "@/lib/seal-plans";
  *     `flavor_unverified` y el cambio sigue su curso en segundo plano.
  *
  * `dryRun` es OBLIGATORIO cuando hay sabor o mezcla: una escritura no puede nacer de
- * olvidar un campo.
+ * olvidar un campo. Y la escritura exige el estado que vio la propuesta
+ * (`expectedLineIds`, `expectedBoxCount`, `expectedChargeCents`): si las líneas, las cajas
+ * o el importe ya no son esos, no se escribe (`subscription_changed`). Los ids de línea
+ * solos no bastan: un cambio de cantidad en sitio (`edit_items`) los conserva.
+ *
+ * Sin entrega pendiente no se cambia nada (`no_pending_attempt`), igual que en la de
+ * frecuencia: sin fecha no hay corte que mirar, y es justo cuando Seal está regenerando
+ * el calendario o procesando un cobro.
+ *
+ * Y tras escribir, además de las líneas, los descuentos: si falta alguno de los que no son
+ * `LITREF-` (el 15 % de retención, el crédito del Discovery Set), 409
+ * `discount_not_restored`: el sabor está cambiado pero el bot no puede decir que el precio
+ * no cambia.
  *
  * Solo sabor y mezcla, con las MISMAS cajas. `boxCount` o `frequency` en el cuerpo es un
  * 400: cambiar las cajas reprecia a catálogo, y eso se decide en el área personal viendo
@@ -93,6 +105,7 @@ const BY_DESIGN_FAILURES = new Set([
   "change_applying",
   "seal_busy",
   "price_would_increase",
+  "no_pending_attempt",
 ]);
 
 interface InternalFlavorBody {
@@ -102,8 +115,10 @@ interface InternalFlavorBody {
   /** Mezcla `[{ flavor, boxes }]`, que tiene que sumar las cajas de hoy. */
   mix?: unknown;
   dryRun?: unknown;
-  /** Los ids de línea que vio la propuesta: si en Seal ya son otros, no se escribe. */
+  /** Lo que vio la propuesta. Obligatorio al escribir: si Seal ya es otra cosa, no se escribe. */
   expectedLineIds?: unknown;
+  expectedBoxCount?: unknown;
+  expectedChargeCents?: unknown;
   boxCount?: unknown;
   frequency?: unknown;
   /** Quién pide el cambio, para `subscription_changes`. Por defecto `whatsapp`. */
@@ -230,6 +245,7 @@ async function handle(req: NextRequest, attempt: Attempt) {
     nextShipDate,
     withinCutoff,
     lineIds,
+    discountCodes: discountCodesThatMustSurvive(sealSub.items ?? []),
   };
 
   // CONSULTA
@@ -252,6 +268,9 @@ async function handle(req: NextRequest, attempt: Attempt) {
       to,
     };
   }
+  if (!nextShipDate) {
+    throw new ApiHttpError(409, "no_pending_attempt", `Subscription ${subId} has no pending delivery right now`);
+  }
   // El corte se comprueba TAMBIÉN en la propuesta, para que el bot no le pida al cliente
   // que confirme algo que después se va a rechazar. El núcleo lo vuelve a mirar.
   if (withinCutoff) {
@@ -266,6 +285,23 @@ async function handle(req: NextRequest, attempt: Attempt) {
   const expectedLineIds = Array.isArray(body.expectedLineIds)
     ? body.expectedLineIds.map(Number).filter((n) => Number.isFinite(n))
     : undefined;
+  if (body.dryRun === false) {
+    const expBoxes = Number(body.expectedBoxCount);
+    const expCharge = Number(body.expectedChargeCents);
+    if (!expectedLineIds?.length || !Number.isInteger(expBoxes) || !Number.isInteger(expCharge)) {
+      throw new ApiHttpError(
+        400,
+        "expected_state_required",
+        "Writing needs expectedLineIds, expectedBoxCount and expectedChargeCents from the proposal",
+      );
+    }
+    const sameLines =
+      expectedLineIds.length === lineIds.length && expectedLineIds.every((id) => lineIds.includes(id));
+    if (!sameLines || expBoxes !== boxCount || expCharge !== chargeCents) {
+      log("stale-proposal", { expectedLineIds, lineIds, expBoxes, boxCount, expCharge, chargeCents });
+      throw new ApiHttpError(409, "subscription_changed", "The subscription changed since the proposal");
+    }
+  }
 
   const result = await changePlan(
     {
@@ -333,6 +369,16 @@ async function handle(req: NextRequest, attempt: Attempt) {
       409,
       "flavor_unverified",
       `Seal does not show ${to.compositionLabel} at ${writtenCents} yet (${check})`,
+    );
+  }
+  const lost = snapshot.discountCodes.filter((c) => !discountCodesThatMustSurvive(live!.items ?? []).includes(c));
+  if (lost.length) {
+    // El sabor está cambiado, pero sin ese descuento pagaría más: el bot no puede decir
+    // que el precio no cambia. Va a una persona, y se avisa.
+    throw new ApiHttpError(
+      409,
+      "discount_not_restored",
+      `Flavor changed to ${to.compositionLabel} but ${lost.join(", ")} is no longer applied`,
     );
   }
   if (writtenCents > chargeCents) {

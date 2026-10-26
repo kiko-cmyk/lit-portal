@@ -26,7 +26,7 @@
 import { readFileSync } from "node:fs";
 
 import { ApiHttpError } from "@/lib/api-helpers";
-import { checkFlavorWrite, flavorOptions, resolveFlavorTarget } from "@/lib/flavor-core";
+import { checkFlavorWrite, discountCodesThatMustSurvive, flavorOptions, resolveFlavorTarget } from "@/lib/flavor-core";
 import { type FlavorComposition, type LadderPrices, planPreservingCharge, planTargetLines } from "@/lib/mix";
 import { getChargeTotalCents, getComposition, type SealSubscription } from "@/lib/seal";
 import { FLAVOR_KEYS, type FlavorKey } from "@/lib/seal-plans";
@@ -197,6 +197,21 @@ console.log("\n── no hay «hecho» sin verlo en Seal ──\n");
   );
 }
 
+console.log("\n── descuentos que un cambio de sabor no puede perder ──\n");
+{
+  // Forma real de `items[].discount_codes` en Seal (subs 17053390, 16995127 y 16908981, 26-oct).
+  const items = [
+    { is_one_time_item: 0, discount_codes: [{ id: "15d6fe53-e5b9-4c22-9422-e5ec5b481b05", code: "LITSTAY15", amount: "12.75" }] },
+    { is_one_time_item: 0, discount_codes: [{ id: "b7458337-7568-4782-84bf-d4d400629bfe", code: "LIT-CH2ZJ47V", amount: "4.99" }] },
+    { is_one_time_item: 0, discount_codes: [{ id: "x", code: "LITREF-ABCD1234", amount: "10.00" }] },
+    { is_one_time_item: 1, discount_codes: [{ id: "y", code: "BOTELLA100", amount: "9.90" }] },
+  ];
+  const codes = discountCodesThatMustSurvive(items);
+  check("el 15 % y el crédito del Discovery Set cuentan; el LITREF no", codes.join() === "LIT-CH2ZJ47V,LITSTAY15", codes.join());
+  check("una línea de un solo uso no cuenta", !codes.includes("BOTELLA100"));
+  check("sin descuentos, nada", discountCodesThatMustSurvive([{ is_one_time_item: 0, discount_codes: [] }]).length === 0);
+}
+
 console.log("\n── sabores que se pueden pedir ──\n");
 {
   const opts = flavorOptions();
@@ -232,6 +247,18 @@ console.log("\n── guardas de código de la ruta ──\n");
   const unverAt = route.indexOf('"flavor_unverified"');
   const incAt = route.indexOf('"charge_increased"');
   check("la escritura más cara nunca sale como «hecho»", incAt > unverAt && incAt < route.indexOf("verified: true"));
+  const noPendingAt = route.indexOf('"no_pending_attempt"');
+  check(
+    "sin entrega pendiente no se simula ni se escribe",
+    noPendingAt > 0 && noPendingAt < route.indexOf('"cutoff_passed", "Cannot change the flavor') && noPendingAt < writeAt,
+  );
+  check(
+    "escribir exige el estado que vio la propuesta (líneas, cajas e importe)",
+    /if \(body\.dryRun === false\) \{[\s\S]*?"expected_state_required"[\s\S]*?"subscription_changed"/.test(route) &&
+      route.indexOf('"expected_state_required"') < writeAt,
+  );
+  const lostAt = route.indexOf('"discount_not_restored"');
+  check("un descuento perdido al escribir nunca sale como «hecho»", lostAt > verifyAt && lostAt < route.indexOf("verified: true"));
   check(
     "la ruta no escribe en Seal por su cuenta: todo por changePlan",
     !/seal\.(addItems|removeItems|editItems|editSubscription|updateSubscription|skip\w*)\(/.test(route),
