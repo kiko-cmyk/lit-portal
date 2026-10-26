@@ -30,6 +30,19 @@ const SEAL_MAX_RETRIES = 2;
 const SEAL_BACKOFF_MS = 300;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// A BACKGROUND job (cron) gets more retries and a longer, exponential backoff
+// (26-oct-2026, LIT-614). Since 21-oct Seal answers ~2x slower and, when it is
+// degraded, returns 429 "Rate limit reached (2)" WITHOUT Retry-After. Two
+// retries 300/600 ms apart land inside the same throttle window, so a 429 on a
+// bad night killed the sweep (renewal reminder: http=500 at 19:00 and 19:30 on
+// 22-oct). 1 s, 2 s, 4 s, 8 s (equal jitter, capped) gives the limit time to
+// recover. Interactive calls keep 2 retries and the old short steps: their 9 s
+// budget could not fit an 8 s wait anyway, and the budget check in req() would
+// just skip it.
+const SEAL_MAX_RETRIES_BACKGROUND = 4;
+const SEAL_BACKOFF_BACKGROUND_MS = 1_000;
+const SEAL_BACKOFF_CAP_MS = 8_000;
+
 // OUR OWN deadline is retriable too (see the catch in req()) — but only for a
 // BACKGROUND job, and at most once.
 //
@@ -72,11 +85,12 @@ const MIN_USEFUL_ATTEMPT_MS = 500;
  * concurrency. 10s per attempt inside a 25s per-page budget.
  *
  * `sweepMs` is the wall clock for a WHOLE `listAllSubscriptions`, on top of each
- * page's own budget. The arithmetic, with the real page count — the book is ~51
- * pages (measured 2026-07-06, see the comment in `getSubscriptionsByEmail`; the
- * "33 pages" that used to be quoted around here is from May and is stale):
- *   - 51 pages at POOL 8 = 1 + ceil(50/8) = 8 sequential waves.
- *   - Healthy, that is ~1-3s per heavy wave under concurrency 8, so 8-24s.
+ * page's own budget. The arithmetic, with the real page count. Re-measured
+ * 26-oct-2026: the full book is 75 pages and the active-only sweep the renewal
+ * reminder uses is 31, at POOL 2 (see `listAllSubscriptions`):
+ *   - 31 pages at POOL 2 = 1 + ceil(30/2) = 16 sequential waves.
+ *   - Healthy, ~1 s per page (p90 1.2 s), so ~17 s; ~34 s at Seal's 2x
+ *     slowness since 21-oct.
  *   - One stalled page costs its 10s window plus a retry that normally answers
  *     on a fresh socket in ~0.3s, so ~11s. A page that stalls PERSISTENTLY
  *     throws on its own (20.5s) and the sweep never gets to matter.
@@ -88,8 +102,8 @@ const MIN_USEFUL_ATTEMPT_MS = 500;
  * at 60s: a kill throws nothing, so nobody is alerted and half the customers
  * got their email while the rest did not.
  *
- * If the book grows past ~70 pages, or the fan-out grows, these three numbers
- * have to be re-derived TOGETHER — `sweepMs` is not independent of POOL.
+ * If the ACTIVE book grows past ~40 pages, or the fan-out grows, these three
+ * numbers have to be re-derived TOGETHER — `sweepMs` is not independent of POOL.
  */
 export interface SealTimings {
   attemptMs: number;
@@ -98,6 +112,9 @@ export interface SealTimings {
   cronTotalMs: number;
   /** Wall clock for a whole `listAllSubscriptions` sweep. Background only. */
   sweepMs: number;
+  /** Background backoff: first step and cap. Optional so tests can shrink them. */
+  cronBackoffMs?: number;
+  cronBackoffCapMs?: number;
 }
 
 const DEFAULT_TIMINGS: SealTimings = {
@@ -106,17 +123,35 @@ const DEFAULT_TIMINGS: SealTimings = {
   cronAttemptMs: 10_000,
   cronTotalMs: 25_000,
   sweepMs: 45_000,
+  cronBackoffMs: SEAL_BACKOFF_BACKGROUND_MS,
+  cronBackoffCapMs: SEAL_BACKOFF_CAP_MS,
 };
 
 // Backoff with jitter, honouring Seal's `Retry-After` header when present.
 // Jitter avoids retry stampedes across concurrent requests; Retry-After avoids
 // hammering an already-throttled Seal (which just deepens the throttle). Capped.
-function backoffMs(attempt: number, res?: Response): number {
+//
+// Interactive: 300 ms then 600 ms plus up to 250 ms of jitter, exactly as before.
+// Background: exponential from 1 s with "equal jitter" (half fixed, half random,
+// so a retry never comes sooner than half its step), capped at 8 s.
+function backoffMs(
+  attempt: number,
+  res?: Response,
+  background?: { baseMs: number; capMs: number },
+): number {
   const raSec = Number(res?.headers.get("retry-after") ?? 0);
   const retryAfter = Number.isFinite(raSec) && raSec > 0 ? raSec * 1000 : 0;
-  const base = SEAL_BACKOFF_MS * (attempt + 1);
-  const jitter = Math.floor(Math.random() * 250);
-  return Math.min(Math.max(base, retryAfter) + jitter, 5000);
+  if (!background) {
+    const base = SEAL_BACKOFF_MS * 2 ** attempt;
+    const jitter = Math.floor(Math.random() * 250);
+    return Math.min(Math.max(base, retryAfter) + jitter, 5000);
+  }
+  const step = Math.min(Math.max(background.baseMs * 2 ** attempt, retryAfter), background.capMs);
+  return Math.round(step / 2 + Math.random() * (step / 2));
+}
+
+function maxRetries(): number {
+  return isBackgroundJob() ? SEAL_MAX_RETRIES_BACKGROUND : SEAL_MAX_RETRIES;
 }
 
 function token(): string {
@@ -249,6 +284,20 @@ export class SealClient {
    */
   constructor(private readonly timings: SealTimings = DEFAULT_TIMINGS) {}
 
+  /** The wait before retry `attempt`, for the kind of caller we run under. */
+  private backoff(attempt: number, res?: Response): number {
+    return backoffMs(
+      attempt,
+      res,
+      isBackgroundJob()
+        ? {
+            baseMs: this.timings.cronBackoffMs ?? SEAL_BACKOFF_BACKGROUND_MS,
+            capMs: this.timings.cronBackoffCapMs ?? SEAL_BACKOFF_CAP_MS,
+          }
+        : undefined,
+    );
+  }
+
   /** Per-attempt cap and total budget for the kind of caller we run under. */
   private budgets(): { attemptMs: number; totalMs: number } {
     const t = this.timings;
@@ -307,10 +356,10 @@ export class SealClient {
       if (!res.ok) {
         if (
           retriable &&
-          attempt < SEAL_MAX_RETRIES &&
+          attempt < maxRetries() &&
           (res.status === 429 || res.status >= 500)
         ) {
-          const wait = backoffMs(attempt, res);
+          const wait = this.backoff(attempt, res);
           // Only retry if the budget can still fit the backoff plus a usable
           // attempt; otherwise fail now instead of sleeping into a timeout.
           if (msLeft(budget) > wait + MIN_USEFUL_ATTEMPT_MS) {
@@ -333,7 +382,7 @@ export class SealClient {
         //
         // Background only, and on its own counter: see SEAL_MAX_TIMEOUT_RETRIES.
         if (retriable && isBackgroundJob() && timeoutRetries < SEAL_MAX_TIMEOUT_RETRIES) {
-          const wait = backoffMs(attempt);
+          const wait = this.backoff(attempt);
           if (msLeft(budget) > wait + MIN_USEFUL_ATTEMPT_MS) {
             await sleep(wait);
             return this.req<T>(path, init, attempt + 1, budget, timeoutRetries + 1);
@@ -350,12 +399,12 @@ export class SealClient {
       const name = (err as { name?: string }).name;
       if (
         retriable &&
-        attempt < SEAL_MAX_RETRIES &&
+        attempt < maxRetries() &&
         name !== "AbortError" &&
         !(err instanceof SealApiError) &&
         !(err instanceof UpstreamTimeoutError)
       ) {
-        const wait = backoffMs(attempt);
+        const wait = this.backoff(attempt);
         if (msLeft(budget) > wait + MIN_USEFUL_ATTEMPT_MS) {
           await sleep(wait);
           return this.req<T>(path, init, attempt + 1, budget, timeoutRetries);
@@ -453,16 +502,34 @@ export class SealClient {
    * turn a bad night into the stampede that tripped Seal's rate limit in
    * 2026-07-06.
    */
-  async listAllSubscriptions(signal?: AbortSignal): Promise<SealSubscription[]> {
-    // POOL stays at 8. Halving it was tempting — this is the HEAVY endpoint and
-    // parallel pressure on it is a known trigger (firing ~50 pages at once is
-    // what tripped Seal's rate limit in getSubscriptionsByEmail, 2026-07-06) —
-    // but nobody has MEASURED per-page latency at 4 vs 8, and with the book at
-    // ~51 pages POOL 4 means 14 sequential waves instead of 8. That makes the
-    // sweep SLOWER, which is the opposite of what this fix is for, and it would
-    // also make the first production readings uninterpretable by moving two
-    // knobs at once. Followup: measure, then decide.
-    const POOL = 8;
+  async listAllSubscriptions(
+    opts: {
+      signal?: AbortSignal;
+      /**
+       * Only Seal's ACTIVE subscriptions (`active-only=true`). Paused and
+       * cancelled ones never come back, so a caller that only acts on active
+       * subs (the renewal reminder) reads under half the pages. Measured
+       * 26-oct-2026: it returns exactly the 1,542 subs that `mapStatus` calls
+       * "active" in the full book, none missing.
+       */
+      activeOnly?: boolean;
+    } = {},
+  ): Promise<SealSubscription[]> {
+    const { signal, activeOnly = false } = opts;
+    // POOL 2 (was 8, 26-oct-2026, LIT-614). Measured, as the old comment here
+    // asked for: Seal's rate limit is per API key and the key is SHARED with
+    // lit-tools, the dashboard and lit-webhooks, and on 22-oct a degraded Seal
+    // answered 429 "Rate limit reached (2)". Eight heavy pages in flight was
+    // the portal's share of that. At POOL 2, measured on 26-oct: p50 1.0 s,
+    // p90 1.2 s per page, 0 retries in 106 requests; the active-only sweep (31
+    // pages) took 16.8 s and the full book (75 pages, no longer 51) 38.3 s.
+    //
+    // POOL 2 is only safe TOGETHER with `activeOnly`: 31 pages at ~1 s is 16
+    // waves, ~17 s healthy and ~34 s at the 2x slowness since 21-oct, inside
+    // `sweepMs`. The full book at POOL 2 would cross the 45 s sweep budget on a
+    // slow night, so any cron that does not need paused or cancelled subs must
+    // pass `activeOnly`.
+    const POOL = 2;
 
     // Wall clock for the WHOLE sweep, on top of each page's own budget. Without
     // it a bad night multiplies (8 waves x attempt + retry) past the route's 60s
@@ -492,6 +559,7 @@ export class SealClient {
         "with-billing-attempts": "true",
         page: String(page),
       });
+      if (activeOnly) params.set("active-only", "true");
       const own = budgetWithin(this.budgets().totalMs);
       try {
         return await this.req<SealListResponse<SealSubscription>>(

@@ -37,20 +37,22 @@ export function alertSlackError(alert: ErrorAlert): void {
  * Same alert, but awaited — for callers with nothing after them keeping the
  * invocation alive (crons, and any path that alerts and then throws).
  * Still never throws: a Slack failure is swallowed like in the void variant.
+ * Resolves to whether Slack took the post, for callers that remember what they
+ * already alerted (the line census) and must not mark as sent what never left.
  */
-export async function alertSlackErrorAwaited(alert: ErrorAlert): Promise<void> {
-  await postAlert(alert);
+export async function alertSlackErrorAwaited(alert: ErrorAlert): Promise<boolean> {
+  return postAlert(alert);
 }
 
-async function postAlert(alert: ErrorAlert): Promise<void> {
+async function postAlert(alert: ErrorAlert): Promise<boolean> {
   const url =
     process.env.SLACK_ALERTS_WEBHOOK_URL || process.env.SLACK_SECURITY_WEBHOOK_URL;
-  if (!url) return;
+  if (!url) return false;
 
   const key = `${alert.path}|${alert.code}`;
   const now = Date.now();
   const prev = lastSent.get(key);
-  if (prev !== undefined && now - prev < DEDUPE_MS) return;
+  if (prev !== undefined && now - prev < DEDUPE_MS) return false;
   lastSent.set(key, now);
 
   const commit = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "?";
@@ -64,7 +66,7 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
     `\ncommit \`${commit}\` · region \`${region}\``;
 
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
@@ -72,8 +74,10 @@ async function postAlert(alert: ErrorAlert): Promise<void> {
       // se comía el tiempo de la función justo cuando más falta hacía.
       signal: AbortSignal.timeout(4_000),
     });
+    return res.ok;
   } catch (e) {
     console.warn("[alert] slack post failed:", e);
+    return false;
   }
 }
 
@@ -120,18 +124,18 @@ export function alertSlackNotice(opts: SlackNotice): void {
  * pending. Callers on that path must `await` this (inside `after()` for a
  * request handler, directly in a cron).
  */
-export async function alertSlackNoticeAwaited(opts: SlackNotice): Promise<void> {
-  await postNotice(opts);
+export async function alertSlackNoticeAwaited(opts: SlackNotice): Promise<boolean> {
+  return postNotice(opts);
 }
 
-async function postNotice(opts: SlackNotice): Promise<void> {
+async function postNotice(opts: SlackNotice): Promise<boolean> {
   const alerts =
     process.env.SLACK_ALERTS_WEBHOOK_URL || process.env.SLACK_SECURITY_WEBHOOK_URL;
   const url =
     opts.channel === "incidents"
       ? process.env.SLACK_INCIDENTS_WEBHOOK_URL || alerts
       : alerts;
-  if (!url) return;
+  if (!url) return false;
 
   const lines = Object.entries(opts.fields ?? {})
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
@@ -139,14 +143,16 @@ async function postNotice(opts: SlackNotice): Promise<void> {
   const text = [`${opts.icon ?? ":pause_button:"} *lit-portal* ${opts.title}`, ...lines].join("\n");
 
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
       signal: AbortSignal.timeout(4_000),
     });
+    return res.ok;
   } catch (e) {
     console.warn("[alert] slack notice failed:", e);
+    return false;
   }
 }
 

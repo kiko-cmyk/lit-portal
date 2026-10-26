@@ -39,6 +39,26 @@ import { supabaseAdmin } from "@/lib/supabase";
 // /api/subscription/plan), so closing then only tidies the tracking table.
 const CLOSE_AFTER_MS = 35 * 24 * 60 * 60 * 1000;
 
+/**
+ * ¿Demuestra Seal que no hay ningún descuento en vigor en la sub? `total_value` es
+ * Σ(price × quantity) menos los descuentos (verificado en 10 subs), así que si llega a la
+ * suma de las líneas no queda nada descontando, se vea el código o no. Si falta el total
+ * o no hay líneas, NO lo demuestra: mejor un aviso de más que callar uno.
+ */
+export function sealDiscountCheck(sub: {
+  total_value?: number | string | null;
+  items?: Array<{ price?: string | number | null; quantity?: number | null }> | null;
+}): { noDiscount: boolean; totalCents: number; linesCents: number } {
+  const linesCents = (sub.items ?? []).reduce(
+    (sum, it) => sum + Math.round(Number(it.price) * 100) * Math.max(1, Number(it.quantity) || 1),
+    0,
+  );
+  const totalCents = Math.round(Number(sub.total_value) * 100);
+  const noDiscount =
+    Number.isFinite(totalCents) && Number.isFinite(linesCents) && linesCents > 0 && totalCents >= linesCents;
+  return { noDiscount, totalCents, linesCents };
+}
+
 export type ConsumeResult =
   | "no-row"
   | "no-charge-yet"
@@ -106,8 +126,13 @@ export async function consumeRetentionDiscountIfCharged(
   // our read, this matches 0 rows and no-ops, and the next trigger/cron removes
   // the current code. (updated_at is preferred over discount_code_id as the token
   // because a null-UUID revive would collapse a discount_code_id IS NULL guard.)
-  const closeRow = () =>
-    sb
+  //
+  // Returns whether THIS call closed the row (`.select()` so a 0-row match is visible
+  // instead of reading as success). The aged-out alert hangs off that: two triggers
+  // arriving together (the Seal webhooks of one charge) both used to alert, the
+  // 26-oct-2026 duplicate on sub 15049783, and only one of them actually closed it.
+  const closeRow = async (): Promise<boolean> => {
+    const { data, error } = await sb
       .from("retention_discounts")
       .update({
         status: "removed",
@@ -116,7 +141,17 @@ export async function consumeRetentionDiscountIfCharged(
       })
       .eq("customer_id", row.customer_id)
       .eq("status", "pending_charge")
-      .eq("updated_at", row.updated_at as string);
+      .eq("updated_at", row.updated_at as string)
+      .select("customer_id");
+    if (error) {
+      console.warn("[retention-discount] close failed, the next trigger retries", {
+        sealSubId,
+        msg: error.message,
+      });
+      return false;
+    }
+    return (data ?? []).length > 0;
+  };
 
   // Resolve ALL of the code's CURRENT UUIDs. On a multi-line sub Seal shows the
   // same code once per line, each with its own UUID, and removing only the first
@@ -162,17 +197,38 @@ export async function consumeRetentionDiscountIfCharged(
   // Code not visible at item level. Do NOT infer "gone" and close (a lagging or
   // mid-swap read would false-close a still-live 15% → permanent leak). Leave it
   // pending for the next trigger/cron — unless it has aged past a full cycle. At
-  // that point close it, but ALERT first: if the code were somehow still live yet
+  // that point close it and ALERT: if the code were somehow still live yet
   // invisible (a Seal item-swap carry-over the API won't expose), closing is the
   // last silent step, so a human must get a chance to remove it in Seal.
+  //
+  // 26-oct-2026: the alert goes out once, from the call that closed the row (see
+  // closeRow), and only when Seal cannot rule the carry-over out. `total_value` is
+  // Σ(price × quantity) minus the discounts in force (verified on 10 subs,
+  // reference_seal_api), so when it equals the sum of the lines nothing is
+  // discounting the sub, visible or not, and there is nothing for a human to check.
+  // That was the 15049783 case: its one 15% charge landed (#12398 at 24,10), Seal
+  // dropped the code, and the alert asked someone to verify what the read already
+  // proved.
   if (Date.now() - appliedAtMs > CLOSE_AFTER_MS) {
+    const closed = await closeRow();
+    if (!closed) return "aged-out";
+    const { noDiscount, totalCents, linesCents } = sealDiscountCheck(fresh);
+    if (noDiscount) {
+      console.log("[retention-discount] aged out, Seal shows no discount in force, row closed", {
+        sealSubId,
+        totalCents,
+      });
+      return "aged-out";
+    }
     alertSlackError({
       path: "lib/retention-discount",
       code: "retention_discount_aged_out",
-      msg: `sub ${sealSubId}: retention 15% (${row.code}) row aged out with no code visible via API — closing tracking; verify in Seal that no invisible carry-over is still discounting the sub`,
+      msg:
+        `sub ${sealSubId}: retention 15% (${row.code}) row aged out with no code visible via API, ` +
+        `and Seal's total (${totalCents}c) does not rule out a discount on its lines (${linesCents}c). ` +
+        `Tracking closed: check in Seal and remove the 15% if it is still there.`,
       customerId: String(row.customer_id),
     });
-    await closeRow();
     console.warn("[retention-discount] no visible code after full cycle, row closed", { sealSubId });
     return "aged-out";
   }
