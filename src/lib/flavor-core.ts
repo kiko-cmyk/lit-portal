@@ -133,3 +133,25 @@ export function checkFlavorWrite(
   if (live.chargeCents !== expectedChargeCents) return "charge_changed";
   return "ok";
 }
+
+/**
+ * Los códigos de descuento que un cambio de sabor NO puede perder: todos los de las líneas
+ * recurrentes menos los `LITREF-` de recomendación, que el núcleo retira a propósito en
+ * cada cambio de líneas y repone el cron antes del cobro (`detachReferralRewardsForSwap`).
+ * El 15 % de retención (`LITSTAY15`) y el crédito del Discovery Set (`LIT-XXXXXXXX`) los
+ * repone el propio núcleo en la misma petición; si uno falta después, el cliente pagaría
+ * más y el bot no puede decir que el precio no cambia.
+ */
+export function discountCodesThatMustSurvive(
+  items: ReadonlyArray<{ is_one_time_item?: unknown; discount_codes?: ReadonlyArray<{ code?: string | null }> | null }>,
+): string[] {
+  const codes = new Set<string>();
+  for (const it of items) {
+    if (it.is_one_time_item && it.is_one_time_item !== "0") continue;
+    for (const dc of it.discount_codes ?? []) {
+      const code = (dc.code ?? "").trim().toUpperCase();
+      if (code && !code.startsWith("LITREF-")) codes.add(code);
+    }
+  }
+  return [...codes].sort();
+}
