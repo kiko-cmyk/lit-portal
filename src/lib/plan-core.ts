@@ -53,6 +53,7 @@ import {
   planChangeProps,
   planChangeUniqueId,
   planEventSource,
+  type PlanEventSource,
   sendSubChangeEvent,
 } from "@/lib/sub-change-events";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
@@ -162,6 +163,13 @@ export interface PlanChangeContext {
 export interface PlanChangeOptions {
   /** Simulación: calcula y devuelve el resultado sin tocar Seal ni Shopify. */
   dryRun: boolean;
+  /**
+   * Origen del aviso SUB-04/SUB-05 de Klaviyo, fijado por la PUERTA. Sin él sale de
+   * `body.source` filtrado por la lista conocida, porque en el área personal el cuerpo
+   * lo manda el navegador; la entrada interna del bot pasa `whatsapp_bot`, que un cliente
+   * no puede reclamar desde su pantalla.
+   */
+  eventSource?: PlanEventSource;
 }
 
 export async function changePlan(
@@ -1195,7 +1203,7 @@ export async function changePlan(
           props: planChangeProps(planEventKind, planEventBefore, planEventAfter, {
             nextShipDate,
             sealSubscriptionId,
-            source: planEventSource(body.source),
+            source: opts.eventSource ?? planEventSource(body.source),
           }),
           uniqueId: planChangeUniqueId(ledger.requestId),
           path: "/api/subscription/plan",
