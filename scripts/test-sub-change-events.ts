@@ -398,7 +398,7 @@ async function main() {
     "Guardar la misma dirección no avisa.",
   );
 
-  const PLAN = code(read("src/app/api/subscription/plan/route.ts"));
+  const PLAN = code(read("src/lib/plan-core.ts"));
   const dryRunAt = PLAN.indexOf("if (dryRun) {");
   const verifiedAt = PLAN.indexOf('await writeAudit("verified")');
   const verifiedSend = PLAN.indexOf("sendPlanEvent(confirmed, promised)");
