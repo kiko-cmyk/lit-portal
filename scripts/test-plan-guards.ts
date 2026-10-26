@@ -29,7 +29,7 @@ function check(name: string, cond: boolean, hint: string) {
   }
 }
 
-const plan = code(read("src/app/api/subscription/plan/route.ts"));
+const plan = code(read("src/lib/plan-core.ts"));
 const skip = code(read("src/components/SkipOverlay.tsx"));
 const cancel = code(read("src/components/CancelTakeover.tsx"));
 const survey = code(read("src/components/ProfileSurveyOverlay.tsx"));

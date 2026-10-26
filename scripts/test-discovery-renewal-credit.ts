@@ -177,7 +177,7 @@ check(
   "Aplicar dos veces el mismo código en Seal descuenta el doble (incidente BONUS5).",
 );
 
-const planRoute = readFileSync("src/app/api/subscription/plan/route.ts", "utf8");
+const planRoute = readFileSync("src/lib/plan-core.ts", "utf8");
 const carryDecl = planRoute.indexOf("let discoveryCarry");
 const pendingRead = planRoute.indexOf("pendingDiscoveryCreditForSub(sealSubscriptionId)");
 const detachCall = planRoute.indexOf("seal.removeDiscountCode(sealSubscriptionId, id)", pendingRead);
