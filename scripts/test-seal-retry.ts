@@ -46,6 +46,9 @@ const TIMINGS: SealTimings = {
   cronAttemptMs: 900,
   cronTotalMs: 4_000,
   sweepMs: 6_000,
+  // Producción espera 1 s, 2 s, 4 s y 8 s entre reintentos de cron; aquí, a escala.
+  cronBackoffMs: 40,
+  cronBackoffCapMs: 320,
 };
 
 /** Un interactivo con sitio de sobra: sirve para probar que lo que corta el
@@ -310,7 +313,9 @@ async function main() {
 
   // 8. El barrido no dispara más de POOL páginas a la vez. La presión en
   //    paralelo sobre este endpoint pesado es un disparador conocido: ~50
-  //    páginas de golpe reventaron el rate limit de Seal el 2026-07-06.
+  //    páginas de golpe reventaron el rate limit de Seal el 2026-07-06, y con
+  //    8 en vuelo Seal devolvió 429 el 22-oct (la clave es compartida). POOL 2
+  //    desde el 26-oct, junto con `activeOnly` para que el barrido quepa.
   {
     const st = stubFetch(() => "ok", (page) => jsonPage(page, 10, [{ id: page }]));
     const subs = await runAsBackgroundJob(() => cron.listAllSubscriptions());
@@ -320,9 +325,56 @@ async function main() {
       `${subs.length} subs en ${st.total} llamadas`,
     );
     check(
-      "y lanza exactamente POOL=8 en paralelo, ni más ni menos",
-      st.maxInFlight === 8,
-      `máximo ${st.maxInFlight} en vuelo (esperado 8: bajarlo alarga el barrido, subirlo aprieta a Seal)`,
+      "y lanza exactamente POOL=2 en paralelo, ni más ni menos",
+      st.maxInFlight === 2,
+      `máximo ${st.maxInFlight} en vuelo (esperado 2: subirlo aprieta el límite de Seal, que compartimos con lit-tools)`,
+    );
+  }
+
+  // 8b. `activeOnly` pide a Seal solo las activas, en todas las páginas; sin él, nada cambia.
+  {
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      seen.push(url.searchParams.get("active-only") ?? "-");
+      const page = Number(url.searchParams.get("page") ?? 0);
+      return jsonPage(page, 3, [{ id: page }]);
+    }) as typeof fetch;
+    await runAsBackgroundJob(() => cron.listAllSubscriptions({ activeOnly: true }));
+    const withFlag = [...seen];
+    seen.length = 0;
+    await runAsBackgroundJob(() => cron.listAllSubscriptions());
+    check(
+      "activeOnly pide active-only=true en todas las páginas, y sin él no",
+      withFlag.length === 3 && withFlag.every((v) => v === "true") && seen.every((v) => v === "-"),
+      `con activeOnly: [${withFlag.join(",")}] · sin: [${seen.join(",")}]`,
+    );
+  }
+
+  // 8c. Un 429 que se repite: en un cron se reintenta hasta 4 veces con espera
+  //     exponencial (el 22-oct dos reintentos a 300/600 ms caían dentro del mismo
+  //     corte de Seal); un interactivo sigue con 2, que su presupuesto no da para más.
+  {
+    const st = stubFetch((_page, callNo) => (callNo <= 4 ? "429" : "ok"), () => jsonSubscription(7));
+    const sub = await runAsBackgroundJob(() => cron.getSubscriptionById(7, undefined, { throwTransient: true }));
+    check(
+      "en cron, cuatro 429 seguidos y luego bien: resuelve al quinto intento",
+      sub?.id === 7 && st.total === 5,
+      `sub=${sub?.id ?? "null"} tras ${st.total} llamadas (esperado 7 y 5)`,
+    );
+  }
+  {
+    const st = stubFetch(() => "429", () => jsonSubscription(7));
+    let err: unknown = null;
+    try {
+      await interactiveRoomy.getSubscriptionById(7, undefined, { throwTransient: true });
+    } catch (e) {
+      err = e;
+    }
+    check(
+      "en interactivo, el 429 se reintenta 2 veces y propaga",
+      err instanceof SealApiError && err.status === 429 && st.total === 3,
+      `${st.total} llamadas, error=${err instanceof SealApiError ? `SealApiError ${err.status}` : String(err)} (esperado 3 y 429)`,
     );
   }
 
@@ -356,9 +408,11 @@ async function main() {
   // 11. EL DEFECTO 1, de frente: un barrido en el que TODAS las páginas responden
   //     bien no puede morir por el tope. La primera versión de este arreglo lo
   //     mataba (tope mal dimensionado + POOL a la mitad, que dobla las oleadas):
-  //     20 páginas sanas y solo bajaban 9.
+  //     20 páginas sanas y solo bajaban 9. Con POOL 2 (26-oct) son 1 + 10 oleadas
+  //     de 200 ms, unos 2,2 s; el tope de 3 s guarda la proporción de producción
+  //     (31 páginas activas a ~1 s son ~17 s frente a 45 s).
   {
-    const healthy = new SealClient({ ...TIMINGS, sweepMs: 1_500 });
+    const healthy = new SealClient({ ...TIMINGS, sweepMs: 3_000 });
     const st = stubFetch(() => "ok", (page) => jsonPage(page, 20, [{ id: page }]), 200);
     let err: unknown = null;
     let subs: unknown[] = [];

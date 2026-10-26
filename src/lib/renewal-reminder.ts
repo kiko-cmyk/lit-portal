@@ -48,11 +48,12 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { alertSlackErrorAwaited } from "./alert";
+import { alertSlackErrorAwaited, alertSlackNoticeAwaited } from "./alert";
 import { isDryRunRequest } from "./api-helpers";
 import { CronAuthError, requireCron } from "./cron-auth";
 import { runAsBackgroundJob } from "./http-timeout";
 import { klaviyo } from "./klaviyo";
+import { kvGet, kvSet } from "./kv";
 import {
   diffLines,
   type FlavorComposition,
@@ -240,6 +241,116 @@ export function lineAnomaly(s: SealSubscription): string | null {
   const boxes = lines.reduce((sum, l) => sum + l.boxes, 0);
   if (boxes > MAX_BOXES) return `${boxes} cajas en ${lines.length} líneas`;
   return null;
+}
+
+const LINE_ANOMALIES_KV = "alert:line_anomalies";
+const LINE_ANOMALIES_TTL_MS = 90 * 24 * H;
+/** Si el caso sigue abierto y cobra antes de esto, se vuelve a avisar UNA vez. */
+const LINE_ANOMALY_DUE_MS = 7 * 24 * H;
+
+export type OpenLineAnomaly = {
+  why: string;
+  cents: number;
+  firstSeen: string;
+  dueWarned: boolean;
+};
+
+/**
+ * El censo de esta pasada contra el de la anterior. Puro, para `reportLineAnomalies` y
+ * sus tests. `fresh`: casos nuevos, o cuyas líneas o importe cambiaron. `due`: casos
+ * que ya se avisaron y ahora cobran en menos de 7 días (una vez). `resolved`: subs que
+ * estaban y ya no salen. `open`: la memoria que se guarda para la siguiente pasada.
+ */
+export function diffLineAnomalies(
+  known: Record<string, OpenLineAnomaly>,
+  anomalies: Array<{ s: SealSubscription; why: string }>,
+  now: number,
+): {
+  open: Record<string, OpenLineAnomaly>;
+  fresh: Array<{ id: string; line: string }>;
+  due: Array<{ id: string; line: string }>;
+  resolved: string[];
+} {
+  const open: Record<string, OpenLineAnomaly> = {};
+  const fresh: Array<{ id: string; line: string }> = [];
+  const due: Array<{ id: string; line: string }> = [];
+  for (const { s, why } of anomalies) {
+    const id = String(s.id);
+    const cents = getChargeTotalCents(s);
+    const nextDate = getNextBillingAttempt(s)?.date ?? null;
+    const nextMs = nextDate ? Date.parse(nextDate) : NaN;
+    const dueSoon = Number.isFinite(nextMs) && nextMs - now < LINE_ANOMALY_DUE_MS;
+    const line =
+      `${id} (#${s.internal_id}): ${why}, cobra ${cents}c` +
+      (nextDate ? ` el ${nextDate.slice(0, 10)}` : " (sin cobro pendiente)");
+    const was = known[id];
+    if (!was || was.why !== why || was.cents !== cents) {
+      fresh.push({ id, line });
+      open[id] = { why, cents, firstSeen: new Date(now).toISOString(), dueWarned: dueSoon };
+      continue;
+    }
+    open[id] = { ...was, dueWarned: was.dueWarned || dueSoon };
+    if (dueSoon && !was.dueWarned) due.push({ id, line });
+  }
+  const resolved = Object.keys(known).filter((id) => !open[id]);
+  return { open, fresh, due, resolved };
+}
+
+/**
+ * El censo de líneas, con memoria entre pasadas (26-oct-2026, a petición de Kiko). Antes
+ * salía la misma lista en cada pasada de 48 h (tres al día) desde el 14-oct: 29 mensajes
+ * con las mismas dos subs en #server-errors, que no es un canal para recordatorios. Ahora:
+ *
+ *   - Un aviso cuando aparece un caso, o cuando sus líneas o su importe cambian.
+ *   - Otro, UNO solo, si sigue abierto y cobra en menos de 7 días: es cuando hay dinero en
+ *     juego y todavía da tiempo a arreglarlo.
+ *   - Un aviso de resuelto cuando deja de salir (arreglada, o ya no está activa).
+ *
+ * La memoria vive en `portal_kv` (la del #117). Falla abierto: sin la tabla, o si Supabase
+ * no contesta, todo cuenta como nuevo y se avisa como antes. Y solo se apunta como avisado
+ * lo que Slack aceptó: se puede repetir un aviso, nunca perderlo.
+ */
+async function reportLineAnomalies(
+  cfg: RenewalReminderConfig,
+  anomalies: Array<{ s: SealSubscription; why: string }>,
+  now: number,
+): Promise<void> {
+  const stored = (await kvGet<Record<string, OpenLineAnomaly>>(LINE_ANOMALIES_KV))?.value;
+  const known = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  const { open, fresh, due, resolved } = diffLineAnomalies(known, anomalies, now);
+  const memory = { ...open };
+
+  if (fresh.length) {
+    const sent = await alertSlackErrorAwaited({
+      path: cfg.path,
+      code: "line_anomalies",
+      msg:
+        `${fresh.length} sub(s) con líneas que no cuadran (posible cobro de más). ` +
+        fresh.slice(0, 20).map((f) => f.line).join(" · ") +
+        `. Sale una vez por caso; vuelve a salir si cobra en menos de 7 días sin arreglar.`,
+    });
+    if (!sent) for (const f of fresh) delete memory[f.id];
+  }
+  if (due.length) {
+    const sent = await alertSlackErrorAwaited({
+      path: cfg.path,
+      code: "line_anomalies_due",
+      msg:
+        `Siguen sin arreglar y cobran en menos de 7 días: ` +
+        due.slice(0, 20).map((d) => d.line).join(" · "),
+    });
+    if (!sent) for (const d of due) memory[d.id] = { ...memory[d.id], dueWarned: false };
+  }
+  if (resolved.length) {
+    const sent = await alertSlackNoticeAwaited({
+      title: "Líneas que no cuadran: ya no salen en el censo (arregladas o ya no activas)",
+      icon: ":white_check_mark:",
+      fields: { subs: resolved.join(", ") },
+    });
+    if (!sent) for (const id of resolved) memory[id] = known[id];
+  }
+  // Se reescribe en cada pasada: la memoria es la foto del último censo avisado.
+  await kvSet(LINE_ANOMALIES_KV, memory, LINE_ANOMALIES_TTL_MS);
 }
 
 /**
@@ -655,34 +766,26 @@ async function runBucket(
   const lower = now + cfg.fromH * H;
   const upper = now + cfg.toH * H;
 
-  // 1. Scan the whole Seal book and keep ACTIVE subs whose next pending charge
-  //    lands in this bucket's window. (A failed page propagates → we fail loud
-  //    rather than remind a truncated slice of the book.)
-  const subs = await seal.listAllSubscriptions();
+  // 1. Scan Seal's ACTIVE book and keep the subs whose next pending charge lands
+  //    in this bucket's window. (A failed page propagates → we fail loud rather
+  //    than remind a truncated slice of the book.) Active-only since 26-oct-2026:
+  //    every step below skips anything that is not active, and it is 31 pages
+  //    instead of 75 (see `listAllSubscriptions`).
+  const subs = await seal.listAllSubscriptions({ activeOnly: true });
 
   // ── CENSO DE LÍNEAS QUE NO CUADRAN (14-oct-2026) ──
   //
   // Nada miraba de forma periódica si alguna sub tenía líneas de más: solo el cron de
   // reparación, y solo sobre las filas que se llegaron a armar. Así se quedaron la 12433842
   // y la 13124288 desde julio (una SL90 vieja junto a la SL30 que pidieron, 96,28 en vez de
-  // 28,35). Esta tirada ya lee la cartera entera, así que el censo no cuesta llamadas: un
-  // aviso al día con la lista, hasta que se arreglen. Solo en la de 48 h.
+  // 28,35). Esta tirada ya lee la cartera entera, así que el censo no cuesta llamadas.
+  // Solo en la de 48 h. Desde el 26-oct avisa una vez por caso, no en cada pasada: ver
+  // `reportLineAnomalies`.
   if (cfg.checkMixPrice && !dryRun) {
     const anomalies = subs
       .map((s) => ({ s, why: lineAnomaly(s) }))
       .filter((a): a is { s: SealSubscription; why: string } => a.why !== null);
-    if (anomalies.length) {
-      await alertSlackErrorAwaited({
-        path: cfg.path,
-        code: "line_anomalies",
-        msg:
-          `Censo diario: ${anomalies.length} sub(s) con líneas que no cuadran (posible cobro de más). ` +
-          anomalies
-            .slice(0, 20)
-            .map(({ s, why }) => `${s.id} (#${s.internal_id}): ${why}, cobra ${getChargeTotalCents(s)}c`)
-            .join(" · "),
-      });
-    }
+    await reportLineAnomalies(cfg, anomalies, now);
   }
 
   // Los importes preservados de toda la cartera, en UNA consulta: el bucle recorre

@@ -24,7 +24,7 @@ import {
   sealWriteDefinitelyRejected,
 } from "@/lib/line-repair";
 import type { SubscriptionLine, TargetLine } from "@/lib/mix";
-import { lineAnomaly } from "@/lib/renewal-reminder";
+import { diffLineAnomalies, lineAnomaly } from "@/lib/renewal-reminder";
 import { SealApiError, type SealSubscription } from "@/lib/seal";
 
 const failures: string[] = [];
@@ -277,6 +277,41 @@ function eq<T>(actual: T, expected: T, msg: string) {
     null,
     "una cancelada no se cobra: no entra en el censo",
   );
+
+  // ── El censo avisa una vez por caso, no en cada pasada (26-oct-2026) ──
+  const H = 60 * 60 * 1000;
+  const now = Date.parse("2026-10-26T13:07:00Z");
+  const sub = (id: number, chargeIso: string, items = [item(1, SL90, 1, "67.93", "SL90"), item(2, SL30, 1, "28.35", "SL30")]) =>
+    ({
+      ...active(items),
+      id,
+      internal_id: id % 10_000,
+      billing_attempts: [{ id: 9, date: chargeIso, status: "", skipped_on: "", completed_at: "" }],
+    }) as unknown as SealSubscription;
+  const enero = "2027-01-28T10:00:00+00:00";
+  const a1558 = { s: sub(12433842, enero), why: "mezcla líneas del modelo viejo con las del nuevo" };
+  const a2144 = { s: sub(13124288, "2027-01-29T10:00:00+00:00"), why: a1558.why };
+
+  const first = diffLineAnomalies({}, [a1558, a2144], now);
+  eq(first.fresh.length, 2, "sin memoria (o sin la tabla): las dos salen, como hasta ahora");
+  ok(first.fresh[0].line.includes("el 2027-01-28"), "el aviso dice cuándo cobra");
+  const second = diffLineAnomalies(first.open, [a1558, a2144], now + 6 * H);
+  eq(second.fresh.length + second.due.length + second.resolved.length, 0, "la pasada siguiente, con los mismos casos, no avisa");
+  const changed = diffLineAnomalies(
+    first.open,
+    [{ s: sub(12433842, enero, [item(1, SL90, 1, "67.93", "SL90"), item(2, SL30, 2, "28.35", "SL30")]), why: a1558.why }, a2144],
+    now,
+  );
+  eq(changed.fresh.length, 1, "si cambian las líneas o el importe del caso, vuelve a salir");
+  const fixed = diffLineAnomalies(first.open, [a2144], now);
+  ok(fixed.resolved.length === 1 && fixed.resolved[0] === "12433842", "la que se arregla sale como resuelta");
+  eq(fixed.fresh.length, 0, "y la otra sigue callada");
+  const week = Date.parse("2027-01-22T13:07:00Z");
+  const dueRun = diffLineAnomalies(first.open, [a1558, a2144], week);
+  eq(dueRun.due.length, 2, "a menos de 7 días del cobro, sin arreglar: un aviso más");
+  eq(diffLineAnomalies(dueRun.open, [a1558, a2144], week + 6 * H).due.length, 0, "y solo uno");
+  const soon = diffLineAnomalies({}, [{ s: sub(1, "2026-10-28T10:00:00+00:00"), why: "x" }], now);
+  ok(soon.fresh.length === 1 && soon.open["1"].dueWarned, "un caso nuevo que ya cobra pronto no avisa dos veces");
 }
 
 // ── El deadline se amplía al comprometerse, nunca se acorta ───────────────────────

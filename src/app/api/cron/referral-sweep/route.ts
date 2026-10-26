@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackErrorAwaited, alertSlackNoticeAwaited } from "@/lib/alert";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
+import { notableSweepOutcomes } from "@/lib/referral-sweep-report";
 import {
   issuePendingCodes,
   qualifyPendingBacklog,
@@ -111,31 +112,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       });
     }
 
-    // Resumen solo si pasó algo que importa: no se avisa de las pasadas tranquilas.
-    // `deadline_left` y `apply_deferred_time` SÍ se enseñan: son la señal de que la
-    // pasada no da abasto.
-    const notable = (t: SweepTally) =>
-      Object.entries(t)
-        .filter(([k, v]) => v > 0 && !k.startsWith("wait:") && k !== "noop" && !k.startsWith("dry:"))
-        .map(([k, v]) => `${k}=${v}`)
-        .join(", ");
-    const rewardLine = notable(rewards);
-    const qualifyLine = notable(qualify);
+    // Al canal (#server-errors) solo va lo que pide que alguien mire algo (26-oct-2026):
+    // ver `lib/referral-sweep-report`. Lo normal se queda en el log y en la respuesta.
+    const rewardLine = notableSweepOutcomes(rewards);
+    const qualifyLine = notableSweepOutcomes(qualify);
+    const summary =
+      `recompensas ${JSON.stringify(rewards)} · conversiones ${JSON.stringify(qualify)} · ` +
+      `reservas ${JSON.stringify(reserve)} · códigos ${JSON.stringify(issue)}`;
+    console.log(`[referral-sweep] ${dryRun ? "(dry) " : ""}${summary}`);
     if (
       !dryRun &&
       (rewardLine ||
         qualifyLine ||
-        (reserve?.reserved ?? 0) > 0 ||
-        (issue?.activated ?? 0) > 0 ||
-        (issue?.failed ?? 0) > 0)
+        (issue?.failed ?? 0) > 0 ||
+        (reserve?.failed ?? 0) > 0)
     ) {
       await alertSlackNoticeAwaited({
-        title: "Referidos: pasada del cron",
+        title: "Referidos: la pasada del cron necesita revisión",
         icon: ":handshake:",
         fields: {
           recompensas: rewardLine || "-",
           conversiones: qualifyLine || "-",
           codigos_reservados: reserve?.reserved ?? 0,
+          reservas_fallidas: reserve?.failed ?? 0,
           activos_sin_codigo: reserve?.missing ?? "-",
           cache_activa_seal_no: reserve?.notActive ?? 0,
           codigos_activados: issue?.activated ?? 0,
