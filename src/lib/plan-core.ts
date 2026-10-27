@@ -8,7 +8,7 @@ import { processRepairIntent, waitUntilSeal, type RepairIntentRow } from "@/lib/
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { extendRequestDeadline, requestDeadlineLeft, runWithoutRequestDeadline } from "@/lib/http-timeout";
 import { acquirePlanLock } from "@/lib/plan-lock";
-import { alertSlackError, alertSlackErrorAwaited, alertSlackNoticeAwaited } from "@/lib/alert";
+import { alertSlackError, alertSlackErrorAwaited, alertSlackNoticeAwaited, type ErrorAlert } from "@/lib/alert";
 import { SEAL_INTERVAL_BY_FREQUENCY, spacedNextShipDate, VALID_FREQUENCIES, writeReanchorIntent } from "@/lib/frequency-core";
 import { findAllAppliedDiscountCodeIds, getChargeTotalCents, getLines, getNextBillingAttempt, mapToSubscription, normalizeFrequency, seal, type SealSubscription } from "@/lib/seal";
 import { ensureDiscoveryCreditAttached, pendingDiscoveryCreditForSub } from "@/lib/discovery-renewal-credit";
@@ -172,6 +172,20 @@ export interface PlanChangeOptions {
   eventSource?: PlanEventSource;
 }
 
+/**
+ * Los avisos que saltan ANTES de la rama de simulación salen también en un dryRun (la
+ * propuesta del bot), que no escribe nada detrás. Se dejan salir porque son problemas
+ * reales de la sub (precio que no se puede conservar, cajas que no cuadran con el
+ * contrato, configuración de precios, una línea sin mapear, una escritura a medias) y en
+ * la simulación son la única pista; pero lo dicen delante, para que nadie busque en Seal
+ * un cambio que no se hizo. Revisión de Juan del #161, 27-oct-2026.
+ */
+export function markDryRunAlert(alert: ErrorAlert, dryRun: boolean, eventSource?: PlanEventSource): ErrorAlert {
+  if (!dryRun) return alert;
+  const who = eventSource === "whatsapp_bot" ? "Simulación del bot" : "Simulación";
+  return { ...alert, msg: `${who} (no se ha escrito nada): ${alert.msg}` };
+}
+
 export async function changePlan(
   body: PlanChangeBody,
   ctx: PlanChangeContext,
@@ -189,6 +203,7 @@ export async function changePlan(
   log("body", { ...body, sealSubscriptionId: body.sealSubscriptionId });
 
   const dryRun = opts.dryRun;
+  const preWrite = (alert: ErrorAlert) => markDryRunAlert(alert, dryRun, opts.eventSource);
   // "natural" is the pre-2026-10-02 name for the same intent (space instead of
   // skip); a bundle cached in a customer's browser can still send it, and it must
   // get the date its own screen showed, which was always the fromNext one.
@@ -579,7 +594,7 @@ export async function changePlan(
   //     foto vuelve a ser fiable.
   // Al cliente se le dice la verdad, que su último cambio se está terminando de aplicar.
   // Un 409 cuesta unos minutos; decidir precio sobre esa foto cuesta 17,12 € por entrega.
-  ledger.guardBlind = !(await assertNoUnfinishedLineWrite(ctx.customerId, sealSubscriptionId, currentLines, log));
+  ledger.guardBlind = !(await assertNoUnfinishedLineWrite(ctx.customerId, sealSubscriptionId, currentLines, log, preWrite));
 
   // ───── EL CONTRATO PRESERVADO, COMO ANCLA (2026-09-17) ─────
   //
@@ -779,7 +794,7 @@ export async function changePlan(
     } catch (e) {
       if (e instanceof PricingConfigError) {
         log("pricing-config-error", { code: e.code, msg: e.message, targetComposition });
-        alertSlackError({
+        alertSlackError(preWrite({
           path: "/api/subscription/plan",
           code: `pricing_config:${e.code}`,
           msg:
@@ -787,7 +802,7 @@ export async function changePlan(
             `(${e.message}). Cambio RECHAZADO sin tocar nada. Si es el cambio de planes y precios ` +
             `en curso, debería desaparecer en cuanto termine; si no, revisar planes y variantes en Shopify.`,
           customerId: ctx.customerId,
-        });
+        }));
         throw new ApiHttpError(
           503,
           "pricing_unavailable",
@@ -864,7 +879,7 @@ export async function changePlan(
       currentComposition,
       targetComposition,
     });
-    alertSlackError({
+    alertSlackError(preWrite({
       path: "/api/subscription/plan",
       code: "contract_box_count_mismatch",
       msg:
@@ -874,7 +889,7 @@ export async function changePlan(
         `no repreciarle. Revisar a mano: si la cantidad es legítima, limpiar preserved_charge_cents y ` +
         `preserved_box_count; si no, dejar que reintente.`,
       customerId: ctx.customerId,
-    });
+    }));
     throw new ApiHttpError(
       409,
       "subscription_changed",
@@ -915,7 +930,7 @@ export async function changePlan(
         currentComposition,
         targetComposition,
       });
-      alertSlackError({
+      alertSlackError(preWrite({
         path: "/api/subscription/plan",
         code: "price_preserve_unavailable",
         msg:
@@ -925,7 +940,7 @@ export async function changePlan(
           `pero el reparto en sitio no es posible con sus líneas. Rechazado. Hay que hacerlo a mano ` +
           `conservándole el precio.`,
         customerId: ctx.customerId,
-      });
+      }));
       throw new ApiHttpError(
         409,
         "price_would_increase",
@@ -960,7 +975,7 @@ export async function changePlan(
       currentComposition,
       targetComposition,
     });
-    alertSlackError({
+    alertSlackError(preWrite({
       path: "/api/subscription/plan",
       code: "price_increase_without_preservation",
       msg:
@@ -969,7 +984,7 @@ export async function changePlan(
         `(+${centsToPrice(targetPlan.totalCents - liveChargeCents)}) sin preservación. ` +
         `El cliente cambió de composición, no de cantidad. Revisar.`,
       customerId: ctx.customerId,
-    });
+    }));
   }
 
   const diff = diffLines(currentLines, targetPlan.lines);
@@ -1002,7 +1017,7 @@ export async function changePlan(
       targetComposition,
       diff: { edits: diff.edits.length, adds: diff.adds.length, removes: diff.removes.length },
     });
-    alertSlackError({
+    alertSlackError(preWrite({
       path: "/api/subscription/plan",
       code: "unmapped_line_blocks_write",
       msg:
@@ -1010,7 +1025,7 @@ export async function changePlan(
         `registro de cajas (caja de regalo o producto legacy). El cambio se ha rechazado porque ` +
         `habría retirado esa línea sin bajarle el precio. Hay que mapear la variante o hacerlo a mano.`,
       customerId: ctx.customerId,
-    });
+    }));
     throw new ApiHttpError(
       409,
       "box_count_unknown",
@@ -2635,6 +2650,7 @@ async function assertNoUnfinishedLineWrite(
   sealSubscriptionId: number,
   currentLines: SubscriptionLine[],
   log: (step: string, extra?: Record<string, unknown>) => void,
+  preWrite: (alert: ErrorAlert) => ErrorAlert,
 ): Promise<boolean> {
   let row: {
     status: string;
@@ -2688,7 +2704,7 @@ async function assertNoUnfinishedLineWrite(
     // El cron ya no la va a cerrar (se rindió o expiró) y la sub SIGUE a medias. Este
     // aviso es lo único que la pone delante de una persona. Awaited: justo después se
     // lanza, y un aviso suelto puede morir con la invocación.
-    await alertSlackErrorAwaited({
+    await alertSlackErrorAwaited(preWrite({
       path: "/api/subscription/plan",
       code: "unfinished_line_write",
       msg:
@@ -2697,7 +2713,7 @@ async function assertNoUnfinishedLineWrite(
         `no tarificar sobre esa foto. Dejarla a mano como la foto o como el objetivo de ` +
         `subscription_line_repairs.`,
       customerId,
-    });
+    }));
   }
   throw new ApiHttpError(
     409,
