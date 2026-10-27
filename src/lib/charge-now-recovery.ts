@@ -40,7 +40,7 @@
  * quedan como están.
  */
 
-import { alertSlackErrorAwaited } from "@/lib/alert";
+import { alertSlackErrorAwaited, alertSlackNoticeAwaited } from "@/lib/alert";
 import { klaviyo } from "@/lib/klaviyo";
 import { getNextBillingAttempt, mapStatus, seal, type SealSubscription } from "@/lib/seal";
 import { formatShipDateEs } from "@/lib/ship-date-label";
@@ -399,6 +399,27 @@ async function recoverClaimed(
   }
 }
 
+/**
+ * Un Adelantar que el rescate no ha podido dejar bien es un caso de cliente, no un error
+ * del servidor (27-oct-2026, Kiko, sub 17152630): va al canal de incidencias, como los
+ * re-anclajes perdidos, para que lo mire una persona ese mismo día, y no a #server-errors.
+ * `code` va en los campos para que se pueda filtrar igual que antes.
+ */
+async function customerCase(c: {
+  title: string;
+  code: string;
+  subId: number | string;
+  customerId: string;
+  fields: Record<string, string | number | null | undefined>;
+}): Promise<void> {
+  await alertSlackNoticeAwaited({
+    channel: "incidents",
+    icon: ":rotating_light:",
+    title: c.title,
+    fields: { sub: String(c.subId), cliente: c.customerId, ...c.fields, codigo: c.code },
+  });
+}
+
 async function recover(
   intent: ChargeNowIntentRow,
   f: RawBillingAttempt,
@@ -433,25 +454,32 @@ async function recover(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await finishIntent(intent.id, "unhandled", { note: `pullCadenceBackTo: ${msg}`.slice(0, 500) });
-    await alertSlackErrorAwaited({
-      path: "lib/charge-now-recovery",
+    await customerCase({
+      title: "Adelantar rechazado: no se ha podido devolver el calendario",
       code: "charge_now_recovery_failed",
-      msg:
-        `sub ${subId}: el Adelantar falló (${errorCode ?? "sin código"}) y no se ha podido mover ` +
-        `el calendario a ${plan.targetDate}. Revisar a mano: puede haberse quedado sin envío. (${msg})`,
+      subId,
       customerId: intent.customer_id,
+      fields: {
+        motivo_del_rechazo: errorCode ?? "sin código",
+        fecha_que_tenia: plan.targetDate,
+        error_de_seal: msg,
+        que_hacer: "Revisar a mano: puede haberse quedado sin envío.",
+      },
     });
     return { kind: "unhandled", reason: "reschedule_failed" };
   }
   if (moved === 0) {
     await finishIntent(intent.id, "unhandled", { note: `nada que mover hacia ${plan.targetDate}` });
-    await alertSlackErrorAwaited({
-      path: "lib/charge-now-recovery",
+    await customerCase({
+      title: "Adelantar rechazado: el calendario no se ha podido traer a su fecha",
       code: "charge_now_recovery_noop",
-      msg:
-        `sub ${subId}: el Adelantar falló (${errorCode ?? "sin código"}) y el calendario no se ha ` +
-        `podido traer a ${plan.targetDate} (el primer cobro pendiente no está más tarde). Revisar a mano.`,
+      subId,
       customerId: intent.customer_id,
+      fields: {
+        motivo_del_rechazo: errorCode ?? "sin código",
+        fecha_que_tenia: plan.targetDate,
+        que_hacer: "El primer cobro pendiente no está más tarde. Revisar a mano.",
+      },
     });
     return { kind: "unhandled", reason: "nothing_moved" };
   }
@@ -598,13 +626,16 @@ export async function sweepChargeNowAttempts(
               note: pushed ? `sin cobro en Seal y calendario movido a ${first}` : "Seal no tiene ese cobro manual",
             });
             if (pushed) {
-              await alertSlackErrorAwaited({
-                path: "lib/charge-now-recovery",
+              await customerCase({
+                title: "Adelantar sin cobro, pero con el calendario movido",
                 code: "charge_now_pushed_without_charge",
-                msg:
-                  `sub ${row.seal_subscription_id}: el Adelantar no llegó a cobrarse, pero el siguiente ` +
-                  `cobro pasó de ${row.pre_charge_date} a ${first}. Revisar a mano: puede haberse quedado sin envío.`,
+                subId: row.seal_subscription_id,
                 customerId: row.customer_id,
+                fields: {
+                  cobro_que_tenia: row.pre_charge_date,
+                  cobro_ahora: first,
+                  que_hacer: "Revisar a mano: puede haberse quedado sin envío.",
+                },
               });
             }
           }

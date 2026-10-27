@@ -408,9 +408,11 @@ async function assertMixPrice(
       );
       // Más de 6 cajas es la firma de un add sin su remove (14-oct-2026: Pack de 4 + 3
       // sueltas = 7). Hasta hoy solo quedaba en el log; ahora lo ve una persona antes del
-      // cobro. Las subs viejas de 9 o 12 cajas de verdad (SL90×3, SL90×4) también salen:
-      // es un aviso, no se toca nada.
-      if (realBoxes > MAX_BOXES) {
+      // cobro. Con UNA sola línea no se avisa (27-oct-2026, Kiko): son los contratos viejos
+      // de verdad (12752359 con SL90×3 y 13007758 con SL90×4, compras multi-unidad de la
+      // preventa), el mismo criterio que `lineAnomaly`. Un cambio a medias siempre deja
+      // dos líneas o más.
+      if (realBoxes > MAX_BOXES && lines.length > 1) {
         await alertSlackErrorAwaited({
           path: cfg.path,
           code: `renewal_too_many_boxes:${s.id}`,
