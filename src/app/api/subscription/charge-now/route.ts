@@ -1,7 +1,14 @@
-import { alertSlackError } from "@/lib/alert";
+import { after } from "next/server";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { assertFirstOrderShipped } from "@/lib/charge-now-first-order";
-import { claimChargeNowIntent, hasOpenChargeNowIntent, recordChargeNowIntent } from "@/lib/charge-now-recovery";
+import {
+  claimChargeNowIntent,
+  customerCase,
+  hasOpenChargeNowIntent,
+  noteChargeNowIntent,
+  recordChargeNowIntent,
+  syncFailedNote,
+} from "@/lib/charge-now-recovery";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { klaviyo } from "@/lib/klaviyo";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -210,55 +217,70 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
         msg: err instanceof Error ? err.message : String(err),
       });
       if (intentId === null) {
-        // Sin fila no hay rescate asíncrono: que lo mire una persona.
-        alertSlackError({
-          path: "/api/subscription/charge-now",
-          code: "charge_now_ambiguous_no_intent",
-          msg:
-            `sub ${sub.id}: Seal no contestó claro al Adelantar y no se pudo guardar la fila de ` +
-            `rescate. Mirar en Seal si cobró; si no, el próximo cobro puede haberse ido un ciclo.`,
-          customerId: ctx.customerId,
-        });
+        // Sin fila no hay rescate asíncrono ni nada que LIT Tasks pueda leer: este aviso
+        // es lo único que queda. Es un caso de cliente, así que va a incidencias como los
+        // del rescate (27-oct-2026, Kiko). En after() porque detrás va un throw.
+        const subId = sub.id;
+        after(() =>
+          customerCase({
+            title: "Adelantar sin respuesta clara de Seal y sin fila de rescate",
+            code: "charge_now_ambiguous_no_intent",
+            subId,
+            customerId: ctx.customerId,
+            fields: {
+              fecha_que_tenia: preChargeDate,
+              error_de_seal: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+              que_hacer: "Mirar en Seal si cobró; si no, el próximo cobro puede haberse ido un ciclo.",
+            },
+          }),
+        );
       }
     }
     // El cobro no ha entrado, pero el calendario YA está reanclado. Devolverlo a su
     // sitio antes de propagar el error: pullCadenceBackTo solo mueve hacia atrás y
     // nunca a una fecha pasada, así que el peor caso es que no haga nada. Best effort,
     // el error original manda.
-    if (preChargeDate && !alreadyScheduled && syncOwned) {
-      try {
-        const moved = await seal.pullCadenceBackTo(sub.id, preChargeDate);
-        console.log("[charge-now] schedule restored after failed charge", {
-          sealSubscriptionId: sub.id,
-          preChargeDate,
-          moved,
-        });
-        if (moved === 0) {
-          // No se ha podido devolver (la fecha ya pasó, o Seal no tenía pendientes):
-          // el cliente se queda sin ese envío y alguien tiene que llamarle.
-          alertSlackError({
-            path: "/api/subscription/charge-now",
-            code: "charge_now_schedule_not_restored",
-            msg:
-              `sub ${sub.id}: el cobro adelantado falló y no se ha podido devolver el ` +
-              `calendario a ${preChargeDate}. Revisar a mano: puede haberse quedado sin envío.`,
-            customerId: ctx.customerId,
+    if (!alreadyScheduled && syncOwned) {
+      let moved: number | null = null;
+      let restoreError: string | undefined;
+      if (preChargeDate) {
+        try {
+          moved = await seal.pullCadenceBackTo(sub.id, preChargeDate);
+          console.log("[charge-now] schedule restored after failed charge", {
+            sealSubscriptionId: sub.id,
+            preChargeDate,
+            moved,
+          });
+        } catch (restoreErr) {
+          restoreError = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+          console.error("[charge-now] schedule restore FAILED", {
+            sealSubscriptionId: sub.id,
+            preChargeDate,
+            msg: restoreError,
           });
         }
-      } catch (restoreErr) {
-        console.error("[charge-now] schedule restore FAILED", {
-          sealSubscriptionId: sub.id,
-          preChargeDate,
-          msg: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
-        });
-        alertSlackError({
-          path: "/api/subscription/charge-now",
-          code: "charge_now_schedule_not_restored",
-          msg:
-            `sub ${sub.id}: el cobro adelantado falló y el intento de devolver el ` +
-            `calendario a ${preChargeDate} también falló. Revisar a mano.`,
-          customerId: ctx.customerId,
-        });
+      }
+      // La fila dice si la fecha volvió o no (27-oct-2026, Kiko): sin nota, desde la
+      // tabla no se distinguía un rechazo resuelto de un cliente sin envío.
+      if (intentId !== null) await noteChargeNowIntent(intentId, syncFailedNote(preChargeDate, moved, restoreError));
+      if (!moved) {
+        // No se ha podido devolver (la fecha ya pasó, Seal no tenía pendientes o la
+        // llamada falló): el cliente se queda sin ese envío y alguien tiene que llamarle.
+        const subId = sub.id;
+        after(() =>
+          customerCase({
+            title: "Adelantar rechazado al momento: el calendario no ha vuelto a su fecha",
+            code: "charge_now_schedule_not_restored",
+            subId,
+            customerId: ctx.customerId,
+            fields: {
+              motivo_del_rechazo: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+              fecha_que_tenia: preChargeDate ?? "sin fecha",
+              error_de_seal: restoreError?.slice(0, 300),
+              que_hacer: "Revisar a mano: puede haberse quedado sin envío.",
+            },
+          }),
+        );
       }
     }
     // Seal refuses a second charge while one is already queued ("…already has
