@@ -1,5 +1,6 @@
 import { ApiHttpError } from "@/lib/api-helpers";
-import { alertSlackError } from "@/lib/alert";
+import { alertSlackErrorAwaited } from "@/lib/alert";
+import { runWithoutRequestDeadline } from "@/lib/http-timeout";
 import { klaviyo } from "@/lib/klaviyo";
 import { sealWriteDefinitelyRejected } from "@/lib/line-repair";
 import { assertNoPendingLineRepair } from "@/lib/line-repair-runner";
@@ -108,6 +109,20 @@ export async function applyRetentionDiscount(
   // tendría que soltarlo y reponerlo por encima.
   await assertNoPendingLineRepair(customerId, sub.id, "retention-discount");
 
+  // Una sola fila viva por suscripción (27-oct-2026): con dos `pending_charge` sobre la misma sub,
+  // el retirador (`.maybeSingle()` en lib/retention-discount) no ve ninguna y el 15 % se quedaría
+  // en todos los cobros. La clave por cliente ya lo impide si la sub y la sesión son del mismo
+  // cliente; esto lo cierra también si algún día no lo fueran.
+  const { data: livePerSub } = await sb
+    .from("retention_discounts")
+    .select("customer_id")
+    .eq("seal_subscription_id", String(sub.id))
+    .eq("status", "pending_charge")
+    .limit(1);
+  if (livePerSub && livePerSub.length) {
+    throw new ApiHttpError(409, "already_used", "A retention discount is already pending on this subscription");
+  }
+
   // ── Reserve the once-per-customer slot BEFORE applying. This guarantees the
   //    webhook can always find + remove the code after the first charge (no
   //    apply-without-tracking → no accidental recurring discount). ──
@@ -153,12 +168,17 @@ export async function applyRetentionDiscount(
       // No se ve, pero puede entrar tarde. La fila SE QUEDA: si el código aparece, se quita
       // tras su cobro como cualquier otro; si no aparece, lo cierra el barrido. A una
       // persona, para que lo mire, y al cliente que no lo repita.
-      alertSlackError({
+      // Esperada (27-oct-2026): avisa y después lanza, y en una función serverless la variante
+      // sin esperar puede no salir nunca (ver lib/alert). Es lo único que le dice a una persona
+      // que mire: el bot calla este código porque el aviso ya está aquí.
+      await runWithoutRequestDeadline(() =>
+        alertSlackErrorAwaited({
         path,
         code: `retention_apply_unknown:${sub.id}`,
         msg: `sub ${sub.id}: no se sabe si ${CODE} se aplicó (${msg}). La fila de seguimiento se mantiene. Comprobar en Seal en unos minutos que el código está UNA vez, o que no está y avisar al cliente.`,
         customerId,
-      });
+      }),
+      );
       throw new ApiHttpError(409, "discount_apply_unconfirmed", msg);
     }
     console.warn(`[retention-discount] apply "failed" but ${CODE} is on sub ${sub.id}: treated as applied`);

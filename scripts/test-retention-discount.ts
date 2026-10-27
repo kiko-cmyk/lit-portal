@@ -103,6 +103,15 @@ console.log("\n── una sola copia del camino de dinero ──\n");
   const deleteAt = core.indexOf(".delete()");
   check("núcleo: solo se libera la reserva si Seal dijo que no", rejectedAt > applyAt && deleteAt > rejectedAt);
   check("núcleo: una duplicada en la base es `already_used`", /ins\.error\.code === "23505"[\s\S]{0,200}"already_used"/.test(core));
+  const perSubAt = core.indexOf('.eq("status", "pending_charge")');
+  check("núcleo: una sola fila viva por suscripción, mirada antes de reservar", perSubAt > lockAt && perSubAt < reserveAt);
+  const unknownAt = core.indexOf("retention_apply_unknown");
+  check(
+    "núcleo: el aviso de un 15 % dudoso se ESPERA antes de lanzar",
+    /await runWithoutRequestDeadline\(\(\) =>\s*alertSlackErrorAwaited\(\{\s*path,\s*code: `retention_apply_unknown/.test(core) &&
+      core.indexOf('"discount_apply_unconfirmed"', unknownAt) > unknownAt &&
+      !/\balertSlackError\(/.test(core),
+  );
 
   const portalGuardAt = portal.indexOf("assertRetentionDiscountAllowed(");
   const portalDryAt = portal.indexOf("if (dryRun)");
