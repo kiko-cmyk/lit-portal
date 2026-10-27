@@ -16,6 +16,7 @@ import {
   failedManualAttempts,
   hasLaterSuccess,
   matchIntent,
+  syncFailedNote,
   type ChargeNowIntentRow,
   type RawBillingAttempt,
 } from "../src/lib/charge-now-recovery";
@@ -185,6 +186,36 @@ check(
   "El email de subscription_cancelled lleva «Reactivar» al portal, y el portal no deja reactivar estas bajas.",
 );
 
+console.log("\n── rechazo síncrono: la fila dice si volvió la fecha ──\n");
+
+// 27-oct-2026, Kiko: la fila se quedaba en sync_failed sin nota, se hubiera devuelto el
+// calendario o no. LIT Tasks recoge de la tabla las que empiezan por «calendario sin devolver».
+check(
+  "fecha devuelta",
+  syncFailedNote("2026-11-02", 3) === "calendario devuelto a 2026-11-02",
+  "La nota de un rechazo resuelto no puede parecerse a la de un cliente sin envío.",
+);
+check(
+  "nada que mover: sin devolver",
+  syncFailedNote("2026-11-02", 0) === "calendario sin devolver a 2026-11-02: nada que mover",
+  "moved 0 es el caso de la fecha ya pasada o sin pendientes.",
+);
+check(
+  "la llamada para devolverla falló: sin devolver, con el error",
+  syncFailedNote("2026-11-02", null, "Seal 503") === "calendario sin devolver a 2026-11-02: Seal 503",
+  "El error de Seal ayuda a quien lo coge a mano.",
+);
+check(
+  "sin fecha de antes: sin devolver",
+  syncFailedNote(null, null).startsWith("calendario sin devolver"),
+  "Sin fecha a la que volver, el calendario se queda donde lo dejó Seal.",
+);
+check(
+  "un error larguísimo no revienta la columna",
+  syncFailedNote("2026-11-02", null, "x".repeat(2000)).length === 500,
+  "La nota es texto para leer, no el volcado entero.",
+);
+
 console.log("\n── enganchado donde toca ──\n");
 
 const CHARGE = readFileSync("src/app/api/subscription/charge-now/route.ts", "utf8");
@@ -204,8 +235,19 @@ check(
 );
 check(
   "el catch síncrono marca la fila antes de mover el calendario",
-  /claimChargeNowIntent\(intentId/.test(CHARGE) && /preChargeDate && !alreadyScheduled && syncOwned/.test(CHARGE),
+  /claimChargeNowIntent\(intentId/.test(CHARGE) &&
+    /if \(!alreadyScheduled && syncOwned\)/.test(CHARGE) &&
+    CHARGE.indexOf("claimChargeNowIntent(intentId") < CHARGE.indexOf("seal.pullCadenceBackTo("),
   "Si no, el rechazo síncrono y el rescate del webhook moverían el mismo calendario a la vez.",
+);
+check(
+  "el rechazo síncrono apunta la nota y avisa a incidencias, no a #server-errors",
+  /noteChargeNowIntent\(intentId, syncFailedNote\(preChargeDate, moved, restoreError\)\)/.test(CHARGE) &&
+    CHARGE.indexOf("noteChargeNowIntent(intentId") < CHARGE.indexOf('code: "charge_now_schedule_not_restored"') &&
+    /after\(\(\) =>\s*customerCase\(\{[\s\S]{0,120}code: "charge_now_schedule_not_restored"/.test(CHARGE) &&
+    /after\(\(\) =>\s*customerCase\(\{[\s\S]{0,120}code: "charge_now_ambiguous_no_intent"/.test(CHARGE) &&
+    !CHARGE.includes("alertSlackError"),
+  "Son casos de cliente: LIT Tasks los recoge de la tabla y de incidencias, no del canal de errores (27-oct, Kiko).",
 );
 check(
   "un timeout o un 5xx de Seal NO devuelve la fecha",

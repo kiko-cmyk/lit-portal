@@ -288,6 +288,34 @@ async function finishIntent(id: number, status: string, extra: Record<string, un
   if (error) console.error("[charge-now-recovery] no se pudo cerrar la fila", { id, status, msg: error.message });
 }
 
+/**
+ * Qué pasó con el calendario cuando Seal rechazó el Adelantar en la misma llamada
+ * (27-oct-2026, Kiko). La fila se quedaba en `sync_failed` sin nota, se hubiera devuelto
+ * la fecha o no, y desde la tabla no se distinguía. Las que empiezan por «calendario sin
+ * devolver» son casos de cliente: LIT Tasks las recoge de aquí (LIT-631).
+ * `moved` es lo que devolvió pullCadenceBackTo; null si no llegó a llamarse.
+ */
+export function syncFailedNote(preChargeDate: string | null, moved: number | null, err?: string): string {
+  if (!preChargeDate) return "calendario sin devolver: no había fecha de antes de adelantar";
+  if (err !== undefined) return `calendario sin devolver a ${preChargeDate}: ${err}`.slice(0, 500);
+  if (!moved) return `calendario sin devolver a ${preChargeDate}: nada que mover`;
+  return `calendario devuelto a ${preChargeDate}`;
+}
+
+/** Apunta la nota sin tocar el estado. Nunca lanza: la nota es para leerla después. */
+export async function noteChargeNowIntent(id: number, note: string): Promise<void> {
+  try {
+    const { error } = await supabaseAdmin().from("charge_now_attempts").update({ note }).eq("id", id);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    console.error("[charge-now-recovery] no se pudo apuntar la nota", {
+      id,
+      note,
+      msg: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // ─── El rescate ─────────────────────────────────────────────────────────────
 
 export type RecoveryOutcome =
@@ -403,9 +431,10 @@ async function recoverClaimed(
  * Un Adelantar que el rescate no ha podido dejar bien es un caso de cliente, no un error
  * del servidor (27-oct-2026, Kiko, sub 17152630): va al canal de incidencias, como los
  * re-anclajes perdidos, para que lo mire una persona ese mismo día, y no a #server-errors.
- * `code` va en los campos para que se pueda filtrar igual que antes.
+ * `code` va en los campos para que se pueda filtrar igual que antes. charge-now lo usa
+ * también para su rechazo síncrono.
  */
-async function customerCase(c: {
+export async function customerCase(c: {
   title: string;
   code: string;
   subId: number | string;
