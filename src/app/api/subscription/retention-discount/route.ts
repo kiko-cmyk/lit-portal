@@ -1,15 +1,15 @@
 import { ApiHttpError, isDryRunRequest, withCustomer } from "@/lib/api-helpers";
-import { alertSlackError } from "@/lib/alert";
-import { klaviyo } from "@/lib/klaviyo";
-import { sealWriteDefinitelyRejected } from "@/lib/line-repair";
 import { enforceRateLimit } from "@/lib/rate-limit";
-import { findAppliedDiscountCodeId, seal, type SealSubscription } from "@/lib/seal";
+import {
+  applyRetentionDiscount,
+  assertRetentionDiscountAllowed,
+  retentionDiscountCode,
+} from "@/lib/retention-discount-apply";
+import { seal, type SealSubscription } from "@/lib/seal";
 import { shopifyAdmin } from "@/lib/shopify-admin";
-import { assertNoPendingLineRepair } from "@/lib/line-repair-runner";
 import { assertSubscriptionBelongsToCustomer } from "@/lib/sub-guard";
 import { verifyOwnershipFast } from "@/lib/sub-ownership";
 import { pickRequestedSub, requestedSubIdFrom } from "@/lib/sub-resolve";
-import { supabaseAdmin } from "@/lib/supabase";
 
 /**
  * POST /apps/portal/api/subscription/retention-discount
@@ -35,6 +35,11 @@ import { supabaseAdmin } from "@/lib/supabase";
  *
  * The code name is configurable via RETENTION_DISCOUNT_CODE (must already exist
  * in Shopify as a subscription-eligible percentage code).
+ *
+ * The guardrails and the money path live in `@/lib/retention-discount-apply`
+ * (27-oct-2026), shared with the WhatsApp bot's machine-to-machine entry
+ * (`/api/internal/subscription/retention-discount`): one copy, one table, so a
+ * customer can't get the 15% once per door.
  */
 export const POST = withCustomer<{ applied: boolean; code: string }>(async (req, ctx) => {
   await enforceRateLimit(ctx.customerId, "retention-discount", { limit: 5, windowMs: 60_000 });
@@ -48,29 +53,10 @@ export const POST = withCustomer<{ applied: boolean; code: string }>(async (req,
     dryRun?: boolean;
   };
   const dryRun = isDryRunRequest(req, body);
-  const CODE = process.env.RETENTION_DISCOUNT_CODE ?? "LITSTAY15";
+  const CODE = retentionDiscountCode();
 
-  const sb = supabaseAdmin();
-
-  // ── Guardrail 1: once ever per customer. ──
-  const { data: existing } = await sb
-    .from("retention_discounts")
-    .select("customer_id")
-    .eq("customer_id", ctx.customerId)
-    .maybeSingle();
-  if (existing) {
-    throw new ApiHttpError(409, "already_used", "Retention discount already used for this customer");
-  }
-
-  // ── Guardrail 2: only on the FIRST cancellation (never cancelled before). ──
-  const { data: prefs } = await sb
-    .from("customer_preferences")
-    .select("cancel_count")
-    .eq("customer_id", ctx.customerId)
-    .maybeSingle();
-  if ((prefs?.cancel_count ?? 0) >= 1) {
-    throw new ApiHttpError(409, "not_first_cancel", "Retention discount is only offered on the first cancellation");
-  }
+  // ── Guardrails (Juan): once ever per customer, only on the first cancellation. ──
+  await assertRetentionDiscountAllowed(ctx.customerId);
 
   // ── Resolve the subscription (fast-path, slow-path fallback — like /skip). ──
   let sub: SealSubscription | null = null;
@@ -102,88 +88,13 @@ export const POST = withCustomer<{ applied: boolean; code: string }>(async (req,
     return { applied: true, code: CODE };
   }
 
-  // Con un cambio de plan a medio aplicar no se pone el 15% (14-oct-2026): Seal lo pondría
-  // en todas las líneas, también en las que hay que quitar, y quien termine el cambio
-  // tendría que soltarlo y reponerlo por encima.
-  await assertNoPendingLineRepair(ctx.customerId, sub.id, "retention-discount");
-
-  // ── Reserve the once-per-customer slot BEFORE applying. This guarantees the
-  //    webhook can always find + remove the code after the first charge (no
-  //    apply-without-tracking → no accidental recurring discount). ──
-  const ins = await sb
-    .from("retention_discounts")
-    .insert({
-      customer_id: ctx.customerId,
-      seal_subscription_id: String(sub.id),
-      code: CODE,
-      status: "pending_charge",
-      reason: body.reason ?? null,
-    });
-  if (ins.error) {
-    // 23505 = someone raced us to the single slot → already used.
-    if (ins.error.code === "23505") {
-      throw new ApiHttpError(409, "already_used", "Retention discount already used for this customer");
-    }
-    throw new Error(`retention_discounts insert failed: ${ins.error.message}`);
-  }
-
-  // ── Apply the code in Seal. ──
-  try {
-    await seal.applyDiscountCode(sub.id, CODE);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`[retention-discount] apply failed for sub ${sub.id}: ${msg}`);
-    // UN FALLO NO ES "NO SE APLICÓ" (14-oct-2026). Antes, cualquier error borraba la fila de
-    // seguimiento para no gastarle al cliente su única oportunidad. Pero si fue un timeout y
-    // Seal SÍ lo aplicó, el 15% quedaba puesto sin fila: el webhook y el barrido solo quitan
-    // los que siguen, así que se descontaba en TODOS los cobros, para siempre y sin rastro.
-    if (sealWriteDefinitelyRejected(e)) {
-      // Seal dijo que no: no se aplicó. Se libera la reserva para que pueda reintentarlo.
-      await sb
-        .from("retention_discounts")
-        .delete()
-        .eq("customer_id", ctx.customerId)
-        .eq("seal_subscription_id", String(sub.id));
-      throw new ApiHttpError(409, "discount_apply_failed", msg);
-    }
-    const seen = await seal.getSubscriptionById(sub.id).catch(() => null);
-    const seenId = seen ? findAppliedDiscountCodeId(seen, CODE) : null;
-    if (!seenId) {
-      // No se ve, pero puede entrar tarde. La fila SE QUEDA: si el código aparece, se quita
-      // tras su cobro como cualquier otro; si no aparece, lo cierra el barrido. A una
-      // persona, para que lo mire, y al cliente que no lo repita.
-      alertSlackError({
-        path: "/api/subscription/retention-discount",
-        code: `retention_apply_unknown:${sub.id}`,
-        msg: `sub ${sub.id}: no se sabe si ${CODE} se aplicó (${msg}). La fila de seguimiento se mantiene. Comprobar en Seal en unos minutos que el código está UNA vez, o que no está y avisar al cliente.`,
-        customerId: ctx.customerId,
-      });
-      throw new ApiHttpError(409, "discount_apply_unconfirmed", msg);
-    }
-    console.warn(`[retention-discount] apply "failed" but ${CODE} is on sub ${sub.id}: treated as applied`);
-  }
-
-  // ── Capture the applied code's UUID for a clean webhook removal (best-effort;
-  //    the webhook falls back to matching by code string if this is null). ──
-  const fresh = await seal.getSubscriptionById(sub.id).catch(() => null);
-  const discountCodeId = fresh ? findAppliedDiscountCodeId(fresh, CODE) : null;
-  if (discountCodeId) {
-    await sb
-      .from("retention_discounts")
-      .update({ discount_code_id: discountCodeId, updated_at: new Date().toISOString() })
-      .eq("customer_id", ctx.customerId);
-  }
-
-  // Fire-and-forget analytics.
-  if (email) {
-    klaviyo
-      .trackEvent("retention_discount_accepted", email, {
-        sealSubscriptionId: String(sub.id),
-        code: CODE,
-        reason: body.reason,
-      })
-      .catch((err) => console.warn("[retention-discount] klaviyo event failed:", err));
-  }
-
-  return { applied: true, code: CODE };
+  const { code } = await applyRetentionDiscount({
+    customerId: ctx.customerId,
+    sub,
+    email,
+    reason: body.reason ?? null,
+    path: "/api/subscription/retention-discount",
+    source: "portal",
+  });
+  return { applied: true, code };
 });
