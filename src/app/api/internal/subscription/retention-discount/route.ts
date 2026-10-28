@@ -221,7 +221,7 @@ async function handle(req: NextRequest, attempt: Attempt) {
     email: sub.email ?? null,
     reason: normalizeRetentionReason(body.reason),
     path: PATH,
-    source: "whatsapp",
+    source: "whatsapp_bot",
   });
 
   // No hay «hecho» sin ver el código en la sub.

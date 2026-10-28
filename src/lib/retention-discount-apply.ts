@@ -99,8 +99,9 @@ export interface ApplyRetentionDiscountArgs {
   reason?: string | null;
   /** La ruta que llama, para las alertas. */
   path: string;
-  /** Qué puerta lo pide, para Klaviyo. */
-  source: "portal" | "whatsapp";
+  /** Qué puerta lo pide, para Klaviyo. El bot va como `whatsapp_bot`, igual que sabor, frecuencia,
+   *  dirección y salto: todo lo del bot se cuenta con un solo filtro (Juan, 28-oct-2026). */
+  source: "portal" | "whatsapp_bot";
 }
 
 /**
