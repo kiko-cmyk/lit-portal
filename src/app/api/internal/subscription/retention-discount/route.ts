@@ -71,6 +71,7 @@ const BY_DESIGN_FAILURES = new Set([
   "not_first_cancel",
   "subscription_changed",
   "change_applying",
+  "plan_change_in_progress",
   "discount_apply_unconfirmed",
 ]);
 

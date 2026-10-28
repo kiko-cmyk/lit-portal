@@ -95,7 +95,7 @@ console.log("\n── una sola copia del camino de dinero ──\n");
   check("bot: la fuente es WhatsApp", /source: "whatsapp"/.test(bot));
 
   const lockAt = core.indexOf("assertNoPendingLineRepair(");
-  const reserveAt = core.indexOf('.from("retention_discounts")\n    .insert(');
+  const reserveAt = core.search(/\.from\("retention_discounts"\)\s*\.insert\(/);
   const applyAt = core.indexOf("seal.applyDiscountCode(");
   check("núcleo: sin cambio de plan a medias antes de reservar", lockAt > 0 && lockAt < reserveAt);
   check("núcleo: la fila se reserva ANTES de aplicar", reserveAt > 0 && applyAt > reserveAt);
@@ -103,6 +103,12 @@ console.log("\n── una sola copia del camino de dinero ──\n");
   const deleteAt = core.indexOf(".delete()");
   check("núcleo: solo se libera la reserva si Seal dijo que no", rejectedAt > applyAt && deleteAt > rejectedAt);
   check("núcleo: una duplicada en la base es `already_used`", /ins\.error\.code === "23505"[\s\S]{0,200}"already_used"/.test(core));
+  const lockTakenAt = core.indexOf("acquirePlanLock(customerId, sub.id");
+  check(
+    "núcleo: el 15 % entra dentro del cerrojo de los cambios de plan, y se suelta siempre",
+    lockTakenAt > 0 && lockTakenAt < lockAt && applyAt > lockTakenAt &&
+      /\} finally \{\s*await lock\.release\(\);\s*\}/.test(core) && core.indexOf("await lock.release()") > applyAt,
+  );
   const perSubAt = core.indexOf('.eq("status", "pending_charge")');
   check("núcleo: una sola fila viva por suscripción, mirada antes de reservar", perSubAt > lockAt && perSubAt < reserveAt);
   const unknownAt = core.indexOf("retention_apply_unknown");
@@ -151,6 +157,7 @@ console.log("\n── guardas de la ruta del bot ──\n");
       !/BY_DESIGN_FAILURES = new Set\(\[[^\]]*"discount_unverified"/.test(route) &&
       !/BY_DESIGN_FAILURES = new Set\(\[[^\]]*"already_applied"/.test(route),
   );
+  check("otro cambio en curso no es una avería", /BY_DESIGN_FAILURES = new Set\(\[[^\]]*"plan_change_in_progress"/.test(route));
 }
 
 if (failures) {
