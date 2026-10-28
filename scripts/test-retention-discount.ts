@@ -92,7 +92,7 @@ console.log("\n── una sola copia del camino de dinero ──\n");
     check(`${name}: mira las guardas de Juan`, src.includes("assertRetentionDiscountAllowed("));
   }
   check("área personal: la fuente es el portal", /source: "portal"/.test(portal));
-  check("bot: la fuente es WhatsApp", /source: "whatsapp"/.test(bot));
+  check("bot: la fuente es la del resto del bot (`whatsapp_bot`)", /source: "whatsapp_bot"/.test(bot));
 
   const lockAt = core.indexOf("assertNoPendingLineRepair(");
   const reserveAt = core.search(/\.from\("retention_discounts"\)\s*\.insert\(/);
