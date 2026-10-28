@@ -122,6 +122,18 @@ console.log("\n── una sola copia del camino de dinero ──\n");
   const portalGuardAt = portal.indexOf("assertRetentionDiscountAllowed(");
   const portalDryAt = portal.indexOf("if (dryRun)");
   check("área personal: las guardas antes de la simulación, como siempre", portalGuardAt > 0 && portalGuardAt < portalDryAt);
+
+  // Juan (28-oct): una lectura que falla no deja pasar. Cada guarda mira su `error` y lanza 503
+  // ANTES de mirar el dato; sin esto la de la primera baja ofrecía el 15 % a ciegas.
+  const guardas = core.slice(core.indexOf("export async function assertRetentionDiscountAllowed"),
+                             core.indexOf("export interface ApplyRetentionDiscountArgs"));
+  for (const [tabla, err, dato] of [["retention_discounts", "usedErr", "if (existing)"],
+                                    ["customer_preferences", "prefsErr", "if ((prefs?.cancel_count"]] as const) {
+    const leeAt = guardas.indexOf(`.from("${tabla}")`);
+    const lanzaAt = guardas.search(new RegExp(`if \\(${err}\\) \\{\\s*throw new ApiHttpError\\(503, "guard_unavailable"`));
+    check(`guardas: si no se puede leer ${tabla}, lanzan 503 antes de mirar el dato`,
+          guardas.includes(`error: ${err}`) && leeAt > 0 && lanzaAt > leeAt && lanzaAt < guardas.indexOf(dato));
+  }
 }
 
 console.log("\n── guardas de la ruta del bot ──\n");

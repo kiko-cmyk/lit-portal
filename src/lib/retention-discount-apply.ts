@@ -60,22 +60,32 @@ export function normalizeRetentionReason(raw: unknown): CancellationReason | nul
 export async function assertRetentionDiscountAllowed(customerId: string): Promise<void> {
   const sb = supabaseAdmin();
 
+  // Si una lectura falla, NO se deja pasar (Juan, 28-oct-2026): la de una vez por cliente la
+  // sostiene además la clave primaria al reservar, pero la de la primera baja no, y el bot
+  // ofrecería el 15 % a ciegas. 503 `guard_unavailable`: el bot no lo ofrece y avisa.
+
   // ── Guardrail 1: once ever per customer. ──
-  const { data: existing } = await sb
+  const { data: existing, error: usedErr } = await sb
     .from("retention_discounts")
     .select("customer_id")
     .eq("customer_id", customerId)
     .maybeSingle();
+  if (usedErr) {
+    throw new ApiHttpError(503, "guard_unavailable", `Could not check retention_discounts: ${usedErr.message}`);
+  }
   if (existing) {
     throw new ApiHttpError(409, "already_used", "Retention discount already used for this customer");
   }
 
   // ── Guardrail 2: only on the FIRST cancellation (never cancelled before). ──
-  const { data: prefs } = await sb
+  const { data: prefs, error: prefsErr } = await sb
     .from("customer_preferences")
     .select("cancel_count")
     .eq("customer_id", customerId)
     .maybeSingle();
+  if (prefsErr) {
+    throw new ApiHttpError(503, "guard_unavailable", `Could not check customer_preferences: ${prefsErr.message}`);
+  }
   if ((prefs?.cancel_count ?? 0) >= 1) {
     throw new ApiHttpError(409, "not_first_cancel", "Retention discount is only offered on the first cancellation");
   }
