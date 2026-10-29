@@ -118,6 +118,12 @@ console.log("\n── una sola copia del camino de dinero ──\n");
       core.indexOf('"discount_apply_unconfirmed"', unknownAt) > unknownAt &&
       !/\balertSlackError\(/.test(core),
   );
+  // 29-oct-2026: del bot no avisa, porque lo sigue `check_bot_writes` (tarea en LIT Tasks y ticket
+  // para Antonio). El del área personal se queda: ahí es lo único que avisa a una persona.
+  check(
+    "núcleo: el aviso del 15 % dudoso solo cuando no es el bot",
+    /if \(source !== "whatsapp_bot"\) \{\s*await runWithoutRequestDeadline\(\(\) =>\s*alertSlackErrorAwaited\(\{\s*path,\s*code: `retention_apply_unknown/.test(core),
+  );
 
   const portalGuardAt = portal.indexOf("assertRetentionDiscountAllowed(");
   const portalDryAt = portal.indexOf("if (dryRun)");
@@ -164,9 +170,9 @@ console.log("\n── guardas de la ruta del bot ──\n");
   const doneAt = route.indexOf("verified: true", unverifiedAt);
   check("después de aplicar se relee y sin verlo no hay «hecho»", applyAt > 0 && verifyAt > applyAt && unverifiedAt > verifyAt && doneAt > unverifiedAt);
   check(
-    "lo que es de diseño no avisa; un 15 % sin verificar sí",
+    "lo que es de diseño no avisa, ni un 15 % sin verificar (lo sigue check_bot_writes); uno puesto sin fila sí",
     /BY_DESIGN_FAILURES = new Set\(\[[^\]]*"already_used"[^\]]*"not_first_cancel"/.test(route) &&
-      !/BY_DESIGN_FAILURES = new Set\(\[[^\]]*"discount_unverified"/.test(route) &&
+      /BY_DESIGN_FAILURES = new Set\(\[[^\]]*"discount_unverified"/.test(route) &&
       !/BY_DESIGN_FAILURES = new Set\(\[[^\]]*"already_applied"/.test(route),
   );
   check("otro cambio en curso no es una avería", /BY_DESIGN_FAILURES = new Set\(\[[^\]]*"plan_change_in_progress"/.test(route));
