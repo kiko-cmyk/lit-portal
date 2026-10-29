@@ -43,7 +43,9 @@ import {
   type FlavorKey,
   flavorKeyForVariant,
   flavorLabel,
+  flavorsNotYetOffered,
   isFlavorKey,
+  offerableFlavorKeys,
   SELLING_PLAN_BY_FREQUENCY,
 } from "@/lib/seal-plans";
 import { shopifyAdmin } from "@/lib/shopify-admin";
@@ -681,6 +683,24 @@ export async function changePlan(
       ? currentComposition
       : [{ flavor: currentFlavor, boxes: currentBoxCount! }];
   })();
+
+  // ───── SABOR QUE AÚN NO SE OFRECE (29-oct-2026) ─────
+  //
+  // Raw se lee bien desde el despliegue, pero no se puede ELEGIR hasta su lanzamiento
+  // (RAW_OFFERABLE_FROM, con el reloj del servidor): sus productos siguen en borrador y
+  // la pantalla no lo enseña. Esta es la puerta de verdad para quien llegue sin pasar
+  // por esa pantalla (el bot, una pestaña vieja, una llamada a mano). Solo mira lo que
+  // el cambio METE: la frecuencia de una sub que ya lo lleva se sigue pudiendo cambiar.
+  // Antes de leer precios y de tocar Seal.
+  const notYetOffered = flavorsNotYetOffered(currentComposition, targetComposition);
+  if (notYetOffered.length) {
+    log("flavor-not-offered-yet", { notYetOffered, currentComposition, targetComposition });
+    throw new ApiHttpError(
+      409,
+      "flavor_not_available_yet",
+      `${notYetOffered.map((f) => flavorLabel(f)).join(", ")} is not available yet`,
+    );
+  }
 
   const targetBoxCount = mixBoxCount(targetComposition);
 
@@ -2772,6 +2792,7 @@ function synthesizePostMutationSub(
     // Same rule as mapToSubscription, so a synthetic response never disagrees with a
     // real read about whether the builder is available.
     canEditMix: plan.boxCount >= 2 && mixEnabledForCustomer(customerId),
+    offerableFlavors: offerableFlavorKeys(),
     frequency,
     frequencyLabel: expectedInterval,
     flavor: flavorLabel(dom?.flavor ?? DEFAULT_FLAVOR),
@@ -2812,6 +2833,7 @@ function synthesizeNoOpSub(
     boxCount: plan.boxCount,
     ...mix,
     canEditMix: plan.boxCount >= 2 && mixEnabledForCustomer(customerId),
+    offerableFlavors: offerableFlavorKeys(),
     frequency,
     frequencyLabel: frequency,
     flavor: flavorLabel(dom?.flavor ?? DEFAULT_FLAVOR),

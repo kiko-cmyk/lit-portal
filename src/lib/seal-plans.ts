@@ -6,6 +6,8 @@
  *
  * IDs verified against Shopify Admin + Seal data 2026-05-06 (Salty Lemon) and
  * Shopify products.json 2026-07-11 (Salty Watermelon, launches 2026-07-15).
+ * Salty Raw (2026-10-29): las 6 variantes de Juan y las 40 del pack de la respuesta
+ * de su creación (theme-backups/20261029-pack-raw-variantes/creadas.json).
  */
 
 import type { Frequency } from "./types";
@@ -13,7 +15,7 @@ import type { Frequency } from "./types";
 export type BoxCount = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Stable key for each LIT flavor. Threaded through the plan route + overlays. */
-export type FlavorKey = "salty-lemon" | "salty-watermelon" | "salty-peach";
+export type FlavorKey = "salty-lemon" | "salty-watermelon" | "salty-peach" | "salty-raw";
 
 export interface FlavorDef {
   key: FlavorKey;
@@ -41,7 +43,23 @@ export interface FlavorDef {
    * Prices are identical across flavors as of launch.
    */
   variantByBoxCount: Record<BoxCount, string>;
+  /**
+   * Desde cuándo se OFRECE este sabor (ISO en UTC, contra el reloj del servidor): como
+   * destino del cambio de sabor, en el mezclador, en la oferta de la baja y en el bot.
+   * Sin él, desde siempre. Solo gatea ELEGIRLO: leer y pintar una línea de este sabor
+   * no depende de esto, porque una sub que ya lo lleva (puesta a mano en Seal, o
+   * vendida en la tienda) tiene que leerse bien desde el primer minuto.
+   * Ver isFlavorOfferable.
+   */
+  offerableFrom?: string;
 }
+
+/**
+ * Lanzamiento de Salty Raw: 29-oct-2026 a las 17:00 de Madrid (CET, UTC+1 desde el
+ * 25-oct) = 16:00 UTC. Hasta esa hora sus productos siguen en BORRADOR: el portal lee
+ * bien una línea Raw pero no lo ofrece como destino.
+ */
+export const RAW_OFFERABLE_FROM = "2026-10-29T16:00:00Z";
 
 /**
  * Flavor registry — the source of truth for (flavor, boxCount) → variant.
@@ -50,6 +68,9 @@ export interface FlavorDef {
  * attach it to the 8 Seal selling plans (SELLING_PLAN_BY_FREQUENCY below), then
  * add an entry here. Everything else (extractFlavor, plan route, overlays,
  * pricing, box-count resolution) is driven off this map.
+ * Además (Raw, 2026-10-29): su caja y colores en flavor-visuals.ts (tsc lo pide), las
+ * variantes de pack con él en las dos listas PACK4 de abajo (test-flavor-registry lo
+ * pide) y, si sale a una hora concreta, `offerableFrom`.
  */
 export const FLAVORS: Record<FlavorKey, FlavorDef> = {
   "salty-lemon": {
@@ -97,6 +118,26 @@ export const FLAVORS: Record<FlavorKey, FlavorDef> = {
       6: "65046790701405",  // P180 €124.74 (escalera vieja, solo lectura)
     },
   },
+  // Salty Raw, sin sabor (2026-10-29). Mismo modelo de precio que Peach: variante a
+  // precio de compra única y el -25% en los 8 planes de Seal. El producto de compra
+  // única (16272465789277, R30 65046850044253) no entra, igual que las cajas sueltas
+  // de compra única de los otros sabores: nunca está en un contrato de Seal y, en un
+  // pedido, una caja por unidad es justo lo que ya cuenta el fallback por cantidad.
+  "salty-raw": {
+    key: "salty-raw",
+    label: "Salty Raw",
+    productId: "16272462053725",
+    skuPrefix: "R",
+    offerableFrom: RAW_OFFERABLE_FROM,
+    variantByBoxCount: {
+      1: "65046837297501",  // R30  1 caja (sub 28,35, ver SL30)
+      2: "65046837330269",  // R60  (escalera vieja, solo lectura)
+      3: "65046837363037",  // R90  (escalera vieja, solo lectura)
+      4: "65046837395805",  // R120 (escalera vieja, solo lectura)
+      5: "65046837428573",  // R150 (escalera vieja, solo lectura)
+      6: "65046837461341",  // R180 (escalera vieja, solo lectura)
+    },
+  },
 };
 
 /** The flavor every legacy/unmapped subscription and the storefront default to. */
@@ -106,6 +147,54 @@ export const FLAVOR_KEYS: FlavorKey[] = ALL_FLAVORS.map((f) => f.key);
 
 export function isFlavorKey(v: unknown): v is FlavorKey {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(FLAVORS, v);
+}
+
+/**
+ * ¿Se puede ELEGIR este sabor ahora? `now` es la hora de quien pregunta: en el
+ * servidor, la suya (plan-core, flavor-core y el `offerableFlavors` que
+ * mapToSubscription manda a la pantalla). Una fecha ilegible cuenta como «todavía
+ * no»: fallar cerrado esconde un sabor un rato; fallar abierto lo vende antes de hora.
+ */
+export function isFlavorOfferable(flavor: FlavorKey, now: number = Date.now()): boolean {
+  const from = FLAVORS[flavor]?.offerableFrom;
+  if (!from) return true;
+  const at = Date.parse(from);
+  return Number.isFinite(at) && now >= at;
+}
+
+/** Los sabores que se pueden elegir ahora, en el orden del registro. */
+export function offerableFlavorKeys(now: number = Date.now()): FlavorKey[] {
+  return FLAVOR_KEYS.filter((k) => isFlavorOfferable(k, now));
+}
+
+/**
+ * Los sabores que un cambio METERÍA, o a los que subiría cajas, sin poder elegirse
+ * todavía. Vacío = puede seguir. Lo que la sub ya lleva no cuenta: cambiarle la
+ * frecuencia o quitarle cajas a un sabor que aún no se ofrece no es elegirlo.
+ */
+export function flavorsNotYetOffered(
+  current: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>,
+  target: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>,
+  now: number = Date.now(),
+): FlavorKey[] {
+  const boxesOf = (mix: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>, k: FlavorKey) =>
+    mix.filter((c) => c.flavor === k).reduce((s, c) => s + c.boxes, 0);
+  return FLAVOR_KEYS.filter((k) => !isFlavorOfferable(k, now) && boxesOf(target, k) > boxesOf(current, k));
+}
+
+/**
+ * Los sabores que ofrece una pantalla: los que el servidor dice que se pueden elegir
+ * hoy (`Subscription.offerableFlavors`) más los que la sub ya lleva, para que una
+ * mezcla con un sabor aún no ofrecido no pierda su fila. Sin la lista del servidor
+ * (no debería pasar) cae al reloj del navegador; el servidor vuelve a mirar al guardar.
+ */
+export function flavorChoices(
+  offerable: readonly FlavorKey[] | null | undefined,
+  keep: readonly FlavorKey[] = [],
+): FlavorDef[] {
+  return ALL_FLAVORS.filter(
+    (f) => (offerable ? offerable.includes(f.key) : isFlavorOfferable(f.key)) || keep.includes(f.key),
+  );
 }
 
 /** Default-flavor product id — kept as a named export for pricing/back-compat. */
@@ -165,10 +254,35 @@ export const PACK4_VARIANTS: Pack4VariantDef[] = [
   { variantId: "65753051660637", sku: "PACK4-2W2P",   composition: [{ flavor: "salty-watermelon", boxes: 2 }, { flavor: "salty-peach", boxes: 2 }] },
   { variantId: "65753051726173", sku: "PACK4-1W3P",   composition: [{ flavor: "salty-peach", boxes: 3 }, { flavor: "salty-watermelon", boxes: 1 }] },
   { variantId: "65753051791709", sku: "PACK4-4P",     composition: [{ flavor: "salty-peach", boxes: 4 }] },
+  // Salty Raw (2026-10-29). Con 4 sabores las mezclas pasan de 15 a 35; estas 20 son
+  // las que llevan Raw, creadas en Shopify el 2026-10-29 (creadas.json) y heredan los 8
+  // planes de Seal del producto del pack. SKU con R al final (PACK4-1L1W1P1R).
+  { variantId: "67811578708358", sku: "PACK4-3L1R",   composition: [{ flavor: "salty-lemon", boxes: 3 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811578741126", sku: "PACK4-2L1W1R", composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-watermelon", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811578773894", sku: "PACK4-2L1P1R", composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-peach", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811578806662", sku: "PACK4-2L2R",   composition: [{ flavor: "salty-lemon", boxes: 2 }, { flavor: "salty-raw", boxes: 2 }] },
+  { variantId: "67811578839430", sku: "PACK4-1L2W1R", composition: [{ flavor: "salty-watermelon", boxes: 2 }, { flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811578872198", sku: "PACK4-1L1W1P1R", composition: [{ flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-watermelon", boxes: 1 }, { flavor: "salty-peach", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811578904966", sku: "PACK4-1L1W2R", composition: [{ flavor: "salty-raw", boxes: 2 }, { flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-watermelon", boxes: 1 }] },
+  { variantId: "67811578937734", sku: "PACK4-1L2P1R", composition: [{ flavor: "salty-peach", boxes: 2 }, { flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811578970502", sku: "PACK4-1L1P2R", composition: [{ flavor: "salty-raw", boxes: 2 }, { flavor: "salty-lemon", boxes: 1 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "67811579003270", sku: "PACK4-1L3R",   composition: [{ flavor: "salty-raw", boxes: 3 }, { flavor: "salty-lemon", boxes: 1 }] },
+  { variantId: "67811579036038", sku: "PACK4-3W1R",   composition: [{ flavor: "salty-watermelon", boxes: 3 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811579068806", sku: "PACK4-2W1P1R", composition: [{ flavor: "salty-watermelon", boxes: 2 }, { flavor: "salty-peach", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811579101574", sku: "PACK4-2W2R",   composition: [{ flavor: "salty-watermelon", boxes: 2 }, { flavor: "salty-raw", boxes: 2 }] },
+  { variantId: "67811579134342", sku: "PACK4-1W2P1R", composition: [{ flavor: "salty-peach", boxes: 2 }, { flavor: "salty-watermelon", boxes: 1 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811579167110", sku: "PACK4-1W1P2R", composition: [{ flavor: "salty-raw", boxes: 2 }, { flavor: "salty-watermelon", boxes: 1 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "67811579199878", sku: "PACK4-1W3R",   composition: [{ flavor: "salty-raw", boxes: 3 }, { flavor: "salty-watermelon", boxes: 1 }] },
+  { variantId: "67811579232646", sku: "PACK4-3P1R",   composition: [{ flavor: "salty-peach", boxes: 3 }, { flavor: "salty-raw", boxes: 1 }] },
+  { variantId: "67811579265414", sku: "PACK4-2P2R",   composition: [{ flavor: "salty-peach", boxes: 2 }, { flavor: "salty-raw", boxes: 2 }] },
+  { variantId: "67811579298182", sku: "PACK4-1P3R",   composition: [{ flavor: "salty-raw", boxes: 3 }, { flavor: "salty-peach", boxes: 1 }] },
+  { variantId: "67811579330950", sku: "PACK4-4R",     composition: [{ flavor: "salty-raw", boxes: 4 }] },
 ];
 
-/** Variantes del pack de compra única — mismas mezclas y SKUs, solo lectura. */
-const PACK4_OT_VARIANTS: Pack4VariantDef[] = [
+/** Variantes del pack de compra única — mismas mezclas y SKUs, solo lectura.
+ *  Exportadas solo para comprobarlas (scripts/verify-pack-setup.ts contra la tienda y
+ *  scripts/test-flavor-registry.ts contra sus gemelas de suscripción). */
+export const PACK4_OT_VARIANTS: Pack4VariantDef[] = [
   { variantId: "65636236788061", sku: "PACK4-4L",   composition: PACK4_VARIANTS[0].composition },
   { variantId: "65636236820829", sku: "PACK4-3L1W", composition: PACK4_VARIANTS[1].composition },
   { variantId: "65636236853597", sku: "PACK4-2L2W", composition: PACK4_VARIANTS[2].composition },
@@ -186,6 +300,27 @@ const PACK4_OT_VARIANTS: Pack4VariantDef[] = [
   { variantId: "65753053528413", sku: "PACK4-2W2P",   composition: PACK4_VARIANTS[12].composition },
   { variantId: "65753053561181", sku: "PACK4-1W3P",   composition: PACK4_VARIANTS[13].composition },
   { variantId: "65753053593949", sku: "PACK4-4P",     composition: PACK4_VARIANTS[14].composition },
+  // Gemelas de compra única de las 20 mezclas con Raw, en el mismo orden.
+  { variantId: "67811579396486", sku: "PACK4-3L1R",   composition: PACK4_VARIANTS[15].composition },
+  { variantId: "67811579429254", sku: "PACK4-2L1W1R", composition: PACK4_VARIANTS[16].composition },
+  { variantId: "67811579462022", sku: "PACK4-2L1P1R", composition: PACK4_VARIANTS[17].composition },
+  { variantId: "67811579494790", sku: "PACK4-2L2R",   composition: PACK4_VARIANTS[18].composition },
+  { variantId: "67811579527558", sku: "PACK4-1L2W1R", composition: PACK4_VARIANTS[19].composition },
+  { variantId: "67811579560326", sku: "PACK4-1L1W1P1R", composition: PACK4_VARIANTS[20].composition },
+  { variantId: "67811579593094", sku: "PACK4-1L1W2R", composition: PACK4_VARIANTS[21].composition },
+  { variantId: "67811579625862", sku: "PACK4-1L2P1R", composition: PACK4_VARIANTS[22].composition },
+  { variantId: "67811579658630", sku: "PACK4-1L1P2R", composition: PACK4_VARIANTS[23].composition },
+  { variantId: "67811579691398", sku: "PACK4-1L3R",   composition: PACK4_VARIANTS[24].composition },
+  { variantId: "67811579724166", sku: "PACK4-3W1R",   composition: PACK4_VARIANTS[25].composition },
+  { variantId: "67811579756934", sku: "PACK4-2W1P1R", composition: PACK4_VARIANTS[26].composition },
+  { variantId: "67811579789702", sku: "PACK4-2W2R",   composition: PACK4_VARIANTS[27].composition },
+  { variantId: "67811579822470", sku: "PACK4-1W2P1R", composition: PACK4_VARIANTS[28].composition },
+  { variantId: "67811579855238", sku: "PACK4-1W1P2R", composition: PACK4_VARIANTS[29].composition },
+  { variantId: "67811579888006", sku: "PACK4-1W3R",   composition: PACK4_VARIANTS[30].composition },
+  { variantId: "67811579920774", sku: "PACK4-3P1R",   composition: PACK4_VARIANTS[31].composition },
+  { variantId: "67811579953542", sku: "PACK4-2P2R",   composition: PACK4_VARIANTS[32].composition },
+  { variantId: "67811579986310", sku: "PACK4-1P3R",   composition: PACK4_VARIANTS[33].composition },
+  { variantId: "67811580019078", sku: "PACK4-4R",     composition: PACK4_VARIANTS[34].composition },
 ];
 
 /**
@@ -211,8 +346,8 @@ const PACK4_VARIANT_BY_KEY: Record<string, Pack4VariantDef> = Object.fromEntries
 
 /**
  * Variante del pack de SUSCRIPCIÓN para una composición que sume exactamente 4
- * cajas. Null si no suma 4 o si la mezcla no tiene variante (p. ej. un tercer
- * sabor futuro sin variantes de pack regeneradas).
+ * cajas. Null si no suma 4 o si la mezcla no tiene variante (p. ej. un sabor
+ * futuro sin variantes de pack regeneradas).
  */
 export function pack4VariantForComposition(
   mix: ReadonlyArray<{ flavor: FlavorKey; boxes: number }>,

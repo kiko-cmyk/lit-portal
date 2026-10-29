@@ -90,6 +90,7 @@ const BY_DESIGN_FAILURES = new Set([
   "subscription_not_active",
   "subscription_paused",
   "invalid_flavor",
+  "flavor_not_available_yet",
   "invalid_mix",
   "conflicting_flavor_intent",
   "no_changes",

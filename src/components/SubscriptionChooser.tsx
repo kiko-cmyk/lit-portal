@@ -61,8 +61,8 @@ export function SubscriptionChooser({
         <div className="mt-8 space-y-3 md:mt-10 md:space-y-4">
           {subs.map((s) => {
             const next = fmtDate(s.nextShipDate);
-            // Un sabor que el portal aún no tenga en su catálogo (p. ej. Raw) no
-            // puede pasar por compositionLabel, que lo busca en FLAVORS.
+            // Un sabor que el portal aún no tenga en su catálogo (como Raw hasta el
+            // 2026-10-29) no puede pasar por compositionLabel, que lo busca en FLAVORS.
             const known =
               !!s.composition?.length &&
               s.composition.every((c) => Object.prototype.hasOwnProperty.call(FLAVORS, c.flavor));

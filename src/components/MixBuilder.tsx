@@ -21,16 +21,22 @@ export function MixBuilder({
   boxCount,
   value,
   onChange,
+  flavors,
   disabled,
 }: {
   /** Total boxes to distribute. Fixed by the plan. */
   boxCount: number;
   value: FlavorComposition[];
   onChange: (next: FlavorComposition[]) => void;
+  /** Los sabores que se ofrecen (`flavorChoices`); sin él, todos los del registro. */
+  flavors?: readonly FlavorKey[];
   disabled?: boolean;
 }) {
   const t = useLang();
   const boxesOf = (f: FlavorKey) => value.find((c) => c.flavor === f)?.boxes ?? 0;
+  // Las filas: lo que se ofrece más lo que ya está en la mezcla, que nunca desaparece
+  // del constructor (Raw no sale como fila nueva antes de su lanzamiento, 29-oct-2026).
+  const rows = ALL_FLAVORS.filter((f) => !flavors || flavors.includes(f.key) || boxesOf(f.key) > 0);
   const assigned = mixBoxCount(value);
   const left = boxCount - assigned;
 
@@ -73,11 +79,11 @@ export function MixBuilder({
   };
 
   const splitEvenly = () => {
-    const n = ALL_FLAVORS.length;
+    const n = rows.length;
     const base = Math.floor(boxCount / n);
-    const map = Object.fromEntries(ALL_FLAVORS.map((f) => [f.key, base])) as Record<string, number>;
+    const map = Object.fromEntries(rows.map((f) => [f.key, base])) as Record<string, number>;
     let rest = boxCount - base * n;
-    for (const f of ALL_FLAVORS) {
+    for (const f of rows) {
       if (rest <= 0) break;
       map[f.key] += 1;
       rest -= 1;
@@ -106,7 +112,7 @@ export function MixBuilder({
             />
           )}
         </div>
-        {boxCount >= ALL_FLAVORS.length && (
+        {boxCount >= rows.length && (
           <button
             type="button"
             onClick={splitEvenly}
@@ -119,7 +125,7 @@ export function MixBuilder({
       </div>
 
       <div className="mt-3 space-y-2.5">
-        {ALL_FLAVORS.map((f) => {
+        {rows.map((f) => {
           const n = boxesOf(f.key);
           const active = n > 0;
           return (

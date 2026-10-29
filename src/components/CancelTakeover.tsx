@@ -17,6 +17,7 @@ import {
   BOX_COUNT_BY_VARIANT,
   DEFAULT_FLAVOR,
   type FlavorKey,
+  flavorChoices,
   flavorKeyForVariant,
 } from "@/lib/seal-plans";
 import type {
@@ -91,7 +92,8 @@ function hasFlavorAlternative(sub: Subscription | null): boolean {
   const composition = sub.composition ?? [];
   if (composition.length > 1) return true;
   const current = composition[0]?.flavor ?? flavorKeyForVariant(sub.currentVariantId) ?? DEFAULT_FLAVOR;
-  return ALL_FLAVORS.some((f) => f.key !== current);
+  // Solo los sabores que se ofrecen hoy (Raw, desde su lanzamiento del 29-oct-2026).
+  return flavorChoices(sub.offerableFlavors).some((f) => f.key !== current);
 }
 
 export function CancelTakeover({
@@ -473,7 +475,10 @@ function Solucion({
   // plan, price and next-ship date — only the product changes.
   const currentFlavorKey: FlavorKey =
     flavorKeyForVariant(subscription?.currentVariantId) ?? DEFAULT_FLAVOR;
-  const flavorAlternatives = ALL_FLAVORS.filter((f) => f.key !== currentFlavorKey);
+  // Solo lo que se ofrece hoy: Raw no se propone antes de su lanzamiento (29-oct-2026).
+  const flavorAlternatives = flavorChoices(subscription?.offerableFlavors).filter(
+    (f) => f.key !== currentFlavorKey,
+  );
   const [offerFlavor, setOfferFlavor] = useState<FlavorKey>(
     flavorAlternatives[0]?.key ?? currentFlavorKey,
   );
