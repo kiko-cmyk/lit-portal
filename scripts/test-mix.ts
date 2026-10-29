@@ -40,6 +40,7 @@ import {
   planPreservingCharge,
 } from "../src/lib/mix";
 import {
+  FLAVOR_KEYS,
   FLAVORS,
   PACK4_BY_VARIANT,
   PACK4_PRODUCT_ID,
@@ -727,6 +728,46 @@ console.log("\n=== planPreservingCharge ===");
   // El desvio real es 1 centimo, no 3: el reparto proporcional recoloca los sobrantes.
   // Afirmar la cota holgada dejaria pasar una regresion de 2 centimos sin avisar.
   eq(peor, -1, `barrido: el peor desvio es exactamente 1 centimo a favor del cliente (fue ${peor})`);
+}
+
+// EL MISMO BARRIDO CON TODO EL REGISTRO (Salty Raw, 2026-10-29). Con 4 sabores salen
+// formas que con 3 no existian (las 4 en un pack, pack + sueltas de 4 sabores) y el
+// barrido de arriba, con sus cifras de 3 sabores, no las recorre. Las cifras son las de
+// 4 sabores: un sabor mas las cambia y obliga a mirarlas, como paso con Raw.
+{
+  const k = FLAVOR_KEYS.length;
+  function* repartos(n: number, from: number): Generator<number[]> {
+    if (from === k - 1) { yield [n]; return; }
+    for (let x = n; x >= 0; x--) for (const rest of repartos(n - x, from + 1)) yield [x, ...rest];
+  }
+  let casos = 0;
+  let aplican = 0;
+  let subidas = 0;
+  let sobreCatalogo = 0;
+  let peor = 0;
+  for (let n = 1; n <= 6; n++) {
+    for (const counts of repartos(n, 0)) {
+      const mix = FLAVOR_KEYS.map((f, i) => ({ flavor: f, boxes: counts[i] })).filter((x) => x.boxes > 0);
+      const live = TIER_OLD[n];
+      const cat = planTargetLines(mix, LADDER);
+      const r = cat.totalCents > live ? planPreservingCharge(mix, LADDER, live) : null;
+      casos++;
+      if (!r) continue;
+      aplican++;
+      if (r.totalCents > live) subidas++;
+      peor = Math.min(peor, r.totalCents - live);
+      for (const l of r.lines) {
+        const c = cat.lines.find((x) => x.variantId === l.variantId)!;
+        if (l.unitPriceCents > c.unitPriceCents) sobreCatalogo++;
+      }
+    }
+  }
+  eq(k, 4, "barrido del registro: 4 sabores");
+  eq(casos, 209, "barrido 4 sabores: 209 composiciones recorridas");
+  eq(aplican, 160, "barrido 4 sabores: 160 ejercitan de verdad el reparto preservado");
+  eq(subidas, 0, "barrido 4 sabores: CERO composiciones suben el precio");
+  eq(sobreCatalogo, 0, "barrido 4 sabores: CERO lineas por encima de su precio de catalogo");
+  eq(peor, -1, `barrido 4 sabores: el peor desvio es exactamente 1 centimo a favor del cliente (fue ${peor})`);
 }
 
 // IDEMPOTENCIA: preservar dos veces converge. Si erosionara, cada edicion de sabor

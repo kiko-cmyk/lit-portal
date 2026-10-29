@@ -7,14 +7,18 @@
  * Salty Lemon", que es exactamente el bug que el registro arregla.
  *
  * Comprueba:
- *   1. Las 15 variantes del pack de SUSCRIPCIÓN existen, con el SKU del registro,
+ *   1. Las 35 variantes del pack de SUSCRIPCIÓN existen, con el SKU del registro,
  *      todas al mismo precio (85,05 hasta el 6-oct-2026; 113,40 de compra única
  *      desde que el -25% vive en los planes) y `requiresSellingPlan: true`.
  *   2. El producto está en los 8 selling plans canónicos de Seal (una línea
  *      añadida a un producto fuera del plan aterriza como one-time y desaparece
  *      tras el primer envío).
- *   3. Las 5 variantes del pack de COMPRA ÚNICA existen con los mismos SKUs.
+ *   3. Las 35 variantes del pack de COMPRA ÚNICA existen, cada una con su id del
+ *      registro y el SKU de su gemela de suscripción (las 20 de Raw, 2026-10-29, se
+ *      copiaron de la respuesta de su creación: un dígito mal se leería como 1 caja
+ *      de Lemon en los emails y los Drops de un pedido web).
  *   4. La variante de 1 caja de cada sabor comparte precio (la escalera 1-3 = n×caja).
+ *      Raw incluido: el Admin API lee también los productos en borrador.
  *   5. La escalera de SUSCRIPCIÓN que de verdad usa el portal, por sabor: precio de
  *      la variante × (1 − % de los 8 planes), con las mismas guardas que producción
  *      (pricing-core). Antes y después del cambio del 6-oct-2026 tiene que decir
@@ -33,6 +37,7 @@ import { ladderFromProducts, PRICING_QUERY, type ShopifyPricingProduct } from ".
 import {
   ALL_FLAVORS,
   PACK4_OT_PRODUCT_ID,
+  PACK4_OT_VARIANTS,
   PACK4_PRODUCT_ID,
   PACK4_VARIANTS,
   SELLING_PLAN_BY_FREQUENCY,
@@ -72,7 +77,7 @@ async function fetchProduct(productId: string): Promise<AdminProduct | null> {
           sellingPlanGroups(first: 20) {
             edges { node { sellingPlans(first: 20) { edges { node { id } } } } }
           }
-          variants(first: 20) { edges { node { id sku price } } }
+          variants(first: 50) { edges { node { id sku price } } }
         }
       }`,
       variables: { id: `gid://shopify/Product/${productId}` },
@@ -104,7 +109,7 @@ async function main() {
     else fail(`variante ${def.variantId}: SKU en Shopify "${v.sku}" != registro "${def.sku}"`);
     prices.add(v.price);
   }
-  if (prices.size === 1) ok(`las 5 variantes al mismo precio (${[...prices][0]})`);
+  if (prices.size === 1) ok(`las ${PACK4_VARIANTS.length} variantes al mismo precio (${[...prices][0]})`);
   else fail(`precios desalineados entre variantes del pack: ${[...prices].join(", ")}`);
 
   // ── 2. Selling plans ──
@@ -128,6 +133,17 @@ async function main() {
     for (const def of PACK4_VARIANTS) {
       if (otSkus.has(def.sku)) ok(`compra única tiene ${def.sku}`);
       else fail(`compra única SIN el SKU ${def.sku}`);
+    }
+    // Y cada id del registro de compra única existe con su SKU: es lo que leen los
+    // emails de confirmación y los Drops (PACK4_BY_VARIANT), no el SKU.
+    const otLive = new Map(otProd.variants.edges.map((e) => [numericId(e.node.id), e.node]));
+    for (const def of PACK4_OT_VARIANTS) {
+      const v = otLive.get(def.variantId);
+      if (!v) fail(`compra única: variante ${def.variantId} (${def.sku}) NO existe en Shopify`);
+      else if ((v.sku ?? "") !== def.sku) fail(`compra única ${def.variantId}: SKU en Shopify "${v.sku}" != registro "${def.sku}"`);
+    }
+    if (PACK4_OT_VARIANTS.length !== PACK4_VARIANTS.length) {
+      fail(`el registro tiene ${PACK4_OT_VARIANTS.length} variantes de compra única y ${PACK4_VARIANTS.length} de suscripción`);
     }
   }
 

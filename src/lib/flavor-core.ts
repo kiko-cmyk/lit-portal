@@ -9,7 +9,8 @@
  *   - Solo sabor o mezcla, con el MISMO número de cajas. Cambiar las cajas reprecia a
  *     catálogo, y eso se hace en el área personal, viendo el precio.
  *   - Los sabores son los de `FLAVORS`: un sabor nuevo entra solo cuando el portal lo
- *     conoce, sin tocar esto.
+ *     conoce, sin tocar esto. Y si tiene fecha de lanzamiento (`offerableFrom`, Raw el
+ *     29-oct-2026), no se ofrece ni se acepta como destino hasta esa hora del servidor.
  */
 
 import { ApiHttpError } from "@/lib/api-helpers";
@@ -21,16 +22,16 @@ import {
   sameComposition,
   validateMix,
 } from "@/lib/mix";
-import { ALL_FLAVORS, type FlavorKey, isFlavorKey } from "@/lib/seal-plans";
+import { FLAVORS, type FlavorKey, flavorLabel, flavorsNotYetOffered, isFlavorKey, offerableFlavorKeys } from "@/lib/seal-plans";
 
 export interface FlavorOption {
   flavor: FlavorKey;
   label: string;
 }
 
-/** Los sabores que se pueden pedir hoy, en el orden del registro. */
-export function flavorOptions(): FlavorOption[] {
-  return ALL_FLAVORS.map((f) => ({ flavor: f.key, label: f.label }));
+/** Los sabores que se pueden pedir hoy (`now`, reloj del servidor), en el orden del registro. */
+export function flavorOptions(now: number = Date.now()): FlavorOption[] {
+  return offerableFlavorKeys(now).map((k) => ({ flavor: k, label: FLAVORS[k].label }));
 }
 
 export interface FlavorRequest {
@@ -56,7 +57,11 @@ export interface FlavorTarget {
  * De la petición del bot a la composición objetivo. Lanza `ApiHttpError` con un código
  * que el bot sabe explicar; ninguno de estos rechazos es un portal roto.
  */
-export function resolveFlavorTarget(current: FlavorComposition[], req: FlavorRequest): FlavorTarget {
+export function resolveFlavorTarget(
+  current: FlavorComposition[],
+  req: FlavorRequest,
+  now: number = Date.now(),
+): FlavorTarget {
   const hasFlavor = req.flavor !== undefined && req.flavor !== null && req.flavor !== "";
   const hasMix = req.mix !== undefined && req.mix !== null;
   if (hasFlavor && hasMix) {
@@ -100,6 +105,17 @@ export function resolveFlavorTarget(current: FlavorComposition[], req: FlavorReq
       );
     }
     target = parsed.mix;
+  }
+
+  // Un sabor que aún no se ofrece no se propone: el bot no le puede leer al cliente un
+  // cambio que el núcleo va a rechazar (`flavor_not_available_yet`, la misma guarda).
+  const notYet = flavorsNotYetOffered(current, target, now);
+  if (notYet.length) {
+    throw new ApiHttpError(
+      409,
+      "flavor_not_available_yet",
+      `${notYet.map((f) => flavorLabel(f)).join(", ")} is not available yet`,
+    );
   }
 
   const changed = !sameComposition(current, target);

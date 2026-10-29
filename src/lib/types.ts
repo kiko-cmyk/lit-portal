@@ -8,6 +8,7 @@ import type {
   SubscriptionLine,
   SubscriptionShape,
 } from "./mix";
+import type { FlavorKey } from "./seal-plans";
 
 export type { FlavorComposition, SubscriptionLine, SubscriptionShape };
 
@@ -114,6 +115,14 @@ export interface Subscription {
    * cohort can change with an env edit. Reading an existing mix is NOT gated by this.
    */
   canEditMix: boolean;
+  /**
+   * Los sabores que esta pantalla puede OFRECER hoy, calculados con el reloj del
+   * servidor (`offerableFlavorKeys`, 2026-10-29): Raw no aparece como destino hasta su
+   * lanzamiento aunque ya se lea bien. Mismo patrón que `canEditMix`, y obligatorio por
+   * lo mismo: tsc encuentra a los 3 que construyen este tipo. El servidor lo vuelve a
+   * mirar al guardar.
+   */
+  offerableFlavors: FlavorKey[];
   frequency: Frequency;
   frequencyLabel: string;
   /** DOMINANT flavor label. Unchanged for a single-flavor sub. */

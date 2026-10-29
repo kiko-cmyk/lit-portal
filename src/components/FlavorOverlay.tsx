@@ -7,9 +7,10 @@ import { formatEuro } from "@/lib/format-price";
 import { T, useLang } from "@/lib/i18n";
 import { compositionLabel, type FlavorComposition, resplitOnBoxChange } from "@/lib/mix";
 import {
-  ALL_FLAVORS,
   DEFAULT_FLAVOR,
+  type FlavorDef,
   type FlavorKey,
+  flavorChoices,
   flavorKeyForVariant,
 } from "@/lib/seal-plans";
 import type { PricingResponse, Subscription } from "@/lib/types";
@@ -17,8 +18,8 @@ import { FlavorThumb, isMixSavable, MixBuilder } from "./MixBuilder";
 
 /** Seed for a fresh mix: one box to the first flavor, the rest to the second, so the
  *  builder opens on a valid 2-flavor split the customer can nudge. */
-function evenStart(boxCount: number): FlavorComposition[] {
-  const [a, b] = ALL_FLAVORS;
+function evenStart(boxCount: number, flavors: FlavorDef[]): FlavorComposition[] {
+  const [a, b] = flavors;
   if (!b) return [{ flavor: a.key, boxes: boxCount }];
   const first = Math.ceil(boxCount / 2);
   return [
@@ -52,14 +53,20 @@ export function FlavorOverlay({
   const boxCount = subscription.boxCount;
   const currentComposition = subscription.composition ?? [];
   const currentlyMixed = currentComposition.length > 1;
+  // Los sabores que se ofrecen: los que el servidor da por lanzados hoy, más los que la
+  // sub ya lleva (Raw no aparece antes de las 17:00 del 29-oct-2026, aunque se lea bien).
+  const choices = flavorChoices(subscription.offerableFlavors, [
+    currentFlavor,
+    ...currentComposition.map((c) => c.flavor),
+  ]);
   // Mixing needs the flag, 2+ boxes and 2+ flavors in the catalogue. Reading a mix is
   // never gated, so an existing mix still opens in mix mode even if the flag is off.
-  const canMix = (subscription.canEditMix || currentlyMixed) && boxCount >= 2 && ALL_FLAVORS.length >= 2;
+  const canMix = (subscription.canEditMix || currentlyMixed) && boxCount >= 2 && choices.length >= 2;
 
   const [mode, setMode] = useState<"single" | "mix">(currentlyMixed ? "mix" : "single");
   const [selected, setSelected] = useState<FlavorKey>(currentFlavor);
   const [draft, setDraft] = useState<FlavorComposition[]>(() =>
-    currentlyMixed ? currentComposition : resplitOnBoxChange(evenStart(boxCount), boxCount),
+    currentlyMixed ? currentComposition : resplitOnBoxChange(evenStart(boxCount, choices), boxCount),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -159,6 +166,15 @@ export function FlavorOverlay({
           t({
             en: "We can't switch this from here without changing your price, and your price shouldn't change. Write to us and we'll do it for you, keeping what you pay today.",
             es: "No podemos cambiarlo desde aquí sin tocarte el precio, y tu precio no debería cambiar. Escríbenos y lo hacemos nosotros, dejándote lo que pagas hoy.",
+          }),
+        );
+      } else if (err.code === "flavor_not_available_yet") {
+        // No debería verse: esta pantalla solo ofrece lo que el servidor ya da por
+        // lanzado. Queda por si dos relojes de servidor no coinciden por segundos.
+        setError(
+          t({
+            en: "That flavor isn't available yet. Reload the page in a few minutes.",
+            es: "Ese sabor todavía no está disponible. Recarga la página en unos minutos.",
           }),
         );
       } else if (err.code === "mix_not_enabled") {
@@ -352,7 +368,7 @@ export function FlavorOverlay({
             )}
 
             {/* One box: mixing is impossible, so offer the way out instead of a dead end. */}
-            {boxCount === 1 && ALL_FLAVORS.length >= 2 && onRequestPlanChange && (
+            {boxCount === 1 && choices.length >= 2 && onRequestPlanChange && (
               <div className="lp2-card mt-5 px-5 py-4">
                 <p className="text-[12.5px] leading-[1.5] text-[#5E6168]">
                   <T
@@ -397,10 +413,16 @@ export function FlavorOverlay({
             )}
 
             {mode === "mix" && canMix ? (
-              <MixBuilder boxCount={boxCount} value={draft} onChange={setDraft} disabled={busy} />
+              <MixBuilder
+                boxCount={boxCount}
+                value={draft}
+                onChange={setDraft}
+                flavors={choices.map((f) => f.key)}
+                disabled={busy}
+              />
             ) : (
               <div className="mt-6 space-y-2.5">
-                {ALL_FLAVORS.map((f) => {
+                {choices.map((f) => {
                   const isSelected = selected === f.key;
                   const isCurrent = !currentlyMixed && currentFlavor === f.key;
                   return (

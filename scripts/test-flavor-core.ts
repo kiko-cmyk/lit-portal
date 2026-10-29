@@ -20,7 +20,9 @@
  *   - con las mismas cajas el importe se conserva (la SL90 a 67,93 sigue a 67,93);
  *   - después de escribir no hay «hecho» sin ver en Seal lo pedido al mismo importe: la
  *     escritura a medias (línea vieja y nueva a la vez) y un reprecio se detectan;
- *   - la ruta no escribe en Seal por su cuenta: todo pasa por `changePlan`.
+ *   - la ruta no escribe en Seal por su cuenta: todo pasa por `changePlan`;
+ *   - Raw (2026-10-29) se LEE desde ya, pero ni se ofrece ni se acepta como destino
+ *     antes de las 17:00 de Madrid, y la misma guarda está en el núcleo.
  */
 
 import { readFileSync } from "node:fs";
@@ -28,8 +30,8 @@ import { readFileSync } from "node:fs";
 import { ApiHttpError } from "@/lib/api-helpers";
 import { checkFlavorWrite, discountCodesThatMustSurvive, flavorOptions, resolveFlavorTarget } from "@/lib/flavor-core";
 import { type FlavorComposition, type LadderPrices, planPreservingCharge, planTargetLines } from "@/lib/mix";
-import { getChargeTotalCents, getComposition, type SealSubscription } from "@/lib/seal";
-import { FLAVOR_KEYS, type FlavorKey } from "@/lib/seal-plans";
+import { getChargeTotalCents, getComposition, mapToSubscription, type SealSubscription } from "@/lib/seal";
+import { FLAVOR_KEYS, type FlavorKey, offerableFlavorKeys } from "@/lib/seal-plans";
 
 let failures = 0;
 
@@ -54,6 +56,10 @@ function codeOf(fn: () => unknown): string | null {
 const L: FlavorKey = "salty-lemon";
 const W: FlavorKey = "salty-watermelon";
 const P: FlavorKey = "salty-peach";
+const R: FlavorKey = "salty-raw";
+/** Un segundo antes y la hora exacta del lanzamiento de Raw (17:00 en Madrid). */
+const ANTES_RAW = Date.parse("2026-10-29T15:59:59Z");
+const DESDE_RAW = Date.parse("2026-10-29T16:00:00Z");
 const LADDER: LadderPrices = { oneBoxCents: 2835, pack4Cents: 8505 };
 
 const show = (c: FlavorComposition[]) => c.map((x) => `${x.boxes}${x.flavor.split("-")[1][0].toUpperCase()}`).join("+");
@@ -214,9 +220,39 @@ console.log("\n── descuentos que un cambio de sabor no puede perder ──\n
 
 console.log("\n── sabores que se pueden pedir ──\n");
 {
-  const opts = flavorOptions();
-  check("los del registro, en su orden", opts.map((o) => o.flavor).join() === FLAVOR_KEYS.join(), opts.map((o) => o.flavor).join());
+  const opts = flavorOptions(DESDE_RAW);
+  check("desde el lanzamiento, los del registro, en su orden", opts.map((o) => o.flavor).join() === FLAVOR_KEYS.join(), opts.map((o) => o.flavor).join());
   check("todos con nombre", opts.every((o) => o.label.trim().length > 0));
+  const antes = flavorOptions(ANTES_RAW).map((o) => o.flavor);
+  check("antes de las 17:00 del 29-oct, sin Raw", !antes.includes(R) && antes.length === FLAVOR_KEYS.length - 1, antes.join());
+  check("Raw se llama «Salty Raw»", opts.find((o) => o.flavor === R)?.label === "Salty Raw");
+}
+
+console.log("\n── Raw: se lee ya, se ofrece desde las 17:00 ──\n");
+{
+  // Sintéticas, con la forma exacta de las fixtures reales de arriba: una R30 de
+  // suscripción y el pack 1L1W1P1R. Antes del 29-oct no había ninguna sub con Raw.
+  const R30 = sub({ ...FX.P30_SOLA, id: 1, items: FX.P30_SOLA.items.map((it) => ({ ...it, variant_id: "65046837297501", product_id: "16272462053725", title: "LIT Daily Hydration: Raw - 30", variant_sku: "R30" })) });
+  const PACK_RAW = sub({ ...FX.PACK4_2L1W1P, id: 2, items: FX.PACK4_2L1W1P.items.map((it) => ({ ...it, variant_id: "67811578872198", variant_sku: "PACK4-1L1W1P1R" })) });
+  check("una R30 se lee como 1 Raw (no como 1 Lemon)", show(getComposition(R30)) === "1R", show(getComposition(R30)));
+  check("el pack 1L1W1P1R se lee como sus 4 sabores", show(getComposition(PACK_RAW)) === "1L+1W+1P+1R", show(getComposition(PACK_RAW)));
+  const mapped = mapToSubscription(R30, "1");
+  check("la pantalla de una sub de Raw dice «Salty Raw»", mapped.flavor === "Salty Raw" && mapped.flavorSummary === "Salty Raw", mapped.flavorSummary);
+  check("y recibe del servidor qué sabores ofrecer", mapped.offerableFlavors.join() === offerableFlavorKeys().join(), mapped.offerableFlavors.join());
+
+  const sl30 = getComposition(sub(FX.SL30_SOLA));
+  check("antes: el bot no propone pasar a Raw", codeOf(() => resolveFlavorTarget(sl30, { flavor: R }, ANTES_RAW)) === "flavor_not_available_yet");
+  const sl90 = getComposition(sub(FX.SL90_LEGACY));
+  check(
+    "antes: ni meterlo en una mezcla",
+    codeOf(() => resolveFlavorTarget(sl90, { mix: [{ flavor: L, boxes: 2 }, { flavor: R, boxes: 1 }] }, ANTES_RAW)) === "flavor_not_available_yet",
+  );
+  const r = resolveFlavorTarget(sl30, { flavor: R }, DESDE_RAW);
+  check("desde las 17:00: limón → Raw, 1R como `flavor`", show(r.target) === "1R" && r.changed && "flavor" in r.intent);
+  check(
+    "antes: una sub que ya lleva Raw puede pasar a otro sabor",
+    resolveFlavorTarget(getComposition(R30), { flavor: L }, ANTES_RAW).changed === true,
+  );
 }
 
 console.log("\n── guardas de código de la ruta ──\n");
@@ -264,6 +300,22 @@ console.log("\n── guardas de código de la ruta ──\n");
     !/seal\.(addItems|removeItems|editItems|editSubscription|updateSubscription|skip\w*)\(/.test(route),
   );
   check("el área personal sigue simulando por isDryRunRequest", plan.includes("{ dryRun: isDryRunRequest(req, body, ctx.customerId) }"));
+  check("un sabor aún no lanzado es un rechazo de diseño, no una alerta", /BY_DESIGN_FAILURES = new Set\(\[[\s\S]*?"flavor_not_available_yet"/.test(route));
+
+  // La misma puerta en el núcleo, para el área personal: antes de leer precios y de
+  // cualquier escritura en Seal.
+  const core = readFileSync("src/lib/plan-core.ts", "utf8");
+  const gateAt = core.indexOf("flavorsNotYetOffered(currentComposition, targetComposition)");
+  const throwAt = core.indexOf('"flavor_not_available_yet"', gateAt);
+  const firstWrite = Math.min(
+    ...["seal.addItems(", "seal.editItems(", "seal.removeItems(", "seal.editSubscription("]
+      .map((c) => core.indexOf(c))
+      .filter((i) => i > 0),
+  );
+  check(
+    "plan-core: Raw antes de su hora se rechaza antes de tarificar y de escribir",
+    gateAt > 0 && throwAt > gateAt && throwAt < core.indexOf("getLadderPricesForWrite(targetComposition") && throwAt < firstWrite,
+  );
 }
 
 if (failures) {

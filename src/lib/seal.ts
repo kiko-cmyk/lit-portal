@@ -1454,6 +1454,7 @@ import {
   flavorKeyForProductId,
   flavorKeyForVariant,
   flavorLabel,
+  offerableFlavorKeys,
 } from "./seal-plans";
 import {
   boxesForVariantQuantity,
@@ -1821,6 +1822,8 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
     // flag flipping off changed how a mixed sub reads, those subscribers would start
     // seeing a single flavor in the portal and in their emails.
     canEditMix: boxCount >= 2 && status === "active" && mixEnabledForCustomer(customerId),
+    // Qué sabores puede elegir hoy, con la hora del servidor (Raw, desde su lanzamiento).
+    offerableFlavors: offerableFlavorKeys(),
     frequency,
     frequencyLabel: s.delivery_interval,
     flavor: extractFlavor(s),
