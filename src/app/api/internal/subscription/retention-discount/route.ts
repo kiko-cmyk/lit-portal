@@ -35,8 +35,8 @@ import { findAppliedDiscountCodeId, getChargeTotalCents, seal, type SealSubscrip
  *   - `dryRun: false` → APLICAR. Exige la fecha que vio la oferta (`expectedNextChargeDate`):
  *     el cliente aceptó «un 15 % en tu LIT del X», y si el próximo cobro ya es otro no se
  *     aplica (`subscription_changed`). Después se RELEE Seal: sin ver el código en la sub no
- *     hay «hecho» (`discount_unverified`, que avisa; la fila se queda y, si entró, el barrido
- *     lo quita tras su cobro como cualquier otro).
+ *     hay «hecho» (`discount_unverified`; la fila se queda y, si entró, el barrido lo quita tras
+ *     su cobro como cualquier otro). No avisa: lo sigue `check_bot_writes` (ver abajo).
  *
  * Sin entrega pendiente no se ofrece (`no_pending_attempt`): no hay «próximo LIT» que
  * descontar, y es justo cuando Seal está regenerando el calendario o cobrando.
@@ -56,8 +56,11 @@ const PATH = "/api/internal/subscription/retention-discount";
 /**
  * Rechazos que son una respuesta de diseño y no un portal roto: no van a #server-errors.
  * El bot los explica (o deja de ofrecer el 15 %) y, si hace falta, pasa con una persona.
- * `discount_apply_unconfirmed` está aquí porque el núcleo ya avisa él mismo
- * (`retention_apply_unknown`); avisar otra vez sería doble.
+ * `discount_apply_unconfirmed` y `discount_unverified` (29-oct-2026): no se sabe si el 15 % entró,
+ * el bot le dice al cliente «Lo revisamos nosotros» y lo sigue `check_bot_writes` en lit-tools,
+ * que mira en Seal y en el pedido del cobro y abre tarea en LIT Tasks y ticket de Zendesk para
+ * Antonio. Por eso el núcleo tampoco avisa (`retention_apply_unknown`) cuando la llamada es del
+ * bot. Un 500, o `already_applied` (un código puesto sin fila), sí avisan: eso no lo sigue nadie.
  */
 const BY_DESIGN_FAILURES = new Set([
   "missing_field",
@@ -73,6 +76,7 @@ const BY_DESIGN_FAILURES = new Set([
   "change_applying",
   "plan_change_in_progress",
   "discount_apply_unconfirmed",
+  "discount_unverified",
 ]);
 
 interface InternalRetentionBody {

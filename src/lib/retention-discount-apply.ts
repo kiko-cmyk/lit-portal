@@ -188,16 +188,21 @@ export async function applyRetentionDiscount(
         // tras su cobro como cualquier otro; si no aparece, lo cierra el barrido. A una
         // persona, para que lo mire, y al cliente que no lo repita.
         // Esperada (27-oct-2026): avisa y después lanza, y en una función serverless la variante
-        // sin esperar puede no salir nunca (ver lib/alert). Es lo único que le dice a una persona
-        // que mire: el bot calla este código porque el aviso ya está aquí.
-        await runWithoutRequestDeadline(() =>
-          alertSlackErrorAwaited({
-          path,
-          code: `retention_apply_unknown:${sub.id}`,
-          msg: `sub ${sub.id}: no se sabe si ${CODE} se aplicó (${msg}). La fila de seguimiento se mantiene. Comprobar en Seal en unos minutos que el código está UNA vez, o que no está y avisar al cliente.`,
-          customerId,
-        }),
-        );
+        // sin esperar puede no salir nunca (ver lib/alert). En el área personal es lo único que le
+        // dice a una persona que mire.
+        // Del bot (29-oct-2026), no avisa: le dice al cliente «Lo revisamos nosotros» y lo sigue
+        // `check_bot_writes` en lit-tools, que mira en Seal y en el pedido del cobro y abre tarea en
+        // LIT Tasks y ticket de Zendesk para Antonio. El aviso repetía ese mismo caso.
+        if (source !== "whatsapp_bot") {
+          await runWithoutRequestDeadline(() =>
+            alertSlackErrorAwaited({
+            path,
+            code: `retention_apply_unknown:${sub.id}`,
+            msg: `sub ${sub.id}: no se sabe si ${CODE} se aplicó (${msg}). La fila de seguimiento se mantiene. Comprobar en Seal en unos minutos que el código está UNA vez, o que no está y avisar al cliente.`,
+            customerId,
+          }),
+          );
+        }
         throw new ApiHttpError(409, "discount_apply_unconfirmed", msg);
       }
       console.warn(`[retention-discount] apply "failed" but ${CODE} is on sub ${sub.id}: treated as applied`);
