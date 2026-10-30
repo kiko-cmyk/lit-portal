@@ -1,7 +1,12 @@
 import { after, NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { alertSlackError, alertSlackNotice } from "@/lib/alert";
-import { handleManualChargeFailureSafe, hasRecentManualFailure } from "@/lib/charge-now-recovery";
+import {
+  handleLateManualSuccessSafe,
+  handleManualChargeFailureSafe,
+  hasRecentManualFailure,
+  hasRecentManualSuccess,
+} from "@/lib/charge-now-recovery";
 import { applyFollowupSafe } from "@/lib/reactivation";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { isWithinCutoff } from "@/lib/cutoff";
@@ -161,6 +166,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (hasRecentManualFailure(sub)) {
           after(() => runAsBackgroundJob(() => handleManualChargeFailureSafe(sub)));
         }
+        // Y al revés (30-oct-2026): Seal cobra el Adelantar rechazado cuando el cliente
+        // cambia la tarjeta. Si el rescate ya había movido el calendario, el siguiente
+        // cobro se lleva a un ciclo después de este para no cobrar dos veces.
+        if (hasRecentManualSuccess(sub)) {
+          after(() => runAsBackgroundJob(() => handleLateManualSuccessSafe(sub)));
+        }
         // Tras reactivar o reanudar desde el portal, Seal regenera el calendario
         // 27-170 s después y lo trae este update: es cuando se trae a mañana el
         // cobro de quien volvió tras un impago y sale el aviso con la fecha buena
@@ -276,6 +287,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // Retira el crédito del Discovery Set tras la renovación que lo cobró.
         await discoveryRenewalCreditOnSealEvent(sub);
         await consumeReferralRewardsForSub(sub);
+        // Un Adelantar rechazado que Seal acaba de cobrar (ver subscription.updated).
+        if (hasRecentManualSuccess(sub)) {
+          after(() => runAsBackgroundJob(() => handleLateManualSuccessSafe(sub)));
+        }
         break;
       }
       case "billing_attempt.failed": {
