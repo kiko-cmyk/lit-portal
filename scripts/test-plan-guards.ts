@@ -111,5 +111,63 @@ check(
   "Desde el #150 un cambio de solo frecuencia también puede recibirlo.",
 );
 
-console.log(failed ? `\n${failed} FALLO(S)\n` : "\nTodo bien.\n");
-process.exit(failed ? 1 : 0);
+console.log("\n── avisos de una simulación ──\n");
+
+const flavorRoute = code(read("src/app/api/internal/subscription/flavor/route.ts"));
+const beforeDryRun = plan.slice(plan.indexOf("export async function changePlan("), plan.indexOf("if (dryRun) {"));
+const preDryRunAlerts = beforeDryRun.match(/alertSlackError(Awaited)?\((preWrite\()?/g) ?? [];
+check(
+  "los avisos que saltan antes de la rama de simulación pasan por preWrite",
+  preDryRunAlerts.length >= 5 && preDryRunAlerts.every((m) => m.endsWith("preWrite(")),
+  `Encontrados: ${JSON.stringify(preDryRunAlerts)}. La propuesta del bot es un dryRun que llega hasta ahí: sin el prefijo, el aviso parece un cambio escrito.`,
+);
+check(
+  "la guarda de escritura a medias, que corre antes de simular, también",
+  /assertNoUnfinishedLineWrite\([^)]*\bpreWrite\)\)/.test(plan) &&
+    /async function assertNoUnfinishedLineWrite\([\s\S]*?alertSlackErrorAwaited\(preWrite\(\{/.test(plan),
+  "Es la sexta que puede saltar en la propuesta del bot.",
+);
+check(
+  "la puerta del bot se identifica como whatsapp_bot",
+  /dryRun: body\.dryRun === true, eventSource: "whatsapp_bot"/.test(flavorRoute),
+  "Sin eventSource el prefijo dice «Simulación» a secas.",
+);
+
+async function dryRunAlerts() {
+  for (const k of ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "KLAVIYO_PRIVATE_API_KEY", "SLACK_ALERTS_WEBHOOK_URL", "SLACK_SECURITY_WEBHOOK_URL", "SLACK_INCIDENTS_WEBHOOK_URL", "SEAL_API_TOKEN"]) {
+    delete process.env[k];
+  }
+  const { markDryRunAlert } = await import("../src/lib/plan-core");
+  const alert = { path: "/api/subscription/plan", code: "price_preserve_unavailable", msg: "sub 1: rechazado", customerId: "9" };
+  const bot = markDryRunAlert(alert, true, "whatsapp_bot");
+  check(
+    "simulación del bot: el aviso lo dice delante",
+    bot.msg === "Simulación del bot (no se ha escrito nada): sub 1: rechazado",
+    bot.msg,
+  );
+  check(
+    "y conserva path y code, que son la clave del dedupe de 60 s",
+    bot.path === alert.path && bot.code === alert.code && bot.customerId === alert.customerId,
+    JSON.stringify(bot),
+  );
+  check(
+    "simulación del área personal: «Simulación» sin «del bot»",
+    markDryRunAlert(alert, true, undefined).msg.startsWith("Simulación (no se ha escrito nada): "),
+    "El dryRun del área personal (que no pasa eventSource) no es el bot.",
+  );
+  check(
+    "sin dryRun, el aviso sale tal cual",
+    markDryRunAlert(alert, false, "whatsapp_bot") === alert,
+    "Una escritura real no es una simulación.",
+  );
+}
+
+dryRunAlerts()
+  .catch((e) => {
+    console.error("✗ no se pudo cargar plan-core", e);
+    failed++;
+  })
+  .finally(() => {
+    console.log(failed ? `\n${failed} FALLO(S)\n` : "\nTodo bien.\n");
+    process.exit(failed ? 1 : 0);
+  });
