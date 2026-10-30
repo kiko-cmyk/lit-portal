@@ -12,9 +12,12 @@ import { readFileSync } from "node:fs";
 import { classifyCancel, cancelNoticeEvent } from "../src/lib/cancel-notice";
 import {
   addDaysUtc,
+  addIntervalUtc,
+  cardExpiredAt,
   decideRecovery,
   failedManualAttempts,
   hasLaterSuccess,
+  lateManualSuccesses,
   matchIntent,
   syncFailedNote,
   type ChargeNowIntentRow,
@@ -108,6 +111,57 @@ check(
   "suma de días en UTC, también a fin de mes",
   addDaysUtc("2026-10-31", 1) === "2026-11-01" && addDaysUtc("2026-12-31", 1) === "2027-01-01",
   "La fecha objetivo sale de aquí.",
+);
+check(
+  "tarjeta caducada: NO se reintenta, vuelve la fecha de antes",
+  JSON.stringify(
+    decideRecovery({ errorCode: "INVALID_PURCHASE_TYPE", preChargeDate: "2026-11-30", todayYmd: "2026-10-28", cardExpired: true }),
+  ) === JSON.stringify({ action: "restore", targetDate: "2026-11-30" }) &&
+    decideRecovery({ errorCode: "INVALID_PURCHASE_TYPE", preChargeDate: "2026-11-30", todayYmd: "2026-10-28" }).action === "retry",
+  "13175857 (28-oct): tarjeta de 06/2026. Mañana fallaría otra vez y Seal cancela la sub al cuarto intento.",
+);
+check(
+  "la tarjeta vale hasta el último día de su mes",
+  cardExpiredAt("6", "2026", "2026-10-28") &&
+    !cardExpiredAt("10", "2026", "2026-10-28") &&
+    !cardExpiredAt("12", "2026", "2026-10-28") &&
+    cardExpiredAt("12", "2025", "2026-01-05") &&
+    !cardExpiredAt("", "", "2026-10-28") &&
+    !cardExpiredAt("6", "26", "2026-10-28"),
+  "Sin fecha legible no se sabe, y entonces se reintenta como siempre.",
+);
+
+console.log("\n── cobrado tarde: el cliente cambió la tarjeta ──\n");
+
+// Forma real (sub 13175857): rechazado el 28-oct y cobrado el 29-oct a las 15:09 con la
+// tarjeta nueva. El error_code se queda puesto aunque el intento ya esté completado.
+const paidLate: RawBillingAttempt = {
+  id: 183919212, date: "2026-10-28T15:02:40+00:00", attempted_at: "2026-10-29T15:09:28+00:00",
+  status: "completed", completed_at: "2026-10-29T15:09:36+00:00", triggered_manually: "2026-10-28 15:02:46",
+  error_code: "INVALID_PURCHASE_TYPE", error_message: "Your card does not support this type of purchase.",
+};
+const LATE_NOW = Date.parse("2026-10-29T15:10:12Z");
+check(
+  "un Adelantar que falló y luego entró se ve como cobrado tarde",
+  lateManualSuccesses([paidLate, pending], LATE_NOW).map((a) => a.id).join() === "183919212",
+  "Seal reintenta el mismo cobro manual al cambiar la tarjeta y no toca el calendario.",
+);
+check(
+  "un cobro programado o uno de hace días, no",
+  lateManualSuccesses([{ ...paidLate, triggered_manually: "" }], LATE_NOW).length === 0 &&
+    lateManualSuccesses([paidLate], LATE_NOW + 4 * 24 * 3600_000).length === 0 &&
+    lateManualSuccesses([paidLate], LATE_NOW + 4 * 24 * 3600_000, 7 * 24).length === 1,
+  "El webhook mira 72 h; el cron, una semana.",
+);
+check(
+  "siguiente cobro: un ciclo después, con meses de verdad",
+  addIntervalUtc("2026-10-29", "6 month") === "2027-04-29" &&
+    addIntervalUtc("2026-10-29", "1 months") === "2026-11-29" &&
+    addIntervalUtc("2026-08-31", "6 month") === "2027-02-28" &&
+    addIntervalUtc("2026-10-29", "45 day") === "2026-12-13" &&
+    addIntervalUtc("2026-10-29", "2 week") === "2026-11-12" &&
+    addIntervalUtc("2026-10-29", "") === null,
+  "Es lo que hace Seal tras un Adelantar que pasa: hoy + el intervalo de la sub.",
 );
 
 console.log("\n── solo los Adelantar de ESTE portal ──\n");
@@ -284,6 +338,26 @@ check(
   "el rescate toma el mismo cerrojo que charge-now",
   /recoverClaimed[\s\S]*\.from\("charge_now_locks"\)\s*\.insert/.test(RECOVERY),
   "Sin él, un Adelantar que entra durante el rescate dejaría el siguiente cobro para mañana a quien acaba de pagar.",
+);
+check(
+  "con el calendario aún sin rehacer, la fila vuelve a la cola en vez de darse por perdida",
+  /if \(!first && recent\) \{\s*await releaseClaim\(intent\.id\);\s*return \{ kind: "not_ready" \};/.test(RECOVERY) &&
+    RECOVERY.indexOf("if (!first && recent)") < RECOVERY.indexOf("seal.pullCadenceBackTo(") &&
+    /if \(recent && first && first > plan\.targetDate\) \{\s*await releaseClaim\(intent\.id\);/.test(RECOVERY),
+  "13175857 (28-oct): el rescate leyó la sub 9 s antes del calendario nuevo, no movió nada y la sub se quedó con el siguiente cobro en abril.",
+);
+check(
+  "el webhook recoloca el calendario si Seal cobra tarde, en los dos topics",
+  (SEAL.match(/hasRecentManualSuccess\(sub\)\) \{\s*after\(\(\) => runAsBackgroundJob\(\(\) => handleLateManualSuccessSafe\(sub\)\)\)/g) ?? [])
+    .length === 2 && /handleLateManualSuccess\(s, \{ now, maxAgeHours: 7 \* 24 \}\)/.test(RECOVERY),
+  "Llegan billing_attempt/succeeded y subscription/updated a la vez; el cron es la red.",
+);
+check(
+  "cobrado tarde: con cerrojo, solo hacia delante y solo filas que el rescate movió",
+  /realignAfterLateSuccess[\s\S]*\.from\("charge_now_locks"\)\s*\.insert/.test(RECOVERY) &&
+    /seal\.reanchorCadence\(subId, target\)/.test(RECOVERY) &&
+    /\.in\("status", \["retry_scheduled", "date_restored"\]\)/.test(RECOVERY),
+  "Con unhandled el calendario ya es el del reset de Seal; tocarlo lo empeoraría.",
 );
 check(
   "la tabla nueva con RLS y el cerrojo de un intento por fila",
