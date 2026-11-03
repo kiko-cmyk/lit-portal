@@ -38,11 +38,25 @@
  * que el email lo cuente bien. Solo se tocan cobros que lanzó ESTE portal (fila en
  * `charge_now_attempts`): los «cobrar ya» de soporte desde el admin de Seal se
  * quedan como están.
+ *
+ * Corregido el 30-oct-2026 con la sub 13175857 y las 10 filas de charge_now_attempts:
+ *
+ *   - Seal rehace el calendario del reset_schedule unos segundos DESPUÉS de avisar
+ *     del rechazo (15:04:03 el rechazo, 15:04:13 el calendario nuevo). Leído antes no
+ *     hay nada que mover; mientras el fallo es reciente, la fila vuelve a la cola.
+ *   - Seal SÍ vuelve a intentar un Adelantar rechazado cuando el cliente cambia la
+ *     tarjeta: 13175857 lo pagó al día siguiente, nueve minutos después de cambiarla.
+ *     Si el rescate ya había movido el calendario, eso son dos cobros; lo arregla
+ *     `handleLateManualSuccess`.
+ *   - Con la tarjeta caducada (la de 13175857 caducaba en junio) reintentar mañana
+ *     solo vuelve a fallar y mete la sub en el ciclo de 4 intentos de Seal, que la
+ *     cancela al cuarto: se devuelve la fecha de antes, como con el antifraude.
  */
 
 import { alertSlackErrorAwaited, alertSlackNoticeAwaited } from "@/lib/alert";
 import { klaviyo } from "@/lib/klaviyo";
-import { getNextBillingAttempt, mapStatus, seal, type SealSubscription } from "@/lib/seal";
+import { tryWithPlanLock } from "@/lib/plan-lock";
+import { getNextBillingAttempt, mapStatus, ReanchorNotReadyError, seal, type SealSubscription } from "@/lib/seal";
 import { formatShipDateEs } from "@/lib/ship-date-label";
 import { customerLocale, subscriptionSnapshotProps } from "@/lib/sub-event-props";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -86,6 +100,12 @@ export const OPEN_INTENT_MS = 15 * 60 * 1000;
  * (lo que dura el lock de charge_now_locks), hay que revisar los dos plazos.
  */
 const STALE_HANDLING_MS = 15 * 60 * 1000;
+/**
+ * Un fallo más reciente que esto, con el calendario aún sin rehacer, vuelve a la cola
+ * en vez de darse por perdido: lo recoge el subscription/updated que trae el calendario
+ * nuevo (10 s después en 13175857) o el cron.
+ */
+const NOT_READY_GRACE_MS = 30 * 60 * 1000;
 
 const H = 60 * 60 * 1000;
 
@@ -137,18 +157,71 @@ export interface RecoveryPlan {
   targetDate: string;
 }
 
+/** ¿La tarjeta ya estaba caducada el día `ymd`? Vale hasta el último día de su mes. */
+export function cardExpiredAt(
+  month: string | number | null | undefined,
+  year: string | number | null | undefined,
+  ymd: string,
+): boolean {
+  const m = Number(month);
+  const y = Number(year);
+  // Sin fecha legible no se sabe: mejor reintentar, que es lo de siempre.
+  if (!Number.isInteger(m) || !Number.isInteger(y) || m < 1 || m > 12 || y < 2000) return false;
+  const cy = Number(ymd.slice(0, 4));
+  const cm = Number(ymd.slice(5, 7));
+  return y < cy || (y === cy && m < cm);
+}
+
 export function decideRecovery(input: {
   errorCode: string | null | undefined;
   preChargeDate: string | null | undefined;
   todayYmd: string;
+  /** Tarjeta caducada al pedir el cobro: reintentar con ella solo vuelve a fallar. */
+  cardExpired?: boolean;
 }): RecoveryPlan {
   const tomorrow = addDaysUtc(input.todayYmd, 1);
-  if (NO_RETRY_ERROR_CODES.has((input.errorCode ?? "").trim().toUpperCase())) {
+  if (NO_RETRY_ERROR_CODES.has((input.errorCode ?? "").trim().toUpperCase()) || input.cardExpired === true) {
     const pre = input.preChargeDate ? input.preChargeDate.slice(0, 10) : null;
     // Nunca hoy ni antes: la fecha de antes, si aún está por llegar; si no, mañana.
     return { action: "restore", targetDate: pre && pre > tomorrow ? pre : tomorrow };
   }
   return { action: "retry", targetDate: tomorrow };
+}
+
+/** Primer cobro pendiente, con el mismo filtro que el resto del repo (getNextBillingAttempt). */
+function firstPendingYmd(attempts: RawBillingAttempt[]): string | null {
+  return getNextBillingAttempt({ billing_attempts: attempts } as unknown as SealSubscription)?.date?.slice(0, 10) ?? null;
+}
+
+/**
+ * ¿Esperar a Seal en vez de cerrar el rescate? Seal rehace el calendario del
+ * reset_schedule unos segundos DESPUÉS de avisar del rechazo (13175857, 28-oct: rechazo
+ * a las 15:04:03, calendario nuevo a las 15:04:13). El rescate leyó en medio, no movió
+ * nada y cerró la fila: el cliente se quedaba un ciclo sin caja. Solo se espera
+ * mientras el fallo es reciente; pasado eso, se decide con lo que haya.
+ *
+ *   - Antes de mover (`moved` sin pasar): sin cobros pendientes, aún no hay calendario.
+ *   - Después de mover: había algo que traer (el primero, más tarde que la fecha) y no
+ *     se movió nada. pullCadenceBackTo relee la sub, y una lectura fallida (un 429
+ *     vuelve como null) también da 0.
+ */
+export function recoveryReadiness(input: {
+  now: number;
+  failed: RawBillingAttempt;
+  attempts: RawBillingAttempt[];
+  targetDate?: string;
+  moved?: number;
+}): "wait" | "go" {
+  const recent = input.now - attemptTime(input.failed) < NOT_READY_GRACE_MS;
+  if (!recent) return "go";
+  const first = firstPendingYmd(input.attempts);
+  if (input.moved === undefined) return first ? "go" : "wait";
+  return input.moved === 0 && !!first && !!input.targetDate && first > input.targetDate ? "wait" : "go";
+}
+
+/** La tarjeta que tenía la sub ¿estaba caducada el día del Adelantar? */
+function cardExpiredOnFailure(s: SealSubscription, f: RawBillingAttempt): boolean {
+  return cardExpiredAt(s.card_expiry_month, s.card_expiry_year, (f.date || f.attempted_at || "").slice(0, 10));
 }
 
 export interface ChargeNowIntentRow {
@@ -319,7 +392,7 @@ export async function noteChargeNowIntent(id: number, note: string): Promise<voi
 // ─── El rescate ─────────────────────────────────────────────────────────────
 
 export type RecoveryOutcome =
-  | { kind: "not_ours" | "already_handled" | "superseded" | "not_active" | "busy" }
+  | { kind: "not_ours" | "already_handled" | "superseded" | "not_active" | "busy" | "not_ready" }
   | { kind: "retry_scheduled" | "date_restored"; targetDate: string; moved: number }
   | { kind: "would_retry" | "would_restore"; targetDate: string }
   | { kind: "unhandled"; reason: string };
@@ -371,6 +444,7 @@ export async function handleManualChargeFailure(
         errorCode,
         preChargeDate: intent.pre_charge_date,
         todayYmd: new Date(now).toISOString().slice(0, 10),
+        cardExpired: cardExpiredOnFailure(subFromEvent, f),
       });
       out.push({ kind: plan.action === "retry" ? "would_retry" : "would_restore", targetDate: plan.targetDate });
       continue;
@@ -468,10 +542,16 @@ async function recover(
     return { kind: "superseded" };
   }
 
+  if (recoveryReadiness({ now, failed: f, attempts: attemptsOf(fresh) }) === "wait") {
+    await releaseClaim(intent.id);
+    return { kind: "not_ready" };
+  }
+
   const plan = decideRecovery({
     errorCode,
     preChargeDate: intent.pre_charge_date,
     todayYmd: new Date(now).toISOString().slice(0, 10),
+    cardExpired: cardExpiredOnFailure(fresh, f),
   });
 
   let moved = 0;
@@ -498,6 +578,10 @@ async function recover(
     return { kind: "unhandled", reason: "reschedule_failed" };
   }
   if (moved === 0) {
+    if (recoveryReadiness({ now, failed: f, attempts: attemptsOf(fresh), targetDate: plan.targetDate, moved }) === "wait") {
+      await releaseClaim(intent.id);
+      return { kind: "not_ready" };
+    }
     await finishIntent(intent.id, "unhandled", { note: `nada que mover hacia ${plan.targetDate}` });
     await customerCase({
       title: "Adelantar rechazado: el calendario no se ha podido traer a su fecha",
@@ -581,6 +665,276 @@ export async function handleManualChargeFailureSafe(sub: SealSubscription): Prom
       path: "lib/charge-now-recovery",
       code: "charge_now_recovery_crashed",
       msg: `sub ${sub?.id ?? "?"}: falló el rescate de un Adelantar rechazado (${msg}). El cron diario lo reintenta.`,
+    }).catch(() => {});
+  }
+}
+
+// ─── Cobrado tarde: el cliente cambió la tarjeta y Seal lo reintentó ────────
+
+/**
+ * Adelantar rechazados que después SÍ entraron. Seal vuelve a intentar el mismo cobro
+ * manual cuando el cliente cambia la tarjeta (13175857: rechazado el 28-oct, cobrado el
+ * 29-oct a las 15:09 con la tarjeta nueva), y al cobrarlo no toca el calendario. Si el
+ * rescate ya lo había movido (a mañana o a la fecha de antes), quedaría otro cobro
+ * encima de este. Lo que toca es lo mismo que tras un Adelantar que pasa a la primera:
+ * el siguiente cobro, un ciclo después de este.
+ */
+export function lateManualSuccesses(attempts: RawBillingAttempt[], now: number, maxAgeHours = 72): RawBillingAttempt[] {
+  return attempts.filter((a) => {
+    if (a.status !== "completed" || !isManual(a)) return false;
+    const t = Date.parse(a.completed_at || a.attempted_at || "");
+    return Number.isFinite(t) && t <= now + 60_000 && now - t <= maxAgeHours * H;
+  });
+}
+
+/** Filtro barato para el webhook. Casi siempre es un Adelantar que pasó a la primera, sin fila que tocar. */
+export function hasRecentManualSuccess(s: SealSubscription | null | undefined, now = Date.now()): boolean {
+  return lateManualSuccesses(attemptsOf(s), now).length > 0;
+}
+
+/** `YYYY-MM-DD` + el intervalo de Seal («6 month», «45 day», «2 week»), en UTC. null si no se entiende. */
+export function addIntervalUtc(ymd: string, interval: string | null | undefined): string | null {
+  const m = (interval ?? "").toLowerCase().match(/(\d+)\s*(day|week|month)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (m[2] === "day") return addDaysUtc(ymd, n);
+  if (m[2] === "week") return addDaysUtc(ymd, 7 * n);
+  const [y, mo, d] = ymd.split("-").map(Number);
+  const total = mo - 1 + n;
+  const ty = y + Math.floor(total / 12);
+  const tm = total % 12;
+  // El 31 de agosto + 6 meses es el 28 de febrero, no el 3 de marzo.
+  const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return `${ty}-${String(tm + 1).padStart(2, "0")}-${String(Math.min(d, last)).padStart(2, "0")}`;
+}
+
+export type LateSuccessOutcome = "moved" | "aligned" | "busy" | "not_ready" | "check_by_hand" | "noted";
+
+/**
+ * Filas en las que un cobro tardío importa. Las dos primeras las movió el rescate y hay
+ * que recolocarlas. `unhandled` y `expired` fueron a una persona («revisar a mano»): si
+ * devolvió la fecha y luego Seal cobra, son dos cobros (13175857 estaba en unhandled y
+ * se cobró al día siguiente). Esas no se mueven, solo se avisa (Kiko, revisión del #171).
+ */
+const LATE_ROW_STATUSES = ["retry_scheduled", "date_restored", "unhandled", "expired"];
+const MOVED_BY_RESCUE = new Set(["retry_scheduled", "date_restored"]);
+
+/**
+ * Nota de una fila con posible doble cobro: status `unhandled` y la nota empieza así. Es
+ * lo que mira check_charge_now_unhandled de LIT Tasks para abrir la tarea. Puede llegar
+ * en una fila que ya era unhandled y ya tenía tarea por «sin caja».
+ */
+export const DOUBLE_CHARGE_NOTE = "posible doble cobro:";
+/** Nota de un cobro tardío sin riesgo. Con cualquiera de las dos, la fila ya está vista. */
+export const PAID_LATE_NOTE = "cobrado tarde:";
+
+export interface LateSuccessPlan {
+  paidYmd: string;
+  /** Siguiente cobro, un ciclo después del pago. Solo en filas que movió el rescate. */
+  reanchorTo: string | null;
+  /** Cobros que ENTRARON después de pedir el Adelantar (el reintento de mañana, p. ej.). */
+  charged: RawBillingAttempt[];
+  /** Fallidos de estos días: Seal los reintenta todos al cambiar la tarjeta (14657439). */
+  failing: RawBillingAttempt[];
+  /** En una fila que fue a una persona, el primer cobro está antes de lo que dejó Seal. */
+  pulledByHand: string | null;
+  unknownInterval: boolean;
+  doubleChargeRisk: boolean;
+}
+
+/**
+ * Qué hacer con un Adelantar rechazado que Seal acaba de cobrar. `attempts` es la lectura
+ * fresca. `paid.date` es cuándo se pidió el Adelantar; `paid.attempted_at` ya es el
+ * intento que ENTRÓ, así que todo se cuenta desde `date`.
+ */
+export function planLateSuccess(input: {
+  rowStatus: string;
+  paid: RawBillingAttempt;
+  attempts: RawBillingAttempt[];
+  interval: string | null | undefined;
+  now: number;
+}): LateSuccessPlan {
+  const { paid, attempts, interval, now } = input;
+  const paidYmd = (paid.completed_at || paid.attempted_at || "").slice(0, 10);
+  const requested = paid.date || paid.attempted_at || "";
+  const since = Date.parse(requested);
+  const others = attempts.filter((x) => {
+    if (String(x.id) === String(paid.id)) return false;
+    const t = attemptTime(x);
+    return Number.isFinite(t) && t >= since - 7 * 24 * H && t <= now + 60_000;
+  });
+  const charged = others.filter((x) => x.status === "completed" && attemptTime(x) > since);
+  const failing = others.filter((x) => x.status === "error");
+  const target = addIntervalUtc(paidYmd, interval);
+  const movedByRescue = MOVED_BY_RESCUE.has(input.rowStatus);
+  // El reset_schedule de Seal deja el siguiente cobro un ciclo después de PEDIR el
+  // Adelantar. Si está antes, alguien lo trajo a mano.
+  const resetAnchor = addIntervalUtc(requested.slice(0, 10), interval);
+  const first = firstPendingYmd(attempts);
+  const pulledByHand = !movedByRescue && resetAnchor && first && first < resetAnchor ? first : null;
+  const unknownInterval = !target;
+  return {
+    paidYmd,
+    reanchorTo: movedByRescue ? target : null,
+    charged,
+    failing,
+    pulledByHand,
+    unknownInterval,
+    doubleChargeRisk: unknownInterval || charged.length > 0 || failing.length > 0 || !!pulledByHand,
+  };
+}
+
+/** La nota de la fila: deja claro si hay que actuar. */
+export function lateSuccessNote(plan: LateSuccessPlan, moved: number): string {
+  if (!plan.doubleChargeRisk) {
+    const where = plan.reanchorTo ? `siguiente cobro llevado a ${plan.reanchorTo}, ${moved} movidos` : "calendario sin tocar";
+    return `${PAID_LATE_NOTE} el ${plan.paidYmd} (Seal lo reintentó); ${where}`;
+  }
+  const why = [
+    plan.charged.length ? `otro cobro hecho: ${plan.charged.map((x) => `${x.id} (${(x.attempted_at || x.date || "").slice(0, 10)})`).join(", ")}` : "",
+    plan.failing.length ? `fallidos que Seal puede reintentar: ${plan.failing.map((x) => x.id).join(", ")}` : "",
+    plan.pulledByHand ? `fecha traída a mano al ${plan.pulledByHand}` : "",
+    plan.unknownInterval ? "intervalo sin entender" : "",
+  ].filter(Boolean);
+  return `${DOUBLE_CHARGE_NOTE} cobrado tarde el ${plan.paidYmd}; ${why.join("; ")}`.slice(0, 500);
+}
+
+const lateNoted = (note: string | null | undefined) =>
+  !!note && (note.startsWith(DOUBLE_CHARGE_NOTE) || note.startsWith(PAID_LATE_NOTE));
+
+interface LateRow extends ChargeNowIntentRow {
+  failed_attempt_id: string | null;
+  note: string | null;
+}
+
+export async function handleLateManualSuccess(
+  subFromEvent: SealSubscription,
+  opts: { now?: number; maxAgeHours?: number } = {},
+): Promise<LateSuccessOutcome[]> {
+  const now = opts.now ?? Date.now();
+  const paid = lateManualSuccesses(attemptsOf(subFromEvent), now, opts.maxAgeHours ?? 72);
+  if (paid.length === 0) return [];
+
+  const subId = Number(subFromEvent.id);
+  const { data, error } = await supabaseAdmin()
+    .from("charge_now_attempts")
+    .select("id, seal_subscription_id, customer_id, pre_charge_date, requested_at, status, failed_attempt_id, note")
+    .eq("seal_subscription_id", String(subId))
+    .in("status", LATE_ROW_STATUSES)
+    .gte("requested_at", new Date(now - 30 * 24 * H).toISOString());
+  if (error) throw new Error(`charge_now_attempts: ${error.message}`);
+  const rows = ((data ?? []) as LateRow[]).filter((r) => !lateNoted(r.note));
+
+  const out: LateSuccessOutcome[] = [];
+  for (const a of paid) {
+    // La fila que reclamó ese intento; una `expired` puede no haberlo reclamado nunca, y
+    // entonces se casa por la hora, como el rescate.
+    const row =
+      rows.find((r) => r.failed_attempt_id === String(a.id)) ??
+      (matchIntent(rows.filter((r) => !r.failed_attempt_id), a, attemptsOf(subFromEvent)) as LateRow | null);
+    if (row) out.push(await settleLateSuccess(subId, row, a, now));
+  }
+  return out;
+}
+
+async function settleLateSuccess(
+  subId: number,
+  row: LateRow,
+  paid: RawBillingAttempt,
+  now: number,
+): Promise<LateSuccessOutcome> {
+  const sb = supabaseAdmin();
+  // El mismo cerrojo que charge-now y el rescate. Llegan dos webhooks a la vez
+  // (billing_attempt/succeeded y subscription/updated): uno actúa y el otro sale.
+  await sb
+    .from("charge_now_locks")
+    .delete()
+    .eq("seal_subscription_id", subId)
+    .lt("created_at", new Date(Date.now() - 120_000).toISOString());
+  const { error: lockErr } = await sb
+    .from("charge_now_locks")
+    .insert({ seal_subscription_id: subId, customer_id: row.customer_id });
+  if (lockErr && (lockErr as { code?: string }).code === "23505") return "busy";
+  try {
+    const fresh = await seal.getSubscriptionById(subId, undefined, { throwTransient: true });
+    if (!fresh) throw new Error("Seal no devuelve la sub");
+    const plan = planLateSuccess({
+      rowStatus: row.status,
+      paid,
+      attempts: attemptsOf(fresh),
+      interval: fresh.delivery_interval,
+      now,
+    });
+
+    let moved = 0;
+    if (plan.reanchorTo) {
+      const to = plan.reanchorTo;
+      let res: { ran: true; value: number } | { ran: false; reason: string };
+      try {
+        // Con el cerrojo de plan, como los otros tres que re-anclan (webhook,
+        // reanchor-drain y hub/dashboard): charge_now_locks no excluye un cambio de plan
+        // o de ritmo a medias, y re-anclar encima movía el calendario dos veces (Kiko,
+        // revisión del #171). Solo hacia delante: si ya está en esa fecha, no hace nada.
+        res = await tryWithPlanLock(row.customer_id, subId, "charge-now-paid-late", () =>
+          seal.reanchorCadence(subId, to),
+        );
+      } catch (err) {
+        // Seal está rehaciendo el calendario: la fila sigue igual y lo repite el
+        // siguiente webhook o el cron.
+        if (err instanceof ReanchorNotReadyError) return "not_ready";
+        throw err;
+      }
+      if (!res.ran) return "busy";
+      moved = res.value;
+    }
+
+    const note = lateSuccessNote(plan, moved);
+    if (plan.doubleChargeRisk) {
+      await finishIntent(row.id, "unhandled", { note });
+      await customerCase({
+        title: "Adelantar cobrado tarde: puede pagar dos veces",
+        code: "charge_now_paid_late_check",
+        subId,
+        customerId: row.customer_id,
+        fields: {
+          cobrado: plan.paidYmd,
+          motivo: note.slice(DOUBLE_CHARGE_NOTE.length).trim(),
+          que_hacer:
+            "Mirar en Seal y Shopify si hay más de un cobro de esa caja. Si lo hay, cancelar ese pedido antes de que salga y devolver el cobro.",
+        },
+      });
+      return "check_by_hand";
+    }
+    await finishIntent(row.id, "succeeded", { note });
+    if (!MOVED_BY_RESCUE.has(row.status)) {
+      // Esta fila fue a una persona: que sepa que ya está pagado y no devuelva la fecha.
+      await customerCase({
+        title: "Adelantar cobrado tarde: ya está pagado, no devolver la fecha",
+        code: "charge_now_paid_late_noted",
+        subId,
+        customerId: row.customer_id,
+        fields: { cobrado: plan.paidYmd, que_hacer: "Nada. Si había una tarea abierta por este Adelantar, se puede cerrar." },
+      });
+      return "noted";
+    }
+    console.log("[charge-now-recovery] cobrado tarde", { subId, paidYmd: plan.paidYmd, to: plan.reanchorTo, moved });
+    return moved > 0 ? "moved" : "aligned";
+  } finally {
+    if (!lockErr) await sb.from("charge_now_locks").delete().eq("seal_subscription_id", subId);
+  }
+}
+
+/** Para el webhook: nunca lanza. */
+export async function handleLateManualSuccessSafe(sub: SealSubscription): Promise<void> {
+  try {
+    await handleLateManualSuccess(sub);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[charge-now-recovery] cobrado tarde: fallo inesperado", { sealId: sub?.id, msg });
+    await alertSlackErrorAwaited({
+      path: "lib/charge-now-recovery",
+      code: "charge_now_paid_late_crashed",
+      msg: `sub ${sub?.id ?? "?"}: un Adelantar rechazado se cobró después y no se pudo recolocar el calendario (${msg}). El cron diario lo reintenta.`,
     }).catch(() => {});
   }
 }
@@ -686,6 +1040,38 @@ export async function sweepChargeNowAttempts(
       tally.outcomes.push(`${row.seal_subscription_id}:error`);
       console.error("[charge-now-recovery] repaso: fila con error", {
         id: row.id,
+        msg: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Adelantar rechazados de la última semana que Seal cobró después (el cliente cambió
+  // la tarjeta). El webhook lo resuelve al momento; esto es la red si no llegó.
+  const { data: rescued, error: rescuedErr } = await sb
+    .from("charge_now_attempts")
+    .select("seal_subscription_id, note")
+    .in("status", LATE_ROW_STATUSES)
+    .gte("handled_at", new Date(now - 7 * 24 * H).toISOString())
+    .order("handled_at", { ascending: false })
+    .limit(30);
+  if (rescuedErr) console.error("[charge-now-recovery] repaso: no se pudieron leer los rescatados", rescuedErr.message);
+  const pendingLate = ((rescued ?? []) as { seal_subscription_id: string; note: string | null }[]).filter(
+    (r) => !lateNoted(r.note),
+  );
+  for (const sealId of [...new Set(pendingLate.map((r) => r.seal_subscription_id))].slice(0, 15)) {
+    try {
+      const s = await seal.getSubscriptionById(Number(sealId)).catch(() => null);
+      if (!s || lateManualSuccesses(attemptsOf(s), now, 7 * 24).length === 0) continue;
+      if (opts.dryRun) {
+        tally.outcomes.push(`${sealId}:would_check_paid_late`);
+        continue;
+      }
+      const res = await handleLateManualSuccess(s, { now, maxAgeHours: 7 * 24 });
+      tally.outcomes.push(...res.map((o) => `${sealId}:paid_late_${o}`));
+    } catch (err) {
+      tally.outcomes.push(`${sealId}:paid_late_error`);
+      console.error("[charge-now-recovery] repaso: cobrado tarde con error", {
+        sealId,
         msg: err instanceof Error ? err.message : String(err),
       });
     }

@@ -12,10 +12,18 @@ import { readFileSync } from "node:fs";
 import { classifyCancel, cancelNoticeEvent } from "../src/lib/cancel-notice";
 import {
   addDaysUtc,
+  addIntervalUtc,
+  cardExpiredAt,
   decideRecovery,
   failedManualAttempts,
   hasLaterSuccess,
+  DOUBLE_CHARGE_NOTE,
+  lateManualSuccesses,
+  lateSuccessNote,
   matchIntent,
+  PAID_LATE_NOTE,
+  planLateSuccess,
+  recoveryReadiness,
   syncFailedNote,
   type ChargeNowIntentRow,
   type RawBillingAttempt,
@@ -108,6 +116,153 @@ check(
   "suma de días en UTC, también a fin de mes",
   addDaysUtc("2026-10-31", 1) === "2026-11-01" && addDaysUtc("2026-12-31", 1) === "2027-01-01",
   "La fecha objetivo sale de aquí.",
+);
+check(
+  "tarjeta caducada: NO se reintenta, vuelve la fecha de antes",
+  JSON.stringify(
+    decideRecovery({ errorCode: "INVALID_PURCHASE_TYPE", preChargeDate: "2026-11-30", todayYmd: "2026-10-28", cardExpired: true }),
+  ) === JSON.stringify({ action: "restore", targetDate: "2026-11-30" }) &&
+    decideRecovery({ errorCode: "INVALID_PURCHASE_TYPE", preChargeDate: "2026-11-30", todayYmd: "2026-10-28" }).action === "retry",
+  "13175857 (28-oct): tarjeta de 06/2026. Mañana fallaría otra vez y Seal cancela la sub al cuarto intento.",
+);
+check(
+  "la tarjeta vale hasta el último día de su mes",
+  cardExpiredAt("6", "2026", "2026-10-28") &&
+    !cardExpiredAt("10", "2026", "2026-10-28") &&
+    !cardExpiredAt("12", "2026", "2026-10-28") &&
+    cardExpiredAt("12", "2025", "2026-01-05") &&
+    !cardExpiredAt("", "", "2026-10-28") &&
+    !cardExpiredAt("6", "26", "2026-10-28"),
+  "Sin fecha legible no se sabe, y entonces se reintenta como siempre.",
+);
+
+console.log("\n── cobrado tarde: el cliente cambió la tarjeta ──\n");
+
+// Forma real (sub 13175857): rechazado el 28-oct y cobrado el 29-oct a las 15:09 con la
+// tarjeta nueva. El error_code se queda puesto aunque el intento ya esté completado.
+const paidLate: RawBillingAttempt = {
+  id: 183919212, date: "2026-10-28T15:02:40+00:00", attempted_at: "2026-10-29T15:09:28+00:00",
+  status: "completed", completed_at: "2026-10-29T15:09:36+00:00", triggered_manually: "2026-10-28 15:02:46",
+  error_code: "INVALID_PURCHASE_TYPE", error_message: "Your card does not support this type of purchase.",
+};
+const LATE_NOW = Date.parse("2026-10-29T15:10:12Z");
+check(
+  "un Adelantar que falló y luego entró se ve como cobrado tarde",
+  lateManualSuccesses([paidLate, pending], LATE_NOW).map((a) => a.id).join() === "183919212",
+  "Seal reintenta el mismo cobro manual al cambiar la tarjeta y no toca el calendario.",
+);
+check(
+  "un cobro programado o uno de hace días, no",
+  lateManualSuccesses([{ ...paidLate, triggered_manually: "" }], LATE_NOW).length === 0 &&
+    lateManualSuccesses([paidLate], LATE_NOW + 4 * 24 * 3600_000).length === 0 &&
+    lateManualSuccesses([paidLate], LATE_NOW + 4 * 24 * 3600_000, 7 * 24).length === 1,
+  "El webhook mira 72 h; el cron, una semana.",
+);
+check(
+  "siguiente cobro: un ciclo después, con meses de verdad",
+  addIntervalUtc("2026-10-29", "6 month") === "2027-04-29" &&
+    addIntervalUtc("2026-10-29", "1 months") === "2026-11-29" &&
+    addIntervalUtc("2026-08-31", "6 month") === "2027-02-28" &&
+    addIntervalUtc("2026-10-29", "45 day") === "2026-12-13" &&
+    addIntervalUtc("2026-10-29", "2 week") === "2026-11-12" &&
+    addIntervalUtc("2026-10-29", "") === null,
+  "Es lo que hace Seal tras un Adelantar que pasa: hoy + el intervalo de la sub.",
+);
+
+// Forma real de 13175857 en webhook_log, 28-oct: el rechazo llega a las 15:04:03 SIN
+// cobros pendientes y el calendario nuevo, a las 15:04:13. El rescate corrió a las 15:04:04.
+const may: RawBillingAttempt = {
+  id: 138548513, date: "2026-05-30T10:00:00+00:00", attempted_at: "2026-05-30T10:03:15+00:00",
+  status: "completed", completed_at: "2026-05-30T10:03:21+00:00", triggered_manually: "",
+};
+const rejected: RawBillingAttempt = {
+  id: 183919212, date: "2026-10-28T15:02:40+00:00", attempted_at: "2026-10-28T15:02:46+00:00",
+  status: "error", completed_at: "", triggered_manually: "2026-10-28 15:02:46", error_code: "INVALID_PURCHASE_TYPE",
+};
+const sched = (id: number, ymd: string): RawBillingAttempt => ({
+  id, date: `${ymd}T15:00:00+00:00`, attempted_at: null, status: "", completed_at: "", triggered_manually: "",
+});
+const regenerated = [sched(183919354, "2027-04-28"), sched(183919355, "2027-10-28"), sched(183919356, "2028-04-28")];
+const RESCUE_AT = Date.parse("2026-10-28T15:04:04Z");
+const MIN = 60_000;
+
+console.log("\n── el rescate espera al calendario nuevo ──\n");
+
+check(
+  "a las 15:04:04, sin calendario nuevo: espera",
+  recoveryReadiness({ now: RESCUE_AT, failed: rejected, attempts: [may, rejected] }) === "wait",
+  "Es justo lo que pasó: leído 9 s antes del calendario nuevo. Ni el cobro de mayo ni el rechazado cuentan como pendientes.",
+);
+check(
+  "10 s después, con el calendario nuevo: sigue",
+  recoveryReadiness({ now: RESCUE_AT + 10_000, failed: rejected, attempts: [may, rejected, ...regenerated] }) === "go",
+  "Con cobros pendientes ya hay algo que traer.",
+);
+check(
+  "espera solo mientras el fallo es reciente (menos de 30 min)",
+  recoveryReadiness({ now: Date.parse(rejected.attempted_at!) + 29 * MIN, failed: rejected, attempts: [may, rejected] }) === "wait" &&
+    recoveryReadiness({ now: Date.parse(rejected.attempted_at!) + 31 * MIN, failed: rejected, attempts: [may, rejected] }) === "go",
+  "Pasada la media hora (el cron) se decide con lo que haya: si sigue sin calendario, va a una persona.",
+);
+check(
+  "tras mover: espera solo si había algo que traer y no se movió nada",
+  recoveryReadiness({ now: RESCUE_AT, failed: rejected, attempts: [may, rejected, ...regenerated], targetDate: "2026-10-29", moved: 0 }) === "wait" &&
+    recoveryReadiness({ now: RESCUE_AT + 31 * MIN, failed: rejected, attempts: [may, rejected, ...regenerated], targetDate: "2026-10-29", moved: 0 }) === "go" &&
+    recoveryReadiness({ now: RESCUE_AT, failed: rejected, attempts: [may, rejected, sched(1, "2026-10-29")], targetDate: "2026-10-29", moved: 0 }) === "go" &&
+    recoveryReadiness({ now: RESCUE_AT, failed: rejected, attempts: [may, rejected, ...regenerated], targetDate: "2026-10-29", moved: 3 }) === "go",
+  "Un 0 con el primer cobro más tarde es una lectura fallida dentro de pullCadenceBackTo; con el primero ya en su fecha, es de verdad nada que mover.",
+);
+
+console.log("\n── cobrado tarde: qué se hace ──\n");
+
+// Tras el cobro del 29-oct: el mismo intento, completado; el calendario, el del reset.
+const afterPay = [may, paidLate, ...regenerated];
+const plan = (rowStatus: string, attempts: RawBillingAttempt[], interval = "6 month") =>
+  planLateSuccess({ rowStatus, paid: paidLate, attempts, interval, now: LATE_NOW });
+check(
+  "13175857 tal cual (unhandled, calendario del reset): sin riesgo y sin mover",
+  ((p) => !p.doubleChargeRisk && p.reanchorTo === null && p.charged.length === 0 && p.failing.length === 0)(plan("unhandled", afterPay)),
+  "El reset de Seal ya dejó el siguiente cobro seis meses después; solo se avisa de que no hay que devolver la fecha.",
+);
+check(
+  "unhandled y alguien trajo la fecha a mano: posible doble cobro, sin mover",
+  ((p) => p.doubleChargeRisk && p.pulledByHand === "2026-11-30" && p.reanchorTo === null)(
+    plan("unhandled", [may, paidLate, sched(1, "2026-11-30"), sched(2, "2027-05-30")]),
+  ),
+  "Lo que pedía el correo del 29-oct: con el cobro del 29 hecho, el 30-nov sería el segundo.",
+);
+check(
+  "date_restored: se lleva el siguiente cobro a un ciclo después del pago",
+  ((p) => !p.doubleChargeRisk && p.reanchorTo === "2027-04-29")(plan("date_restored", [may, paidLate, sched(1, "2026-11-30"), sched(2, "2027-05-30")])),
+  "La fecha de antes la puso el rescate; con el Adelantar cobrado, sobra.",
+);
+const retryPaid: RawBillingAttempt = {
+  id: 9, date: "2026-10-29T13:00:00+00:00", attempted_at: "2026-10-29T13:00:04+00:00",
+  status: "completed", completed_at: "2026-10-29T13:00:09+00:00", triggered_manually: "",
+};
+check(
+  "retry_scheduled y el reintento de mañana ya entró: doble cobro",
+  ((p) => p.doubleChargeRisk && p.charged.map((x) => x.id).join() === "9")(plan("retry_scheduled", [may, paidLate, retryPaid, ...regenerated])),
+  "Se cuenta desde que se PIDIÓ el Adelantar (date): el reintento de las 13:00 va antes del cobro tardío de las 15:09.",
+);
+check(
+  "retry_scheduled y el reintento falló: Seal puede cobrarlo también",
+  ((p) => p.doubleChargeRisk && p.failing.map((x) => x.id).join() === "9")(
+    plan("retry_scheduled", [may, paidLate, { ...retryPaid, status: "error", completed_at: "" }, ...regenerated]),
+  ),
+  "Seal reintenta todos los fallidos al cambiar la tarjeta (14657439, 28-oct).",
+);
+check(
+  "intervalo sin entender: a una persona, sin mover",
+  ((p) => p.doubleChargeRisk && p.unknownInterval && p.reanchorTo === null)(plan("date_restored", afterPay, "")),
+  "Sin intervalo no se sabe dónde va el siguiente cobro.",
+);
+check(
+  "la nota dice si hay que actuar",
+  lateSuccessNote(plan("unhandled", afterPay), 0).startsWith(PAID_LATE_NOTE) &&
+    lateSuccessNote(plan("retry_scheduled", [may, paidLate, retryPaid]), 0).startsWith(DOUBLE_CHARGE_NOTE) &&
+    lateSuccessNote(plan("retry_scheduled", [may, paidLate, retryPaid]), 0).includes("9 (2026-10-29)"),
+  "check_charge_now_unhandled de LIT Tasks abre la tarea con unhandled + «posible doble cobro:».",
 );
 
 console.log("\n── solo los Adelantar de ESTE portal ──\n");
@@ -280,10 +435,49 @@ check(
     /\.eq\("status", "handling"\)\s*\.lt\("handled_at"/.test(RECOVERY),
   "Sin esto la fila se quedaba en handling para siempre y el cliente, sin caja.",
 );
+/** Cuerpo de una función del fuente, hasta su llave de cierre en la columna 0. */
+const fnBody = (src: string, name: string): string => {
+  const i = src.search(new RegExp(`function ${name}\\b`));
+  if (i < 0) return "";
+  const j = src.indexOf("\n}\n", i);
+  return src.slice(i, j < 0 ? undefined : j);
+};
+const RECOVER_CLAIMED = fnBody(RECOVERY, "recoverClaimed");
+const RECOVER = fnBody(RECOVERY, "recover");
+const SETTLE_LATE = fnBody(RECOVERY, "settleLateSuccess");
+
 check(
   "el rescate toma el mismo cerrojo que charge-now",
-  /recoverClaimed[\s\S]*\.from\("charge_now_locks"\)\s*\.insert/.test(RECOVERY),
+  /\.from\("charge_now_locks"\)\s*\.insert/.test(RECOVER_CLAIMED),
   "Sin él, un Adelantar que entra durante el rescate dejaría el siguiente cobro para mañana a quien acaba de pagar.",
+);
+check(
+  "el rescate pregunta a recoveryReadiness antes y después de mover, y si espera devuelve la fila a la cola",
+  RECOVER.indexOf("recoveryReadiness(") > 0 &&
+    RECOVER.indexOf("recoveryReadiness(") < RECOVER.indexOf("seal.pullCadenceBackTo(") &&
+    (RECOVER.match(/=== "wait"\) \{\s*await releaseClaim\(intent\.id\);\s*return \{ kind: "not_ready" \};/g) ?? []).length === 2,
+  "13175857 (28-oct): el rescate leyó la sub 9 s antes del calendario nuevo, no movió nada y la sub se quedó con el siguiente cobro en abril.",
+);
+check(
+  "el webhook resuelve el cobro tardío en los dos topics, y el cron es la red",
+  (SEAL.match(/hasRecentManualSuccess\(sub\)\) \{\s*after\(\(\) => runAsBackgroundJob\(\(\) => handleLateManualSuccessSafe\(sub\)\)\)/g) ?? [])
+    .length === 2 && /handleLateManualSuccess\(s, \{ now, maxAgeHours: 7 \* 24 \}\)/.test(RECOVERY),
+  "Llegan billing_attempt/succeeded y subscription/updated a la vez; el cron es la red.",
+);
+check(
+  "cobrado tarde: cerrojo de charge-now y cerrojo de plan alrededor de reanchorCadence",
+  /\.from\("charge_now_locks"\)\s*\.insert/.test(SETTLE_LATE) &&
+    /tryWithPlanLock\([\s\S]{0,160}?seal\.reanchorCadence\(subId, to\)/.test(SETTLE_LATE) &&
+    /if \(!res\.ran\) return "busy";/.test(SETTLE_LATE) &&
+    !/seal\.reanchorCadence\(/.test(SETTLE_LATE.replace(/tryWithPlanLock\([\s\S]*?seal\.reanchorCadence\(subId, to\)/, "")),
+  "charge_now_locks no excluye un cambio de plan a medias: sin el de plan, el calendario se movía dos veces (Kiko, revisión del #171).",
+);
+check(
+  "cobrado tarde: mira también las filas que fueron a una persona",
+  /const LATE_ROW_STATUSES = \["retry_scheduled", "date_restored", "unhandled", "expired"\];/.test(RECOVERY) &&
+    /\.in\("status", LATE_ROW_STATUSES\)/.test(fnBody(RECOVERY, "handleLateManualSuccess")) &&
+    /\.in\("status", LATE_ROW_STATUSES\)/.test(fnBody(RECOVERY, "sweepChargeNowAttempts")),
+  "13175857 estaba en unhandled: si alguien devolvía la fecha a mano, eran dos cobros sin caso.",
 );
 check(
   "la tabla nueva con RLS y el cerrojo de un intento por fila",
