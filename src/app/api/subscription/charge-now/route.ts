@@ -5,6 +5,7 @@ import {
   claimChargeNowIntent,
   customerCase,
   hasOpenChargeNowIntent,
+  hasUnpaidChargeNow,
   noteChargeNowIntent,
   recordChargeNowIntent,
   syncFailedNote,
@@ -100,6 +101,18 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
   // Un cambio de plan a medio aplicar (14-oct-2026): la sub puede tener las líneas viejas y
   // las nuevas a la vez hasta que termine, y Adelantar en ese hueco las cobraría todas.
   await assertNoPendingLineRepair(ctx.customerId, sub.id, "charge-now");
+
+  // Un Adelantar rechazado que Seal aún puede cobrar (3-nov-2026): Seal reintenta los
+  // fallidos cuando el cliente cambia la tarjeta, todos a la vez. Otro encima dejaría un
+  // segundo intento fallido y, con la tarjeta nueva, dos cobros. Va antes que el de «en
+  // curso»: con el rechazo ya conocido, lo que toca decir es que actualice la tarjeta.
+  if (hasUnpaidChargeNow(sub)) {
+    throw new ApiHttpError(
+      409,
+      "card_update_pending",
+      "A previous charge-now was declined and Seal will retry it when the payment method is updated.",
+    );
+  }
 
   // Un Adelantar de esta sub aún en curso (2026-10-14): o se está cobrando, o la
   // tarjeta lo acaba de rechazar y el webhook lo está rescatando, o Seal no

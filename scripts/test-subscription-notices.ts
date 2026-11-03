@@ -24,6 +24,7 @@ import {
   PAID_LATE_NOTE,
   planLateSuccess,
   recoveryReadiness,
+  unpaidManualFailure,
   syncFailedNote,
   type ChargeNowIntentRow,
   type RawBillingAttempt,
@@ -265,6 +266,27 @@ check(
   "check_charge_now_unhandled de LIT Tasks abre la tarea con unhandled + «posible doble cobro:».",
 );
 
+console.log("\n── no se deja adelantar otra vez con uno rechazado sin cobrar ──\n");
+
+check(
+  "13175857 tras el rechazo: bloqueado hasta que cambie la tarjeta",
+  unpaidManualFailure([may, rejected, ...regenerated], RESCUE_AT)?.id === 183919212,
+  "Seal reintenta todos los Adelantar fallidos al cambiar la tarjeta: otro encima serían dos cobros.",
+);
+check(
+  "en cuanto se cobra (el mismo intento u otro posterior), deja de bloquear",
+  unpaidManualFailure(afterPay, LATE_NOW) === null &&
+    unpaidManualFailure([may, rejected, retryPaid, ...regenerated], LATE_NOW) === null,
+  "Con un cobro bueno después, el cliente ya ha pagado algo.",
+);
+check(
+  "ni un cobro programado fallido ni uno manual de hace más de 30 días",
+  unpaidManualFailure([failedScheduled], Date.parse("2026-10-14T12:00:00Z")) === null &&
+    unpaidManualFailure([rejected], Date.parse(rejected.attempted_at!) + 31 * 24 * 3600_000) === null &&
+    unpaidManualFailure([rejected], Date.parse(rejected.attempted_at!) + 29 * 24 * 3600_000)?.id === 183919212,
+  "Los programados los lleva el ciclo de 4 intentos de Seal; el bloqueo no es para siempre.",
+);
+
 console.log("\n── solo los Adelantar de ESTE portal ──\n");
 
 const row = (id: number, requestedAt: string, status = "requested"): ChargeNowIntentRow => ({
@@ -409,6 +431,15 @@ check(
   /alreadyScheduled \|\| \(err instanceof SealApiError && err\.status >= 200 && err\.status < 500\)/.test(CHARGE) &&
     /let syncOwned = explicitRejection;/.test(CHARGE),
   "Seal puede haber cobrado y contestado tarde: devolver la fecha de antes le cobraría dos veces.",
+);
+check(
+  "con un Adelantar rechazado sin cobrar, charge-now contesta 409 antes de nada y la pantalla bloquea el botón",
+  CHARGE.indexOf("hasUnpaidChargeNow(sub)") > 0 &&
+    CHARGE.indexOf("hasUnpaidChargeNow(sub)") < CHARGE.indexOf("hasOpenChargeNowIntent(") &&
+    CHARGE.indexOf("hasUnpaidChargeNow(sub)") < CHARGE.indexOf("seal.chargeNow(") &&
+    /if \(hasUnpaidChargeNow\(sub\)\) \{\s*throw new ApiHttpError\(\s*409,\s*"card_update_pending"/.test(CHARGE) &&
+    /code === "card_update_pending"\) \{[\s\S]{0,200}setLocked\(true\)/.test(readFileSync("src/components/ChargeNowOverlay.tsx", "utf8")),
+  "Decisión de Juan (3-nov): el Adelantar rechazado se cobra solo al cambiar la tarjeta; otra pulsación sería otro cobro.",
 );
 check(
   "no deja lanzar un Adelantar con otro en curso, y lo mira antes del lock",

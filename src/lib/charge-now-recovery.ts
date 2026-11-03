@@ -268,6 +268,35 @@ export function matchIntent(
   return otherBetween ? null : row;
 }
 
+/** Días que bloquea un Adelantar rechazado sin cobrar (14657439 tuvo un reintento 13 días después). */
+export const UNPAID_CHARGE_NOW_BLOCK_DAYS = 30;
+
+/**
+ * Un Adelantar rechazado que Seal todavía puede cobrar (3-nov-2026, decisión de Juan a
+ * propuesta de Kiko en la revisión del #171). Seal vuelve a intentar los cobros manuales
+ * fallidos cuando el cliente cambia la tarjeta, y los intenta TODOS (14657439, 28-oct).
+ * Cada pulsación de más dejaba otro intento fallido, y al cambiar la tarjeta se podían
+ * cobrar dos o tres cajas. Mientras quede uno, charge-now contesta 409 y la pantalla pide
+ * actualizar la tarjeta: al cambiarla, ese Adelantar se cobra solo.
+ *
+ * Deja de bloquear en cuanto entra cualquier cobro posterior (el cliente ya ha pagado
+ * algo) o pasados UNPAID_CHARGE_NOW_BLOCK_DAYS. También cuenta un «cobrar ya» de soporte
+ * rechazado: Seal lo reintenta igual.
+ */
+export function unpaidManualFailure(attempts: RawBillingAttempt[], now: number): RawBillingAttempt | null {
+  const open = attempts.filter((a) => {
+    if (a.status !== "error" || !isManual(a)) return false;
+    const t = attemptTime(a);
+    return Number.isFinite(t) && now - t <= UNPAID_CHARGE_NOW_BLOCK_DAYS * 24 * H && !hasLaterSuccess(attempts, a);
+  });
+  return open.sort((x, y) => attemptTime(y) - attemptTime(x))[0] ?? null;
+}
+
+/** ¿Tiene esta sub un Adelantar rechazado sin cobrar? Para charge-now. */
+export function hasUnpaidChargeNow(s: SealSubscription, now = Date.now()): boolean {
+  return unpaidManualFailure(attemptsOf(s), now) !== null;
+}
+
 /** ¿Hay un Adelantar de esta sub aún en curso? charge-now contesta 409 si lo hay. */
 export async function hasOpenChargeNowIntent(sealSubscriptionId: string, now = Date.now()): Promise<boolean> {
   try {

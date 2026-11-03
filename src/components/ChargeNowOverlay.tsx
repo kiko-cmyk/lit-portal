@@ -80,6 +80,16 @@ export function ChargeNowOverlay({
             es: "No hemos podido confirmar si tu pedido se ha cobrado. No lo repitas: en unos minutos lo verás en Mis pedidos o te llegará el email de confirmación. Si no aparece, escríbenos.",
           }),
         );
+      } else if (code === "card_update_pending") {
+        // Un Adelantar anterior rechazado (3-nov-2026): se cobra solo al actualizar la
+        // tarjeta. Volver a pulsar solo dejaría otro intento y, con la tarjeta nueva, dos cobros.
+        setLocked(true);
+        setError(
+          t({
+            en: "Your last brought-forward order couldn't be charged to your card. Update your payment method in Account and it will be charged automatically. No need to bring it forward again.",
+            es: "No pudimos cobrar tu último pedido adelantado con tu tarjeta. Actualiza tu método de pago en Cuenta y se cobrará solo. No hace falta que vuelvas a adelantarlo.",
+          }),
+        );
       } else if (code === "first_order_not_shipped") {
         // Primer pedido aún en el almacén (21-oct-2026): volver a pulsar no sirve hasta que salga.
         setLocked(true);
