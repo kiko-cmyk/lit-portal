@@ -264,6 +264,13 @@ check(
     lateSuccessNote(plan("retry_scheduled", [may, paidLate, retryPaid]), 0).includes("9 (2026-10-29)"),
   "check_charge_now_unhandled de LIT Tasks abre la tarea con unhandled + «posible doble cobro:».",
 );
+check(
+  "la nota no dice «a mano» cuando puede que nadie tocara la fecha",
+  ((n) => n.includes("próximo cobro el 2026-11-30, antes de un ciclo desde el Adelantar") && !/a mano/.test(n))(
+    lateSuccessNote(plan("unhandled", [may, paidLate, sched(1, "2026-11-30"), sched(2, "2027-05-30")]), 0),
+  ),
+  "Con «nada que mover» Seal no llegó a mover la fecha; lo que hay que hacer es lo mismo (Kiko, 3-nov).",
+);
 
 console.log("\n── solo los Adelantar de ESTE portal ──\n");
 
@@ -478,6 +485,12 @@ check(
     /\.in\("status", LATE_ROW_STATUSES\)/.test(fnBody(RECOVERY, "handleLateManualSuccess")) &&
     /\.in\("status", LATE_ROW_STATUSES\)/.test(fnBody(RECOVERY, "sweepChargeNowAttempts")),
   "13175857 estaba en unhandled: si alguien devolvía la fecha a mano, eran dos cobros sin caso.",
+);
+check(
+  "cobrado tarde: el webhook busca la fila hasta un año atrás",
+  /const LATE_ROW_MAX_DAYS = 365;/.test(RECOVERY) &&
+    /\.gte\("requested_at", new Date\(now - LATE_ROW_MAX_DAYS \* 24 \* H\)/.test(fnBody(RECOVERY, "handleLateManualSuccess")),
+  "Seal deja los fallidos en error meses y no dice hasta cuándo los reintenta; con 30 días, un cobro más tardío no lo veía nadie.",
 );
 check(
   "la tabla nueva con RLS y el cerrojo de un intento por fila",
