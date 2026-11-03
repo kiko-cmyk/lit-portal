@@ -372,8 +372,11 @@ export function syncFailedNote(preChargeDate: string | null, moved: number | nul
   if (!preChargeDate) return "calendario sin devolver: no había fecha de antes de adelantar";
   if (err !== undefined) return `calendario sin devolver a ${preChargeDate}: ${err}`.slice(0, 500);
   if (!moved) return `calendario sin devolver a ${preChargeDate}: nada que mover`;
-  return `calendario devuelto a ${preChargeDate}`;
+  return `${SYNC_RESTORED_NOTE} ${preChargeDate}`;
 }
+
+/** Nota de una fila `sync_failed` a la que charge-now SÍ le devolvió la fecha. */
+const SYNC_RESTORED_NOTE = "calendario devuelto a";
 
 /** Apunta la nota sin tocar el estado. Nunca lanza: la nota es para leerla después. */
 export async function noteChargeNowIntent(id: number, note: string): Promise<void> {
@@ -715,9 +718,17 @@ export type LateSuccessOutcome = "moved" | "aligned" | "busy" | "not_ready" | "c
  * que recolocarlas. `unhandled` y `expired` fueron a una persona («revisar a mano»): si
  * devolvió la fecha y luego Seal cobra, son dos cobros (13175857 estaba en unhandled y
  * se cobró al día siguiente). Esas no se mueven, solo se avisa (Kiko, revisión del #171).
+ * `sync_failed` es el rechazo en la misma llamada (3-nov-2026, Kiko): si Seal dejó un
+ * intento fallido, lo cobra igual al cambiar la tarjeta. Cuenta como movida por el portal
+ * si charge-now devolvió la fecha y, si no, como las que fueron a una persona (LIT-631).
  */
-const LATE_ROW_STATUSES = ["retry_scheduled", "date_restored", "unhandled", "expired"];
+const LATE_ROW_STATUSES = ["retry_scheduled", "date_restored", "unhandled", "expired", "sync_failed"];
 const MOVED_BY_RESCUE = new Set(["retry_scheduled", "date_restored"]);
+
+/** ¿Movió el portal el calendario de esta fila? Entonces el cobro tardío lo recoloca. */
+export function movedByPortal(status: string, note: string | null | undefined): boolean {
+  return MOVED_BY_RESCUE.has(status) || (status === "sync_failed" && !!note?.startsWith(SYNC_RESTORED_NOTE));
+}
 
 /**
  * Nota de una fila con posible doble cobro: status `unhandled` y la nota empieza así. Es
@@ -730,7 +741,7 @@ export const PAID_LATE_NOTE = "cobrado tarde:";
 
 export interface LateSuccessPlan {
   paidYmd: string;
-  /** Siguiente cobro, un ciclo después del pago. Solo en filas que movió el rescate. */
+  /** Siguiente cobro, un ciclo después del pago. Solo en filas que movió el portal. */
   reanchorTo: string | null;
   /** Cobros que ENTRARON después de pedir el Adelantar (el reintento de mañana, p. ej.). */
   charged: RawBillingAttempt[];
@@ -749,6 +760,7 @@ export interface LateSuccessPlan {
  */
 export function planLateSuccess(input: {
   rowStatus: string;
+  rowNote?: string | null;
   paid: RawBillingAttempt;
   attempts: RawBillingAttempt[];
   interval: string | null | undefined;
@@ -766,7 +778,7 @@ export function planLateSuccess(input: {
   const charged = others.filter((x) => x.status === "completed" && attemptTime(x) > since);
   const failing = others.filter((x) => x.status === "error");
   const target = addIntervalUtc(paidYmd, interval);
-  const movedByRescue = MOVED_BY_RESCUE.has(input.rowStatus);
+  const movedByRescue = movedByPortal(input.rowStatus, input.rowNote);
   // El reset_schedule de Seal deja el siguiente cobro un ciclo después de PEDIR el
   // Adelantar. Si está antes, alguien lo trajo a mano.
   const resetAnchor = addIntervalUtc(requested.slice(0, 10), interval);
@@ -860,6 +872,7 @@ async function settleLateSuccess(
     if (!fresh) throw new Error("Seal no devuelve la sub");
     const plan = planLateSuccess({
       rowStatus: row.status,
+      rowNote: row.note,
       paid,
       attempts: attemptsOf(fresh),
       interval: fresh.delivery_interval,
@@ -906,7 +919,7 @@ async function settleLateSuccess(
       return "check_by_hand";
     }
     await finishIntent(row.id, "succeeded", { note });
-    if (!MOVED_BY_RESCUE.has(row.status)) {
+    if (!movedByPortal(row.status, row.note)) {
       // Esta fila fue a una persona: que sepa que ya está pagado y no devuelva la fecha.
       await customerCase({
         title: "Adelantar cobrado tarde: ya está pagado, no devolver la fecha",

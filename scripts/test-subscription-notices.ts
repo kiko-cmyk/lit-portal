@@ -21,6 +21,7 @@ import {
   lateManualSuccesses,
   lateSuccessNote,
   matchIntent,
+  movedByPortal,
   PAID_LATE_NOTE,
   planLateSuccess,
   recoveryReadiness,
@@ -217,8 +218,8 @@ console.log("\n── cobrado tarde: qué se hace ──\n");
 
 // Tras el cobro del 29-oct: el mismo intento, completado; el calendario, el del reset.
 const afterPay = [may, paidLate, ...regenerated];
-const plan = (rowStatus: string, attempts: RawBillingAttempt[], interval = "6 month") =>
-  planLateSuccess({ rowStatus, paid: paidLate, attempts, interval, now: LATE_NOW });
+const plan = (rowStatus: string, attempts: RawBillingAttempt[], interval = "6 month", rowNote?: string) =>
+  planLateSuccess({ rowStatus, rowNote, paid: paidLate, attempts, interval, now: LATE_NOW });
 check(
   "13175857 tal cual (unhandled, calendario del reset): sin riesgo y sin mover",
   ((p) => !p.doubleChargeRisk && p.reanchorTo === null && p.charged.length === 0 && p.failing.length === 0)(plan("unhandled", afterPay)),
@@ -235,6 +236,32 @@ check(
   "date_restored: se lleva el siguiente cobro a un ciclo después del pago",
   ((p) => !p.doubleChargeRisk && p.reanchorTo === "2027-04-29")(plan("date_restored", [may, paidLate, sched(1, "2026-11-30"), sched(2, "2027-05-30")])),
   "La fecha de antes la puso el rescate; con el Adelantar cobrado, sobra.",
+);
+// 3-nov-2026, Kiko: un rechazo en la misma llamada que deje un intento fallido en Seal se
+// cobra igual al cambiar la tarjeta. La nota dice si charge-now devolvió la fecha.
+const pulledBack = [may, paidLate, sched(1, "2026-11-30"), sched(2, "2027-05-30")];
+check(
+  "sync_failed con la fecha devuelta: se recoloca como date_restored",
+  ((p) => !p.doubleChargeRisk && p.reanchorTo === "2027-04-29")(plan("sync_failed", pulledBack, "6 month", syncFailedNote("2026-11-30", 3))),
+  "charge-now la devolvió con pullCadenceBackTo: sin recolocar, el 30-nov sería el segundo cobro.",
+);
+check(
+  "sync_failed sin devolver: como las de una persona, avisa y no mueve",
+  ((p) => p.doubleChargeRisk && p.pulledByHand === "2026-11-30" && p.reanchorTo === null)(
+    plan("sync_failed", pulledBack, "6 month", syncFailedNote("2026-11-30", 0)),
+  ) && plan("sync_failed", pulledBack).reanchorTo === null,
+  "Fue a una persona (LIT-631): si devolvió la fecha a mano, son dos cobros.",
+);
+check(
+  "movedByPortal: solo el rescate o charge-now con la fecha devuelta",
+  movedByPortal("date_restored", null) &&
+    movedByPortal("retry_scheduled", null) &&
+    movedByPortal("sync_failed", syncFailedNote("2026-11-30", 3)) &&
+    !movedByPortal("sync_failed", syncFailedNote("2026-11-30", 0)) &&
+    !movedByPortal("sync_failed", syncFailedNote("2026-11-30", null, "Seal 503")) &&
+    !movedByPortal("sync_failed", null) &&
+    !movedByPortal("unhandled", syncFailedNote("2026-11-30", 3)),
+  "La nota de syncFailedNote y la comprobación tienen que decir lo mismo.",
 );
 const retryPaid: RawBillingAttempt = {
   id: 9, date: "2026-10-29T13:00:00+00:00", attempted_at: "2026-10-29T13:00:04+00:00",
@@ -473,11 +500,19 @@ check(
   "charge_now_locks no excluye un cambio de plan a medias: sin el de plan, el calendario se movía dos veces (Kiko, revisión del #171).",
 );
 check(
-  "cobrado tarde: mira también las filas que fueron a una persona",
-  /const LATE_ROW_STATUSES = \["retry_scheduled", "date_restored", "unhandled", "expired"\];/.test(RECOVERY) &&
+  "cobrado tarde: mira también las filas que fueron a una persona y los rechazos al momento",
+  /const LATE_ROW_STATUSES = \["retry_scheduled", "date_restored", "unhandled", "expired", "sync_failed"\];/.test(RECOVERY) &&
     /\.in\("status", LATE_ROW_STATUSES\)/.test(fnBody(RECOVERY, "handleLateManualSuccess")) &&
     /\.in\("status", LATE_ROW_STATUSES\)/.test(fnBody(RECOVERY, "sweepChargeNowAttempts")),
-  "13175857 estaba en unhandled: si alguien devolvía la fecha a mano, eran dos cobros sin caso.",
+  "13175857 estaba en unhandled: si alguien devolvía la fecha a mano, eran dos cobros sin caso. Igual con sync_failed (Kiko, 3-nov).",
+);
+check(
+  "cobrado tarde: la nota de la fila decide si se recoloca y si se avisa",
+  /rowNote: row\.note,/.test(SETTLE_LATE) &&
+    /if \(!movedByPortal\(row\.status, row\.note\)\) \{/.test(SETTLE_LATE) &&
+    !/MOVED_BY_RESCUE/.test(SETTLE_LATE) &&
+    /movedByPortal\(input\.rowStatus, input\.rowNote\)/.test(fnBody(RECOVERY, "planLateSuccess")),
+  "Sin la nota, un sync_failed con la fecha devuelta no se recolocaba y quedaba el segundo cobro.",
 );
 check(
   "la tabla nueva con RLS y el cerrojo de un intento por fila",
