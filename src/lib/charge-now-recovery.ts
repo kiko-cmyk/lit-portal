@@ -760,6 +760,14 @@ export function movedByPortal(status: string, note: string | null | undefined): 
 }
 
 /**
+ * Hasta cuándo se busca la fila de un cobro tardío (3-nov-2026, Kiko). Seal no dice hasta
+ * cuándo reintenta un fallido y los deja en `error` meses (33 manuales de más de 30 días,
+ * 13 de más de 90); un cobro programado de la 12682894 entró 36 días después de fallar.
+ * La fila se casa por el id o por la hora del intento, así que esto solo acota la consulta.
+ */
+const LATE_ROW_MAX_DAYS = 365;
+
+/**
  * Nota de una fila con posible doble cobro: status `unhandled` y la nota empieza así. Es
  * lo que mira check_charge_now_unhandled de LIT Tasks para abrir la tarea. Puede llegar
  * en una fila que ya era unhandled y ya tenía tarea por «sin caja».
@@ -776,7 +784,10 @@ export interface LateSuccessPlan {
   charged: RawBillingAttempt[];
   /** Fallidos de estos días: Seal los reintenta todos al cambiar la tarjeta (14657439). */
   failing: RawBillingAttempt[];
-  /** En una fila que fue a una persona, el primer cobro está antes de lo que dejó Seal. */
+  /**
+   * En una fila que fue a una persona, el primer cobro está antes de un ciclo desde el
+   * Adelantar: alguien lo trajo a mano o Seal no llegó a moverlo («nada que mover»).
+   */
   pulledByHand: string | null;
   unknownInterval: boolean;
   doubleChargeRisk: boolean;
@@ -809,7 +820,7 @@ export function planLateSuccess(input: {
   const target = addIntervalUtc(paidYmd, interval);
   const movedByRescue = movedByPortal(input.rowStatus, input.rowNote);
   // El reset_schedule de Seal deja el siguiente cobro un ciclo después de PEDIR el
-  // Adelantar. Si está antes, alguien lo trajo a mano.
+  // Adelantar. Si está antes, alguien lo trajo a mano o Seal no llegó a moverlo.
   const resetAnchor = addIntervalUtc(requested.slice(0, 10), interval);
   const first = firstPendingYmd(attempts);
   const pulledByHand = !movedByRescue && resetAnchor && first && first < resetAnchor ? first : null;
@@ -834,7 +845,7 @@ export function lateSuccessNote(plan: LateSuccessPlan, moved: number): string {
   const why = [
     plan.charged.length ? `otro cobro hecho: ${plan.charged.map((x) => `${x.id} (${(x.attempted_at || x.date || "").slice(0, 10)})`).join(", ")}` : "",
     plan.failing.length ? `fallidos que Seal puede reintentar: ${plan.failing.map((x) => x.id).join(", ")}` : "",
-    plan.pulledByHand ? `fecha traída a mano al ${plan.pulledByHand}` : "",
+    plan.pulledByHand ? `próximo cobro el ${plan.pulledByHand}, antes de un ciclo desde el Adelantar` : "",
     plan.unknownInterval ? "intervalo sin entender" : "",
   ].filter(Boolean);
   return `${DOUBLE_CHARGE_NOTE} cobrado tarde el ${plan.paidYmd}; ${why.join("; ")}`.slice(0, 500);
@@ -862,7 +873,7 @@ export async function handleLateManualSuccess(
     .select("id, seal_subscription_id, customer_id, pre_charge_date, requested_at, status, failed_attempt_id, note")
     .eq("seal_subscription_id", String(subId))
     .in("status", LATE_ROW_STATUSES)
-    .gte("requested_at", new Date(now - 30 * 24 * H).toISOString());
+    .gte("requested_at", new Date(now - LATE_ROW_MAX_DAYS * 24 * H).toISOString());
   if (error) throw new Error(`charge_now_attempts: ${error.message}`);
   const rows = ((data ?? []) as LateRow[]).filter((r) => !lateNoted(r.note));
 
