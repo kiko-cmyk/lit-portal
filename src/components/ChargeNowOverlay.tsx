@@ -92,10 +92,13 @@ export function ChargeNowOverlay({
         // Un Adelantar anterior rechazado (3-nov-2026): se cobra solo al actualizar la
         // tarjeta. Volver a pulsar solo dejaría otro intento y, con la tarjeta nueva, dos cobros.
         setLocked(true);
+        // Sin culpar a la tarjeta (10-nov-2026, Juan): casi todos estos rechazos son del
+        // antifraude de la pasarela, con la tarjeta bien. Cambiar el método de pago sigue
+        // siendo la salida (Seal reintenta el cobro rechazado) y atención puede mandar un enlace.
         setError(
           t({
-            en: "Your last brought-forward order couldn't be charged to your card. Update your payment method in Account and it will be charged automatically. No need to bring it forward again.",
-            es: "No pudimos cobrar tu último pedido adelantado con tu tarjeta. Actualiza tu método de pago en Cuenta y se cobrará solo. No hace falta que vuelvas a adelantarlo.",
+            en: "Your last brought-forward order couldn't be charged and stays on its date. If you want it sooner, change your payment method in Account and it'll be charged automatically, or write to us.",
+            es: "Tu último pedido adelantado no se pudo cobrar y sigue en su fecha. Si lo quieres antes, cambia el método de pago en Cuenta y se cobrará solo, o escríbenos.",
           }),
         );
       } else if (code === "recent_charge") {
