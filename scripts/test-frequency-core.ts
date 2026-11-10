@@ -557,7 +557,7 @@ const run = async () => {
     check(name, got === expected, `${got}, se esperaba ${expected}`);
   };
   target(
-    "1. alargar 2 → 3 meses, último cobro 14-sep, tenía 14-nov → 14-dic (la 14881058)",
+    "§8.1 alargar 2 → 3 meses, último cobro 14-sep, tenía 14-nov → 14-dic (la 14881058)",
     {
       attempts: [at("2026-09-14T08:00:00+00:00", { completed: true }), at("2026-11-14T08:00:00+00:00")],
       orderPlaced: "2026-07-14T09:12:00Z",
@@ -568,12 +568,12 @@ const run = async () => {
     "2026-12-14",
   );
   target(
-    "2. alargar 45 días → 2 meses sin intentos pasados: ancla en order_placed 16-oct → 16-dic (la 16967885)",
+    "§8.2 alargar 45 días → 2 meses sin intentos pasados: ancla en order_placed 16-oct → 16-dic (la 16967885)",
     { attempts: [at("2026-11-30T08:00:00+00:00")], orderPlaced: "2026-10-16T10:31:00Z", changedAt: "2026-10-20T20:16:50Z", had: "2026-11-30", to: "2mo" },
     "2026-12-16",
   );
   target(
-    "3. alargar 1 → 2 meses con un pendiente del 27-sep que se quedó en el pasado → 27-nov (la 13937496)",
+    "§8.3 alargar 1 → 2 meses con un pendiente del 27-sep que se quedó en el pasado → 27-nov (la 13937496)",
     {
       attempts: [at("2026-08-27T08:00:00+00:00", { completed: true }), at("2026-09-27T08:00:00+00:00", { status: "pending" }), at("2026-10-27T08:00:00+00:00")],
       changedAt: "2026-10-25T08:24:55Z",
@@ -583,7 +583,7 @@ const run = async () => {
     "2026-11-27",
   );
   target(
-    "4. alargar 3 → 4 meses tras un salto: ancla 29-jul, tenía 29-ene → 29-ene, gana el suelo (la 12832109)",
+    "§8.4 alargar 3 → 4 meses tras un salto: ancla 29-jul, tenía 29-ene → 29-ene, gana el suelo (la 12832109)",
     {
       attempts: [at("2026-07-29T08:00:00+00:00", { completed: true }), at("2026-10-29T08:00:00+00:00", { skipped: true }), at("2027-01-29T08:00:00+00:00")],
       changedAt: "2026-10-27T18:33:17Z",
@@ -593,12 +593,12 @@ const run = async () => {
     "2027-01-29",
   );
   target(
-    "5. acortar 3 → 2 meses, ancla 14-sep, tenía 14-dic → 14-dic, la que tenía",
+    "§8.5 acortar 3 → 2 meses, ancla 14-sep, tenía 14-dic → 14-dic, la que tenía",
     { attempts: [at("2026-09-14T08:00:00+00:00", { completed: true }), at("2026-12-14T08:00:00+00:00")], changedAt: "2026-11-08T10:00:00Z", had: "2026-12-14", to: "2mo" },
     "2026-12-14",
   );
   target(
-    "6. acortar 2 meses → 45 días con ancla + 45 días ya pasado: tenía 15-nov → 15-nov, nunca se salta un ciclo (la 16140086)",
+    "§8.6 acortar 2 meses → 45 días con ancla + 45 días ya pasado: tenía 15-nov → 15-nov, nunca se salta un ciclo (la 16140086)",
     { attempts: [at("2026-11-15T08:00:00+00:00")], orderPlaced: "2026-09-15T08:00:00Z", changedAt: "2026-11-05T07:00:30Z", had: "2026-11-15", to: "45d" },
     "2026-11-15",
   );
@@ -751,7 +751,7 @@ const run = async () => {
       /const exactIntent = planChangeTargetYYYYMMDD !== null;/.test(PLAN),
   );
   check(
-    "plan-core: la salida verificada, la sin verificar y el armado tras el intervalo guardan y prometen la MISMA fecha, exacta",
+    "§8.8 plan-core: la salida verificada, la sin verificar y el armado tras el intervalo guardan y prometen la MISMA fecha, exacta",
     /recordReanchorIntent\(effectivePreserveYYYYMMDD, "verified"\)/.test(PLAN) &&
       /recordReanchorIntent\(effectivePreserveYYYYMMDD, "unverified"\)/.test(PLAN) &&
       /writeReanchorIntent\(ctx\.customerId, sealSubscriptionId, preserveYYYYMMDD, \{ exact: exactIntent \}\)/.test(PLAN) &&
@@ -760,14 +760,21 @@ const run = async () => {
       /const promised = unverifiedPromise \? `\$\{unverifiedPromise\}T13:00:00Z` : null;/.test(PLAN),
   );
   check(
+    "§8.7 regresión: fromNext sigue con la espaciada de siempre, y sin cambio de frecuencia (solo cajas) se promete la fecha VIVA de Seal",
+    /reanchorMode === "fromNext" && planChanged\s*\?\s*spacedNextShipDate\(nextAttemptDate, liveFrequency, targetFrequency\)/.test(PLAN) &&
+      /let finalNextShipDate: string \| null = getNextBillingAttempt\(verified\)\?\.date \?\? null;\s*if \(planChanged && effectivePreserveYYYYMMDD && /.test(PLAN) &&
+      /if \(planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff\(`\$\{effectivePreserveYYYYMMDD\}T13:00:00Z`\)\) \{\s*const armedDate = await recordReanchorIntent\(effectivePreserveYYYYMMDD, "unverified"\);/.test(PLAN),
+  );
+  check(
     "plan-core: con el intervalo sin confirmar, en preserve se arma la que TENÍA como suelo, nunca el objetivo",
     /if \(reanchorMode === "preserve"\) await armReanchorAfterIntervalChange\(preserveYYYYMMDD, false\);/.test(PLAN),
   );
   const EVENTS = src("src/lib/sub-change-events.ts");
   check(
-    "sub-change-events: la reparación promete la fecha de la intención (el objetivo), igual que la ruta",
+    "§8.8 sub-change-events: la reparación promete la fecha de la intención (el objetivo), igual que la ruta",
     /\.from\("subscription_reanchor_intents"\)\s*\.select\("preserve_date"\)/.test(EVENTS) &&
-      /return `\$\{String\(data\.preserve_date\)\.slice\(0, 10\)\}T13:00:00Z`;/.test(EVENTS),
+      /return `\$\{String\(data\.preserve_date\)\.slice\(0, 10\)\}T13:00:00Z`;/.test(EVENTS) &&
+      /if \(frequencyChanged\) \{[\s\S]{0,400}\}\s*return getNextBillingAttempt\(sub\)\?\.date \?\? null;/.test(EVENTS),
   );
   for (const [name, path, lock] of [
     ["webhook de Seal", "src/app/api/webhooks/seal/route.ts", "reanchor-webhook"],
