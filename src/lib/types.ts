@@ -8,6 +8,7 @@ import type {
   SubscriptionLine,
   SubscriptionShape,
 } from "./mix";
+import type { ChargeNowWait } from "./charge-now-recent";
 import type { FlavorKey } from "./seal-plans";
 
 export type { FlavorComposition, SubscriptionLine, SubscriptionShape };
@@ -133,6 +134,13 @@ export interface Subscription {
   createdAt: string;
   withinCutoff: boolean;
   cutoffEndsAt: string | null;
+  /**
+   * Adelantar en espera (10-nov-2026): con un cobro de hace menos de 15 días, la tarjeta sale
+   * en gris y dice desde qué día se puede (lib/charge-now-recent.ts). Calculado con el reloj del
+   * servidor; null cuando ya se puede adelantar. Obligatorio, como `offerableFlavors`, para que
+   * tsc encuentre a todos los que construyen este tipo. La ruta lo vuelve a mirar al cobrar.
+   */
+  chargeNowWait: ChargeNowWait | null;
   shippingAddress: SubscriptionAddress | null;
   payment: {
     cardExpiryMonth: string | null;

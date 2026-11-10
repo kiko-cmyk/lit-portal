@@ -22,6 +22,12 @@ interface QuickActionButtonProps {
   comingSoon?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  /**
+   * En gris pero SE PUEDE PULSAR (10-nov-2026, Kiko): la acción existe y la tarjeta abre su
+   * ventana, que explica por qué hoy no se puede y desde cuándo sí. Lo usa Adelantar tras un
+   * cobro reciente. `disabled` sigue siendo la que no responde (ventana de cierre, cambio a medias).
+   */
+  muted?: boolean;
 }
 
 /**
@@ -39,6 +45,7 @@ export function QuickActionButton({
   comingSoon,
   onClick,
   disabled,
+  muted = false,
 }: QuickActionButtonProps) {
   const inert = comingSoon || disabled;
   const trimmedLabel = label.trim();
@@ -52,7 +59,9 @@ export function QuickActionButton({
       onClick={comingSoon ? undefined : onClick}
       disabled={inert}
       aria-disabled={inert}
-      className="group relative flex h-full min-h-[196px] w-full cursor-pointer flex-col gap-[9px] rounded-[18px] border border-[#2F343D]/[0.07] bg-white p-3.5 text-left text-[#2F343D] shadow-[0_12px_24px_-18px_rgba(40,34,20,0.35)] transition-all duration-200 ease-out hover:-translate-y-[2px] hover:shadow-[0_16px_30px_-18px_rgba(40,34,20,0.45)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 md:min-h-[186px] md:gap-2.5 md:rounded-[20px] md:p-[18px]"
+      className={`group relative flex h-full min-h-[196px] w-full cursor-pointer flex-col gap-[9px] rounded-[18px] border border-[#2F343D]/[0.07] bg-white p-3.5 text-left text-[#2F343D] shadow-[0_12px_24px_-18px_rgba(40,34,20,0.35)] transition-all duration-200 ease-out hover:-translate-y-[2px] hover:shadow-[0_16px_30px_-18px_rgba(40,34,20,0.45)] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 md:min-h-[186px] md:gap-2.5 md:rounded-[20px] md:p-[18px]${
+        muted ? " opacity-50" : ""
+      }`}
     >
       <span className="flex w-full items-center justify-between">
         <span className="flex h-[38px] w-[38px] items-center justify-center rounded-full bg-[#2F343D] text-[color:var(--color-bold-yellow)] md:h-[42px] md:w-[42px]">

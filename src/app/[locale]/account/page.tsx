@@ -17,6 +17,7 @@ import { useSubscriptionSwitch } from "@/components/SubscriptionGate";
 import { SwitchAccountRow } from "@/components/SwitchAccount";
 import { TierPill } from "@/components/TierPill";
 import { api, ApiClientError } from "@/lib/api-client";
+import { activeChargeNowWait } from "@/lib/charge-now-recent";
 import { flavorVisual, unknownFlavorName } from "@/lib/flavor-visuals";
 import { formatEuro } from "@/lib/format-price";
 import { frequencyBetweenLabel, frequencyParts } from "@/lib/frequency-label";
@@ -966,6 +967,7 @@ function PlanCard({
   // También mientras un cambio de plan se termina de aplicar (14-oct-2026): lo que enseña la
   // tarjeta ya es lo pedido, y escribir encima de un cambio a medias es lo que no se hace.
   const locked = !!subscription.withinCutoff || !!subscription.pendingChange;
+  const chargeNowWaiting = !!activeChargeNowWait(subscription.chargeNowWait);
   const freq = frequencyParts(subscription.frequency);
   const next = subscription.nextShipDate ? new Date(subscription.nextShipDate) : null;
   const nextLabel = next
@@ -1139,16 +1141,24 @@ function PlanCard({
           </button>
           <div className="mt-2.5 grid grid-cols-3 gap-2 md:gap-2.5">
             {[
-              { icon: QAIcons.ChargeNow, label: t({ en: "Bring fwd", es: "Adelantar" }), onClick: onChargeNow },
-              { icon: QAIcons.Skip, label: t({ en: "Skip", es: "Saltar" }), onClick: onSkip },
-              { icon: QAIcons.Flavor, label: t({ en: "Flavor", es: "Sabor" }), onClick: onFlavor },
+              {
+                icon: QAIcons.ChargeNow,
+                label: t({ en: "Bring fwd", es: "Adelantar" }),
+                onClick: onChargeNow,
+                // Cobro reciente (10-nov-2026): en gris pero pulsable; la ventana dice desde cuándo.
+                muted: chargeNowWaiting,
+              },
+              { icon: QAIcons.Skip, label: t({ en: "Skip", es: "Saltar" }), onClick: onSkip, muted: false },
+              { icon: QAIcons.Flavor, label: t({ en: "Flavor", es: "Sabor" }), onClick: onFlavor, muted: false },
             ].map((a) => (
               <button
                 key={a.label}
                 type="button"
                 onClick={a.onClick}
                 disabled={locked}
-                className="flex cursor-pointer flex-col items-center gap-1.5 rounded-[16px] border border-[#2F343D]/12 px-1 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#2F343D] transition-colors hover:border-[#2F343D]/35 disabled:cursor-not-allowed disabled:opacity-50 md:flex-row md:justify-center md:gap-2 md:rounded-full md:border-[#2F343D]/18 md:px-2.5 md:py-[13px] md:text-[11px]"
+                className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-[16px] border border-[#2F343D]/12 px-1 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#2F343D] transition-colors hover:border-[#2F343D]/35 disabled:cursor-not-allowed disabled:opacity-50 md:flex-row md:justify-center md:gap-2 md:rounded-full md:border-[#2F343D]/18 md:px-2.5 md:py-[13px] md:text-[11px]${
+                  a.muted ? " opacity-50" : ""
+                }`}
               >
                 <span aria-hidden className="inline-flex h-[17px] w-[17px] md:h-4 md:w-4">
                   {a.icon}

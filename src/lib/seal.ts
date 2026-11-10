@@ -1446,6 +1446,7 @@ export function isChargeAlreadyScheduledError(err: unknown): boolean {
 // ============ Mapping helpers — Seal raw → portal Subscription ============
 
 import type { Frequency, Subscription, SubscriptionStatus } from "./types";
+import { chargeNowWait } from "./charge-now-recent";
 import { CUTOFF_HOURS, cutoffEndsAt, isWithinCutoff } from "./cutoff";
 import { mixEnabledForCustomer } from "./flags";
 import {
@@ -1833,6 +1834,8 @@ export function mapToSubscription(s: SealSubscription, customerId: string): Subs
     createdAt: s.order_placed,
     withinCutoff: nextShipDate ? isWithinCutoff(nextShipDate) : false,
     cutoffEndsAt: nextShipDate ? cutoffEndsAt(nextShipDate).toISOString() : null,
+    // Adelantar en espera tras un cobro reciente (10-nov-2026, lib/charge-now-recent.ts).
+    chargeNowWait: chargeNowWait(s),
     shippingAddress: {
       firstName: s.s_first_name ?? "",
       lastName: s.s_last_name ?? "",

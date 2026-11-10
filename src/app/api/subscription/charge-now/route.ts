@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { assertFirstOrderShipped } from "@/lib/charge-now-first-order";
+import { chargeNowWait } from "@/lib/charge-now-recent";
 import {
   claimChargeNowIntent,
   customerCase,
@@ -123,6 +124,19 @@ export const POST = withCustomer<ChargeNowResponse>(async (req, ctx) => {
       409,
       "charge_already_scheduled",
       "A charge for this subscription is already being processed. Try again in a few minutes.",
+    );
+  }
+
+  // Un cobro de hace menos de 15 días (10-nov-2026): el antifraude de la pasarela para el
+  // segundo cobro sin el cliente delante (4 de 4 medidos). La pantalla ya lo enseña en gris;
+  // esto cubre una pantalla vieja. Antes que la del primer pedido: la compra inicial también
+  // cuenta, y a un cliente nuevo hay que darle la fecha de los 15 días, no «en uno o dos días».
+  const wait = chargeNowWait(sub);
+  if (wait) {
+    throw new ApiHttpError(
+      409,
+      "recent_charge",
+      `The last charge was on ${wait.lastChargedOn}. Bring forward is available from ${wait.availableFrom}.`,
     );
   }
 
