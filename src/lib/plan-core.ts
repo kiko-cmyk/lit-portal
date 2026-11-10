@@ -2859,6 +2859,8 @@ function synthesizePostMutationSub(
     createdAt: new Date().toISOString(),
     withinCutoff: false,
     cutoffEndsAt: null,
+    // La pantalla relee la sub después de un cambio de plan; hasta entonces, sin espera.
+    chargeNowWait: null,
     shippingAddress: null,
     payment: {
       cardExpiryMonth: null,
@@ -2898,6 +2900,8 @@ function synthesizeNoOpSub(
     createdAt: new Date().toISOString(),
     withinCutoff: false,
     cutoffEndsAt: null,
+    // La pantalla relee la sub después de un cambio de plan; hasta entonces, sin espera.
+    chargeNowWait: null,
     shippingAddress: null,
     payment: {
       cardExpiryMonth: null,

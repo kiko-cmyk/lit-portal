@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api-client";
 import { Lp2Sheet, SheetArrow, SheetDoneMark, SheetTitle } from "@/components/Lp2Sheet";
 import { T, useLang } from "@/lib/i18n";
+import { activeChargeNowWait, CHARGE_NOW_MIN_DAYS } from "@/lib/charge-now-recent";
 import type { ChargeNowResponse, Subscription } from "@/lib/types";
 
 /**
@@ -40,6 +41,13 @@ export function ChargeNowOverlay({
   const currentShip = subscription.nextShipDate
     ? new Date(subscription.nextShipDate)
     : null;
+
+  // Cobro de hace menos de 15 días (10-nov-2026, Kiko): la tarjeta sale en gris y aquí se
+  // explica desde qué día se podrá, sin llamar al servidor. Ver lib/charge-now-recent.ts.
+  const wait = activeChargeNowWait(subscription.chargeNowWait);
+  const longDate = (d: Date) =>
+    d.toLocaleDateString(t({ en: "en-US", es: "es-ES" }), { day: "numeric", month: "long" });
+  const dayLabel = (yyyymmdd: string) => longDate(new Date(`${yyyymmdd}T12:00:00Z`));
 
   const handleCharge = async () => {
     setBusy(true);
@@ -90,6 +98,16 @@ export function ChargeNowOverlay({
             es: "No pudimos cobrar tu último pedido adelantado con tu tarjeta. Actualiza tu método de pago en Cuenta y se cobrará solo. No hace falta que vuelvas a adelantarlo.",
           }),
         );
+      } else if (code === "recent_charge") {
+        // Pantalla vieja: el servidor ve un cobro de hace menos de 15 días (10-nov-2026). Volver a
+        // pulsar no sirve hasta ese día.
+        setLocked(true);
+        setError(
+          t({
+            en: `Your last order is very recent and we leave at least ${CHARGE_NOW_MIN_DAYS} days between two charges. You'll be able to bring it forward in a few days.`,
+            es: `Tu último pedido es muy reciente y entre dos cobros dejamos al menos ${CHARGE_NOW_MIN_DAYS} días. Podrás adelantar dentro de unos días.`,
+          }),
+        );
       } else if (code === "first_order_not_shipped") {
         // Primer pedido aún en el almacén (21-oct-2026): volver a pulsar no sirve hasta que salga.
         setLocked(true);
@@ -135,7 +153,31 @@ export function ChargeNowOverlay({
 
   return (
     <Lp2Sheet onClose={onClose} busy={busy}>
-      {!done ? (
+      {wait && !done ? (
+        <>
+          <p className="lp2-eyebrow">
+            <T en="Bring forward" es="Adelantar envío" />
+          </p>
+          <SheetTitle
+            thin={t({ en: "You can bring it forward from", es: "Podrás adelantar desde el" })}
+            bold={dayLabel(wait.availableFrom)}
+          />
+          <p className="lp2-text mt-3">
+            {t({
+              en: `Your last order was charged on ${dayLabel(wait.lastChargedOn)} and we leave at least ${CHARGE_NOW_MIN_DAYS} days between two charges.`,
+              es: `Tu último pedido se cobró el ${dayLabel(wait.lastChargedOn)} y entre dos cobros dejamos al menos ${CHARGE_NOW_MIN_DAYS} días.`,
+            })}
+            {currentShip &&
+              t({
+                en: ` Your next box is still on ${longDate(currentShip)}.`,
+                es: ` Tu próxima caja sigue el ${longDate(currentShip)}.`,
+              })}
+          </p>
+          <button type="button" onClick={onClose} className="lp2-cta lp2-cta--still mt-7">
+            <T en="Got it" es="Entendido" />
+          </button>
+        </>
+      ) : !done ? (
         <>
           <p className="lp2-eyebrow">
             <T en="Bring forward" es="Adelantar envío" />

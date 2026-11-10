@@ -36,6 +36,7 @@ import { clearJustSkipped, readJustSkipped, writeJustSkipped } from "@/lib/just-
 import { portalHref, COLLECTION_ENABLED } from "@/lib/portal-link";
 import { SUBSCRIBE_URL } from "@/lib/storefront-links";
 import { FREQUENCIES } from "@/lib/plan-options";
+import { activeChargeNowWait } from "@/lib/charge-now-recent";
 import { flavorVisual } from "@/lib/flavor-visuals";
 import { formatEuro } from "@/lib/format-price";
 import { frequencyLabel } from "@/lib/frequency-label";
@@ -452,6 +453,12 @@ export default function HubPage() {
   const shortDate = (d: Date) =>
     `${d.getDate()} ${d.toLocaleDateString(lang === "es" ? "es-ES" : "en-US", { month: "short" }).replace(".", "")}`;
   const nextLabel = nextShipDate ? shortDate(nextShipDate) : null;
+  // Adelantar en espera tras un cobro reciente (10-nov-2026, Kiko): la tarjeta sale en gris,
+  // se puede pulsar y la ventana dice desde qué día. Ver lib/charge-now-recent.ts.
+  const chargeNowWaitNow = activeChargeNowWait(sub.chargeNowWait);
+  const chargeNowFromLabel = chargeNowWaitNow
+    ? shortDate(new Date(`${chargeNowWaitNow.availableFrom}T12:00:00Z`))
+    : null;
   const followingLabel = data.upcomingShipments[0]?.date
     ? shortDate(new Date(data.upcomingShipments[0].date))
     : null;
@@ -538,16 +545,26 @@ export default function HubPage() {
                     icon={QAIcons.ChargeNow}
                     label={t({ en: "Bring forward", es: "Adelantar envío" })}
                     sub={
-                      nextLabel
+                      chargeNowFromLabel
                         ? t({
-                            en: `Get it now, no need to wait for ${nextLabel}`,
-                            es: `Recíbelo ya, sin esperar al ${nextLabel}`,
+                            en: `Available from ${chargeNowFromLabel}`,
+                            es: `Disponible desde el ${chargeNowFromLabel}`,
                           })
-                        : t({ en: "Order now", es: "Haz tu pedido ahora" })
+                        : nextLabel
+                          ? t({
+                              en: `Get it now, no need to wait for ${nextLabel}`,
+                              es: `Recíbelo ya, sin esperar al ${nextLabel}`,
+                            })
+                          : t({ en: "Order now", es: "Haz tu pedido ahora" })
                     }
-                    state={nextLabel ? <DateChange from={nextLabel} to={t({ en: "Today", es: "Hoy" })} /> : undefined}
+                    state={
+                      nextLabel && !chargeNowWaitNow ? (
+                        <DateChange from={nextLabel} to={t({ en: "Today", es: "Hoy" })} />
+                      ) : undefined
+                    }
                     onClick={() => setShowChargeNow(true)}
                     disabled={sub.withinCutoff || !!sub.pendingChange}
+                    muted={!!chargeNowWaitNow}
                   />
                   <QuickActionButton
                     icon={QAIcons.ChangePlan}
