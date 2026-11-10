@@ -11,7 +11,7 @@ import { applyFollowupSafe } from "@/lib/reactivation";
 import { runAsBackgroundJob } from "@/lib/http-timeout";
 import { isWithinCutoff } from "@/lib/cutoff";
 import { fireDunningTrigger } from "@/lib/dunning";
-import { reanchorConverged } from "@/lib/frequency-core";
+import { reanchorConverged, reanchorNeedsPullBack } from "@/lib/frequency-core";
 import { tryWithPlanLock } from "@/lib/plan-lock";
 import { klaviyo } from "@/lib/klaviyo";
 import { discoveryRenewalCreditOnSealEvent } from "@/lib/discovery-renewal-credit";
@@ -517,7 +517,7 @@ async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | nu
   const sb = supabaseAdmin();
   const { data: intent } = await sb
     .from("subscription_reanchor_intents")
-    .select("customer_id, preserve_date, status, created_at, updated_at")
+    .select("customer_id, preserve_date, status, created_at, updated_at, exact")
     .eq("seal_subscription_id", String(sealSubId))
     .eq("status", "pending")
     .maybeSingle();
@@ -573,6 +573,32 @@ async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | nu
   }
 
   const firstDay = firstPending.date.slice(0, 10);
+  const times = intent as { created_at: string | null; updated_at: string | null; exact: boolean | null };
+
+  // Intención EXACTA de «Tu plan» con Seal pasado del objetivo (10-nov-2026): al acortar,
+  // Seal salta un ciclo si `ancla + frecuencia nueva` ya ha pasado. Se tira hacia atrás hasta
+  // el objetivo, con el cerrojo, como el re-anclaje de debajo. No se borra: se cierra en una
+  // lectura posterior con `reanchorConverged`. Ver `reanchorNeedsPullBack`.
+  if (reanchorNeedsPullBack(sub, firstDay, preserve, times)) {
+    const back = await tryWithPlanLock(String(intent.customer_id), Number(sealSubId), "reanchor-webhook", () =>
+      seal.pullCadenceBackTo(Number(sealSubId), preserve),
+    );
+    if (!back.ran) {
+      console.log("[seal-webhook] reanchor: otro tiene el cerrojo, se salta", { sealSubId, reason: back.reason });
+      return;
+    }
+    console.log("[seal-webhook] reanchor pulled schedule back", { sealSubId, preserve, moved: back.value, from: firstDay });
+    if (back.value > 0) {
+      await sb
+        .from("subscription_reanchor_intents")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("customer_id", intent.customer_id)
+        .eq("seal_subscription_id", String(sealSubId))
+        .eq("created_at", intent.created_at as string);
+    }
+    return;
+  }
+
   if (firstDay >= preserve) {
     // Converged: the next charge is on/after the preserved date and the whole
     // cadence was shifted with it. Done — clear the intent. (This is also the
@@ -580,7 +606,7 @@ async function applyReanchorIfPendingUnsafe(subFromEvent?: SealSubscription | nu
     //
     // Salvo la igualdad exacta con una intención recién armada: puede ser el calendario
     // VIEJO en una lectura atrasada, ver `reanchorConverged`. Se deja para después.
-    if (!reanchorConverged(firstDay, preserve, intent as { created_at: string | null; updated_at: string | null })) {
+    if (!reanchorConverged(firstDay, preserve, times)) {
       console.log("[seal-webhook] reanchor: igualdad con intención reciente, se espera", { sealSubId, preserve });
       return;
     }

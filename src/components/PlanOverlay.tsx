@@ -135,12 +135,13 @@ export function PlanOverlay({
           currentVariantId: subscription.currentVariantId,
           currentFrequency: subscription.frequency,
           expectedLineIds: subscription.lines?.map((l) => l.itemId) ?? undefined,
-          // Preserve the customer's current next-ship date. Seal regenerates
-          // billing_attempts on any plan change and re-anchors the next charge
-          // to "today + interval", which would silently undo a prior skip
-          // (e.g. 27-Sep snaps back to ~27-Jul). The backend re-anchors the
-          // regenerated attempt back to this date so earlier steps are never
-          // reverted. (Juan 2026-06-12.)
+          // The customer's current next-ship date, as a FLOOR: the next delivery is
+          // never earlier than this, so a prior skip is never undone (Juan 2026-06-12).
+          // It is not "kept" as is: on a frequency change the backend sends it to
+          // max(this date, anchor + new frequency) (`planChangeTargetDate`, 2026-11-10),
+          // so lengthening moves it later and shortening keeps it. The response
+          // (`onUpdated`) carries that date. Only a fallback: the backend reads the
+          // live date from Seal first.
           preserveNextShipDate: subscription.nextShipDate,
         }),
       });

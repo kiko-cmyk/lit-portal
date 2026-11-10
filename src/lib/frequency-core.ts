@@ -42,6 +42,7 @@ import {
   getNextBillingAttempt,
   normalizeFrequency,
   seal,
+  type SealBillingAttempt,
   type SealSubscription,
 } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -122,6 +123,97 @@ export function spacedNextShipDate(
 }
 
 /**
+ * Suma UN intervalo de `frequency` a `date`, en UTC. Los meses se SUJETAN al último día del
+ * mes: 29-oct + 4 meses = 28-feb. Es lo que hace Seal (la 12450258, de 3 a 4 meses con el
+ * último intento el 29-oct-2026, quedó el 28-feb-2027). `addCycle` de `@/lib/cadence` no
+ * sirve aquí: con `setMonth` en hora local se desborda al mes siguiente (1-mar).
+ */
+export function addIntervalUtc(date: Date, frequency: Frequency): Date {
+  const n = parseInt(frequency, 10);
+  const out = new Date(date.getTime());
+  if (frequency.endsWith("mo")) {
+    const day = out.getUTCDate();
+    out.setUTCDate(1);
+    out.setUTCMonth(out.getUTCMonth() + n);
+    const lastDay = new Date(Date.UTC(out.getUTCFullYear(), out.getUTCMonth() + 1, 0)).getUTCDate();
+    out.setUTCDate(Math.min(day, lastDay));
+  } else {
+    out.setUTCDate(out.getUTCDate() + n);
+  }
+  return out;
+}
+
+export interface PlanChangeTargetInput {
+  /** Los `billing_attempts` de la sub. Solo cuentan los anteriores al cambio, en cualquier estado. */
+  attempts: ReadonlyArray<Pick<SealBillingAttempt, "date">> | null | undefined;
+  /** `order_placed`: el ancla cuando la sub no tiene ningún intento anterior al cambio. */
+  orderPlaced: string | null | undefined;
+  /** Cuándo se cambia la frecuencia. */
+  changedAt: Date;
+  /** YYYY-MM-DD: la próxima entrega que tenía el cliente. Nunca se queda antes. */
+  previousNextShipYYYYMMDD: string;
+  /** La frecuencia nueva. */
+  target: Frequency;
+}
+
+/**
+ * El ancla con la que Seal regenera el calendario al cambiar la frecuencia: el ÚLTIMO
+ * intento de cobro anterior al cambio, en cualquier estado (completado, saltado o un
+ * pendiente que se quedó en el pasado). Sin ninguno, `order_placed`. Null si no hay nada.
+ */
+export function planChangeAnchor(
+  attempts: PlanChangeTargetInput["attempts"],
+  orderPlaced: string | null | undefined,
+  changedAt: Date,
+): Date | null {
+  const before = changedAt.getTime();
+  let anchor = NaN;
+  for (const a of attempts ?? []) {
+    const ms = Date.parse(a.date);
+    if (Number.isFinite(ms) && ms < before && !(ms <= anchor)) anchor = ms;
+  }
+  if (!Number.isFinite(anchor) && orderPlaced) {
+    const ms = Date.parse(orderPlaced);
+    if (Number.isFinite(ms) && ms < before) anchor = ms;
+  }
+  return Number.isFinite(anchor) ? new Date(anchor) : null;
+}
+
+/**
+ * La fecha en la que queda la próxima entrega cuando el cliente cambia la frecuencia desde
+ * «Tu plan» (modo `preserve`). Regla de Juan, 10-nov-2026:
+ *
+ *   objetivo   = max( la que tenía el cliente, ancla + frecuencia nueva )
+ *   siguientes = objetivo + n × frecuencia nueva
+ *
+ *   - AL ALARGAR la entrega pasa a `ancla + frecuencia nueva`, que es donde Seal la deja
+ *     solo: de 2 a 3 meses con el último cobro el 14-sep y la próxima el 14-nov, el 14-dic.
+ *   - AL ACORTAR se queda en la que tenía y la frecuencia nueva cuenta desde ella. Nunca se
+ *     salta un ciclo: si `ancla + frecuencia nueva` ya ha pasado, Seal salta ciclos enteros
+ *     (la 16140086, de 2 meses a 45 días con alta el 15-sep, quedó el 14-dic en vez del
+ *     15-nov), y el re-anclaje la trae de vuelta (`reanchorNeedsPullBack`).
+ *
+ * Es la fecha que se le PROMETE (evento SUB-05, respuesta de la ruta, portada) y la que
+ * guarda la intención de re-anclaje, que con `exact` hace que Seal acabe exactamente ahí.
+ *
+ * Hasta el 10-nov-2026 se prometía la que tenía el cliente: la intención era solo un suelo,
+ * Seal al alargar la dejaba más tarde, y el email «Plan actualizado» anunció a 49 clientes
+ * en 3 semanas una entrega que no iba a llegar (de 14 a 151 días antes de la real).
+ *
+ * Contrastado contra Seal el 10-nov-2026: acierta en los 49 clientes que alargaron desde esa
+ * pantalla entre el 20-oct y el 9-nov (incluido el 28-feb de la 12450258) y da el 15-nov que
+ * Juan quiere para la 16140086. `fromNext` tiene su propia regla (`spacedNextShipDate`) y no
+ * pasa por aquí.
+ */
+export function planChangeTargetDate(input: PlanChangeTargetInput): string {
+  const floor = input.previousNextShipYYYYMMDD.slice(0, 10);
+  const anchor = planChangeAnchor(input.attempts, input.orderPlaced, input.changedAt);
+  if (!anchor) return floor;
+  const regenerated = addIntervalUtc(anchor, input.target).toISOString().slice(0, 10);
+  return regenerated > floor ? regenerated : floor;
+}
+
+/**
  * En modo `fromNext` la fecha nueva tiene que quedar DESPUÉS de la próxima que ya
  * tiene. Contada desde la próxima, un ritmo más largo siempre lo cumple; se
  * comprueba igual porque es la fecha que se le promete al cliente.
@@ -190,6 +282,14 @@ export function assertLonger(current: Frequency, target: Frequency): void {
  * entre la regeneración y el re-anclaje, ese cobro vivo ya es el adelantado, y la
  * intención nueva pisaba la buena con él. Una intención pendiente solo empuja hacia
  * delante, así que la fecha que vale es la mayor de las dos, y es la que se devuelve.
+ * Con una intención exacta también vale: la pendiente es la fecha que se le prometió al
+ * cliente en el cambio anterior, o sea, la que «tenía» para el cambio nuevo.
+ *
+ * `exact` (10-nov-2026): la fecha no es un suelo sino el objetivo del cambio de «Tu plan»
+ * (`planChangeTargetDate`), y el re-anclaje deja Seal EXACTAMENTE en ella, también tirando
+ * hacia atrás si Seal se pasa (`reanchorNeedsPullBack`). Sin `exact` es un suelo: `fromNext`
+ * y el suelo de un intervalo que Seal no enseña. Se escribe siempre, para que una intención
+ * nueva sin `exact` no herede el de la anterior.
  *
  * `db` solo existe para los tests.
  */
@@ -197,8 +297,9 @@ export async function writeReanchorIntent(
   customerId: string,
   sealSubscriptionId: number,
   preserveYYYYMMDD: string,
-  db: Pick<ReturnType<typeof supabaseAdmin>, "from"> = supabaseAdmin(),
+  opts: { exact?: boolean; db?: Pick<ReturnType<typeof supabaseAdmin>, "from"> } = {},
 ): Promise<{ preserveDate: string }> {
+  const db = opts.db ?? supabaseAdmin();
   const { data: existing, error: readErr } = await db
     .from("subscription_reanchor_intents")
     .select("preserve_date")
@@ -218,6 +319,7 @@ export async function writeReanchorIntent(
         customer_id: customerId,
         seal_subscription_id: String(sealSubscriptionId),
         preserve_date: preserveDate,
+        exact: opts.exact === true,
         status: "pending",
         attempts: 0,
         created_at: nowIso,
@@ -253,6 +355,8 @@ export const REANCHOR_STABLE_MS = 30 * 60_000;
 export interface ReanchorIntentTimes {
   created_at?: string | null;
   updated_at?: string | null;
+  /** Intención exacta (cambio de «Tu plan»): ver `writeReanchorIntent` y `reanchorNeedsPullBack`. */
+  exact?: boolean | null;
 }
 
 const isoMs = (iso: string | null | undefined) => (iso ? new Date(iso).getTime() : NaN);
@@ -263,6 +367,8 @@ const isoMs = (iso: string | null | undefined) => (iso ? new Date(iso).getTime()
  *
  * Primer cobro POSTERIOR a la fecha prometida: convergido al momento. Una segunda
  * regeneración de Seal sale del mismo ancla (el último intento pasado) y da la misma fecha.
+ * Con una intención exacta, quien llama mira ANTES `reanchorNeedsPullBack`: si hay que tirar
+ * hacia atrás no se llega aquí, y si no (el cliente saltó o adelantó después), esto la suelta.
  *
  * IGUALDAD EXACTA: hace falta que la fecha haya aguantado `REANCHOR_STABLE_MS` desde nuestro
  * último movimiento (21-oct-2026). Seal puede regenerar el calendario DOS veces tras un
@@ -307,6 +413,49 @@ export function reanchorEqualityTooFresh(
   if (firstPendingYYYYMMDD !== preserveYYYYMMDD) return false;
   const created = isoMs(intent.created_at);
   return !Number.isFinite(created) || now - created < REANCHOR_SETTLE_MS;
+}
+
+/**
+ * ¿Ha hecho algo el cliente (o soporte) con el calendario desde `sinceIso`? Un intento con
+ * fecha posterior que ya no está limpio: saltado, cobrado o con estado (un Adelantar crea un
+ * cobro de hoy). Al cambiar la frecuencia Seal borra todos los pendientes, también los saltos
+ * futuros, así que lo que queda así después del cambio es una acción nueva. Sin hora, se
+ * responde que sí: ante la duda no se tira de nada.
+ */
+export function customerActedSince(
+  sub: Pick<SealSubscription, "billing_attempts">,
+  sinceIso: string | null | undefined,
+): boolean {
+  const since = isoMs(sinceIso);
+  if (!Number.isFinite(since)) return true;
+  return (sub.billing_attempts ?? []).some(
+    (a) => !!(a.completed_at || a.status || a.skipped_on) && Date.parse(a.date) > since,
+  );
+}
+
+/**
+ * ¿Hay que llevar el calendario HACIA ATRÁS hasta la fecha de la intención? (10-nov-2026)
+ *
+ * Solo con una intención exacta (cambio de «Tu plan», ver `planChangeTargetDate`) cuyo primer
+ * cobro ha quedado DESPUÉS del objetivo: al acortar, si `ancla + frecuencia nueva` ya ha
+ * pasado, Seal salta ciclos enteros. La 16140086 (de 2 meses a 45 días, alta el 15-sep, la
+ * próxima el 15-nov) quedó el 14-dic: el email le dijo 15-nov y había pedido envíos más
+ * seguidos. Regla de Juan: nunca se salta un ciclo. Lo mueve `seal.pullCadenceBackTo`, que no
+ * deja nada antes del objetivo ni en el pasado.
+ *
+ * Una lectura atrasada del calendario VIEJO no lo dispara: el objetivo nunca es anterior a la
+ * fecha que tenía el cliente, que es el primer cobro de ese calendario. Y si el cliente ha
+ * saltado o adelantado después del cambio, manda lo que hizo: no se tira de nada y la
+ * intención converge como siempre (`reanchorConverged`).
+ */
+export function reanchorNeedsPullBack(
+  sub: Pick<SealSubscription, "billing_attempts">,
+  firstPendingYYYYMMDD: string,
+  preserveYYYYMMDD: string,
+  intent: ReanchorIntentTimes,
+): boolean {
+  if (intent.exact !== true || firstPendingYYYYMMDD <= preserveYYYYMMDD) return false;
+  return !customerActedSince(sub, intent.created_at);
 }
 
 export interface FrequencyAuditRow {
@@ -393,7 +542,8 @@ export interface FrequencyChangeArgs {
   /** El motivo que dio el cliente, si lo dio (los valores del SkipOverlay). */
   reason?: string | null;
   /**
-   * `preserve`: se queda en la fecha que ya tenía (cambio de plan normal).
+   * `preserve`: la fecha que ya tenía, como SUELO (nunca antes). Aquí no lo usa nadie; el
+   * cambio de «Tu plan» va por `plan-core`, que promete `planChangeTargetDate`.
    * `fromNext`: la próxima menos un ciclo actual más uno nuevo
    * (`shiftedNextShipDate`), la que promete el bot desde el 2026-10-01 y la que
    * enseña el área personal; aquí el re-anclaje es lo único que impide que Seal

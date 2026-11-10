@@ -74,6 +74,8 @@ create table if not exists subscription_reanchor_intents (
   customer_id           text not null,
   seal_subscription_id  text not null,
   preserve_date         date not null,               -- YYYY-MM-DD the next charge must hold
+  exact                 boolean not null default false, -- true = land EXACTLY on it, also pulling back
+                                                       -- («Tu plan», 2026-11-10); false = floor
   status                text not null default 'pending'
                           check (status in ('pending', 'done', 'failed')),
   attempts              int  not null default 0,      -- drain attempts (hard backstop)

@@ -431,6 +431,11 @@ export async function notifyConfirmedRepair(
  * La próxima entrega que se le puede decir al cliente. Si cambió la frecuencia, Seal
  * regenera el calendario y lo que sujeta la fecha es la intención de re-anclaje
  * pendiente: esa es la fecha, con la misma hora optimista que promete la ruta.
+ *
+ * Desde el 10-nov-2026 la intención de «Tu plan» guarda el OBJETIVO del cambio
+ * (`planChangeTargetDate`: al alargar, `ancla + frecuencia nueva`), no la fecha que tenía
+ * el cliente, así que esta salida da la misma fecha que la verificada y la sin verificar de
+ * la ruta. Si la intención ya convergió, la de Seal, que es esa misma.
  */
 async function confirmedNextShipDate(
   customerId: string,
