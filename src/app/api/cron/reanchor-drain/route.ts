@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { alertSlackNoticeAwaited } from "@/lib/alert";
 import { CronAuthError, requireCron } from "@/lib/cron-auth";
 import { isWithinCutoff } from "@/lib/cutoff";
-import { reanchorConverged } from "@/lib/frequency-core";
+import { reanchorConverged, reanchorNeedsPullBack } from "@/lib/frequency-core";
 import { tryWithPlanLock } from "@/lib/plan-lock";
 import { getNextBillingAttempt, seal } from "@/lib/seal";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sb = supabaseAdmin();
   const { data: intents, error } = await sb
     .from("subscription_reanchor_intents")
-    .select("customer_id, seal_subscription_id, preserve_date, attempts, created_at, updated_at")
+    .select("customer_id, seal_subscription_id, preserve_date, attempts, created_at, updated_at, exact")
     .eq("status", "pending");
   if (error) throw new Error(`reanchor-drain: ${error.message}`);
 
@@ -171,12 +171,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       continue;
     }
 
+    const times = intent as { created_at: string | null; updated_at: string | null; exact: boolean | null };
+    // Intención EXACTA de «Tu plan» con Seal pasado del objetivo (10-nov-2026): se tira hacia
+    // atrás en el `try` de abajo, con los mismos reintentos y avisos que el re-anclaje hacia
+    // delante. Ver `reanchorNeedsPullBack`.
+    const pullBack = reanchorNeedsPullBack(sub, firstDay, preserve, times);
+
     // Already on/after preserve → cadence shifted, converged → done.
     // Salvo la igualdad exacta con una intención recién armada (puede ser el calendario
     // viejo en una lectura atrasada): se deja para la pasada siguiente. Ver
     // `reanchorConverged`.
-    if (firstDay >= preserve) {
-      if (!reanchorConverged(firstDay, preserve, intent as { created_at: string | null; updated_at: string | null })) {
+    if (!pullBack && firstDay >= preserve) {
+      if (!reanchorConverged(firstDay, preserve, times)) {
         deferred++;
         continue;
       }
@@ -194,7 +200,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       // Con el cerrojo de la sub (14-oct-2026), como el webhook y el dashboard: dos
       // re-anclajes a la vez desplazaban dos veces los cobros siguientes.
       const res = await tryWithPlanLock(String(intent.customer_id), subId, "reanchor-drain", () =>
-        seal.reanchorCadence(subId, preserve),
+        pullBack ? seal.pullCadenceBackTo(subId, preserve) : seal.reanchorCadence(subId, preserve),
       );
       if (!res.ran) {
         deferred++;

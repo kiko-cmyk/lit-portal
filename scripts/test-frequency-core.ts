@@ -32,12 +32,18 @@
  */
 
 import {
+  addIntervalUtc,
   assertLonger,
   changeFrequencyOnly,
+  customerActedSince,
   type FrequencyChangeDeps,
   isFrequency,
   longerOptionsFromNext,
+  PLAN_CHANGE_MIN_LEAD_DAYS,
+  planChangeTargetDate,
   probeReanchorStore,
+  reanchorConverged,
+  reanchorNeedsPullBack,
   SEAL_INTERVAL_BY_FREQUENCY,
   shiftedNextShipDate,
   spacedNextShipDate,
@@ -453,12 +459,12 @@ const run = async () => {
         };
         return query;
       },
-    } as unknown as Parameters<typeof writeReanchorIntent>[3];
+    } as unknown as NonNullable<NonNullable<Parameters<typeof writeReanchorIntent>[3]>["db"]>;
     return { db, upserts, filters };
   };
   {
     const { db, upserts, filters } = fakeDb();
-    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db });
     check(
       "writeReanchorIntent escribe la fila pendiente con la fecha",
       upserts.length === 1 && upserts[0].table === "subscription_reanchor_intents" &&
@@ -476,7 +482,7 @@ const run = async () => {
     // #148: una intención pendiente solo empuja hacia delante. Si ya hay una POSTERIOR,
     // se queda la posterior, y es la que se devuelve para prometerla.
     const { db, upserts } = fakeDb({ pending: "2026-12-04" });
-    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db });
     check(
       "nunca rebaja una pendiente posterior, y devuelve la que queda guardada",
       upserts[0].preserve_date === "2026-12-04" && r.preserveDate === "2026-12-04",
@@ -485,7 +491,7 @@ const run = async () => {
   }
   {
     const { db, upserts } = fakeDb({ pending: "2026-10-20" });
-    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+    const r = await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db });
     check(
       "una pendiente ANTERIOR la pisa la nueva",
       upserts[0].preserve_date === "2026-11-04" && r.preserveDate === "2026-11-04",
@@ -495,7 +501,7 @@ const run = async () => {
     const { db } = fakeDb({ error: { message: "AbortError: fetch deadline exceeded" } });
     let lanzo = false;
     try {
-      await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+      await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db });
     } catch (err) {
       lanzo = String(err).includes("fetch deadline exceeded");
     }
@@ -505,11 +511,349 @@ const run = async () => {
     const { db, upserts } = fakeDb({ readError: { message: "connection reset" } });
     let lanzo = false;
     try {
-      await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", db);
+      await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db });
     } catch (err) {
       lanzo = String(err).includes("connection reset");
     }
     check("y también LANZA si no puede leer la pendiente, sin escribir a ciegas", lanzo && upserts.length === 0);
+  }
+  {
+    // 10-nov-2026: la intención lleva SIEMPRE `exact`, para que una nueva sin él no herede el
+    // de la anterior en el upsert.
+    const a = fakeDb();
+    await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db: a.db, exact: true });
+    const b = fakeDb();
+    await writeReanchorIntent("27136755892573", 12320700, "2026-11-04", { db: b.db });
+    check(
+      "writeReanchorIntent escribe exact: true con { exact } y exact: false sin él",
+      a.upserts[0].exact === true && b.upserts[0].exact === false,
+      `${a.upserts[0].exact} / ${b.upserts[0].exact}`,
+    );
+  }
+
+  // ── El objetivo de un cambio de «Tu plan» (10-nov-2026) ─────────────────────
+  //
+  // Casos reales del handoff de LIT-CRM. objetivo = max(la que tenía, ancla + frecuencia
+  // nueva), con el ancla en el último intento anterior al cambio (en cualquier estado) o,
+  // sin ninguno, `order_placed`. Al acortar nunca se salta un ciclo.
+  console.log("\n── objetivo de un cambio de «Tu plan» ──\n");
+  const at = (iso: string, o: { status?: string; completed?: boolean; skipped?: boolean } = {}) => ({
+    date: iso,
+    status: o.status ?? (o.completed ? "succeeded" : ""),
+    completed_at: o.completed ? iso.replace("T", " ").slice(0, 19) : "",
+    skipped_on: o.skipped ? "2026-10-01 10:00:00" : "",
+  });
+  const target = (
+    name: string,
+    input: { attempts?: ReturnType<typeof at>[]; orderPlaced?: string; changedAt: string; had: string; from: Frequency; to: Frequency },
+    expected: string,
+  ) => {
+    const got = planChangeTargetDate({
+      attempts: input.attempts ?? [],
+      orderPlaced: input.orderPlaced ?? null,
+      changedAt: new Date(input.changedAt),
+      previousNextShipYYYYMMDD: input.had,
+      current: input.from,
+      target: input.to,
+    });
+    check(name, got === expected, `${got}, se esperaba ${expected}`);
+  };
+  target(
+    "§8.1 alargar 2 → 3 meses, último cobro 14-sep, tenía 14-nov → 14-dic (la 14881058)",
+    {
+      attempts: [at("2026-09-14T08:00:00+00:00", { completed: true }), at("2026-11-14T08:00:00+00:00")],
+      orderPlaced: "2026-07-14T09:12:00Z",
+      changedAt: "2026-11-08T11:47:32Z",
+      had: "2026-11-14",
+      from: "2mo",
+      to: "3mo",
+    },
+    "2026-12-14",
+  );
+  target(
+    "§8.2 alargar 45 días → 2 meses sin intentos pasados: ancla en order_placed 16-oct → 16-dic (la 16967885)",
+    { attempts: [at("2026-11-30T08:00:00+00:00")], orderPlaced: "2026-10-16T10:31:00Z", changedAt: "2026-10-20T20:16:50Z", had: "2026-11-30", from: "45d", to: "2mo" },
+    "2026-12-16",
+  );
+  target(
+    "§8.3 alargar 1 → 2 meses con un pendiente del 27-sep que se quedó en el pasado → 27-nov (la 13937496)",
+    {
+      attempts: [at("2026-08-27T08:00:00+00:00", { completed: true }), at("2026-09-27T08:00:00+00:00", { status: "pending" }), at("2026-10-27T08:00:00+00:00")],
+      changedAt: "2026-10-25T08:24:55Z",
+      had: "2026-10-27",
+      from: "1mo",
+      to: "2mo",
+    },
+    "2026-11-27",
+  );
+  target(
+    "§8.4 alargar 3 → 4 meses tras un salto: ancla 29-jul, tenía 29-ene → 29-ene, gana el suelo (la 12832109)",
+    {
+      attempts: [at("2026-07-29T08:00:00+00:00", { completed: true }), at("2026-10-29T08:00:00+00:00", { skipped: true }), at("2027-01-29T08:00:00+00:00")],
+      changedAt: "2026-10-27T18:33:17Z",
+      had: "2027-01-29",
+      from: "3mo",
+      to: "4mo",
+    },
+    "2027-01-29",
+  );
+  target(
+    "§8.5 acortar 3 → 2 meses, ancla 14-sep, tenía 14-dic (dentro de un ciclo nuevo) → 14-dic, la que tenía",
+    { attempts: [at("2026-09-14T08:00:00+00:00", { completed: true }), at("2026-12-14T08:00:00+00:00")], changedAt: "2026-11-08T10:00:00Z", had: "2026-12-14", from: "3mo", to: "2mo" },
+    "2026-12-14",
+  );
+  target(
+    "§8.6 acortar 2 meses → 45 días con ancla + 45 días ya pasado: tenía 15-nov → 15-nov, nunca se salta un ciclo (la 16140086)",
+    { attempts: [at("2026-11-15T08:00:00+00:00")], orderPlaced: "2026-09-15T08:00:00Z", changedAt: "2026-11-05T07:00:30Z", had: "2026-11-15", from: "2mo", to: "45d" },
+    "2026-11-15",
+  );
+  target(
+    "los meses se sujetan al último día: 29-oct + 4 meses = 28-feb, como Seal (la 12450258)",
+    { attempts: [at("2026-10-29T08:00:00+00:00", { completed: true }), at("2027-01-29T08:00:00+00:00")], changedAt: "2026-11-03T16:35:51Z", had: "2027-01-29", from: "3mo", to: "4mo" },
+    "2027-02-28",
+  );
+  target(
+    "el ancla es el último intento ANTERIOR al cambio, venga en el orden que venga",
+    {
+      attempts: [at("2026-12-01T08:00:00+00:00"), at("2026-10-01T08:00:00+00:00", { completed: true }), at("2026-09-01T08:00:00+00:00", { completed: true })],
+      changedAt: "2026-10-20T12:00:00Z",
+      had: "2026-11-01",
+      from: "1mo",
+      to: "3mo",
+    },
+    "2027-01-01",
+  );
+  target(
+    "un cobro del mismo día, anterior al cambio, ya es el ancla",
+    { attempts: [at("2026-11-08T08:00:00+00:00", { completed: true }), at("2026-12-08T08:00:00+00:00")], changedAt: "2026-11-08T11:00:00Z", had: "2026-12-08", from: "1mo", to: "2mo" },
+    "2027-01-08",
+  );
+  target("sin intentos ni order_placed, la que tenía", { changedAt: "2026-11-08T11:00:00Z", had: "2026-12-08", from: "3mo", to: "6mo" }, "2026-12-08");
+
+  // Acortar con la que tenía MÁS LEJOS de un ciclo nuevo (opción 2 de Juan, 10-nov-2026): se
+  // adelanta a `ancla + frecuencia nueva`, nunca a menos de 3 días desde el cambio. Casos reales.
+  target(
+    "acortar 6 → 1 mes con la próxima a 182 días → 11-nov, como si siempre hubiera sido mensual (la 15528766)",
+    {
+      attempts: [at("2026-10-09T12:13:00+00:00", { status: "failed" }), at("2026-10-11T16:04:00+00:00", { status: "failed" }), at("2027-04-11T16:00:00+00:00")],
+      orderPlaced: "2026-08-17T00:27:54+02:00",
+      changedAt: "2026-10-11T16:07:00Z",
+      had: "2027-04-11",
+      from: "6mo",
+      to: "1mo",
+    },
+    "2026-11-11",
+  );
+  target(
+    "acortar 6 → 2 meses sin caja desde el 26-ago: el natural (26-oct) ya pasó → a 3 días, 11-nov (la 13924051)",
+    { attempts: [at("2026-08-26T08:00:00+00:00", { completed: true }), at("2027-02-26T08:00:00+00:00")], changedAt: "2026-11-08T09:21:00Z", had: "2027-02-26", from: "6mo", to: "2mo" },
+    "2026-11-11",
+  );
+  target(
+    "acortar 3 → 1 mes con la próxima a 52 días → 8-nov (la 15126838, que pulsó Adelantar ese mismo día)",
+    { attempts: [at("2026-09-27T08:00:00+00:00", { completed: true }), at("2026-12-27T08:00:00+00:00")], changedAt: "2026-11-05T12:17:00Z", had: "2026-12-27", from: "3mo", to: "1mo" },
+    "2026-11-08",
+  );
+  target(
+    "acortar 4 meses → 45 días con la próxima a 98 días → 27-oct, el natural (la 16079216)",
+    { attempts: [at("2026-09-12T08:00:00+00:00", { completed: true }), at("2027-01-12T08:00:00+00:00")], changedAt: "2026-10-06T10:00:00Z", had: "2027-01-12", from: "4mo", to: "45d" },
+    "2026-10-27",
+  );
+  target(
+    "acortar 6 → 4 meses con la próxima a 147 días (más de un ciclo de 4) → 25-dic (la 15126594)",
+    { attempts: [at("2026-08-25T08:00:00+00:00", { completed: true }), at("2027-02-25T08:00:00+00:00")], changedAt: "2026-10-01T15:48:00Z", had: "2027-02-25", from: "6mo", to: "4mo" },
+    "2026-12-25",
+  );
+  target(
+    "acortar 4 → 3 meses con la próxima a 35 días (dentro de un ciclo de 3) → se mantiene el 19-oct (la 13779024)",
+    { attempts: [at("2026-06-19T08:00:00+00:00", { completed: true }), at("2026-10-19T08:00:00+00:00")], changedAt: "2026-09-14T16:25:00Z", had: "2026-10-19", from: "4mo", to: "3mo" },
+    "2026-10-19",
+  );
+  target(
+    "acortar con el natural mañana: nunca a menos de 3 días desde el cambio",
+    { attempts: [at("2026-10-11T08:00:00+00:00", { completed: true }), at("2027-01-11T08:00:00+00:00")], changedAt: "2026-11-10T10:00:00Z", had: "2027-01-11", from: "3mo", to: "1mo" },
+    "2026-11-13",
+  );
+  target(
+    "acortar con la que tenía JUSTO a un ciclo nuevo: se mantiene",
+    { attempts: [at("2026-10-10T08:00:00+00:00", { completed: true }), at("2026-12-10T08:00:00+00:00")], changedAt: "2026-11-10T10:00:00Z", had: "2026-12-10", from: "2mo", to: "1mo" },
+    "2026-12-10",
+  );
+  target(
+    "ALARGAR con saltos por delante (la que tenía muy lejos) nunca adelanta: un salto no se deshace",
+    { attempts: [at("2026-10-20T08:00:00+00:00", { completed: true }), at("2027-04-20T08:00:00+00:00")], changedAt: "2026-11-10T10:00:00Z", had: "2027-04-20", from: "1mo", to: "2mo" },
+    "2027-04-20",
+  );
+  check(
+    "el margen mínimo al adelantar es de 3 días",
+    PLAN_CHANGE_MIN_LEAD_DAYS === 3,
+  );
+  check(
+    "addIntervalUtc: 31-ene + 1 mes = 28-feb (29 en bisiesto) y 45 días son días",
+    addIntervalUtc(new Date("2026-01-31T08:00:00Z"), "1mo").toISOString() === "2026-02-28T08:00:00.000Z" &&
+      addIntervalUtc(new Date("2028-01-31T08:00:00Z"), "1mo").toISOString() === "2028-02-29T08:00:00.000Z" &&
+      addIntervalUtc(new Date("2026-09-15T08:00:00Z"), "45d").toISOString() === "2026-10-30T08:00:00.000Z" &&
+      addIntervalUtc(new Date("2026-10-31T08:00:00Z"), "6mo").toISOString() === "2027-04-30T08:00:00.000Z",
+  );
+
+  // ── Re-anclaje exacto: tirar hacia atrás (10-nov-2026) ───────────────────────
+  console.log("\n── re-anclaje exacto ──\n");
+  const regen = (dates: string[], extra: ReturnType<typeof at>[] = []) =>
+    ({ billing_attempts: [...extra, ...dates.map((d) => at(`${d}T08:00:00+00:00`))] }) as unknown as SealSubscription;
+  const armed = { created_at: "2026-11-05T07:00:40Z", updated_at: "2026-11-05T07:00:40Z", exact: true };
+  check(
+    "exacta con Seal pasado del objetivo y nada del cliente: se tira hacia atrás",
+    reanchorNeedsPullBack(regen(["2026-12-14", "2027-01-28"]), "2026-12-14", "2026-11-15", armed),
+  );
+  check(
+    "sin exact (fromNext, el bot, el suelo de un intervalo sin ver) nunca tira hacia atrás",
+    !reanchorNeedsPullBack(regen(["2026-12-14"]), "2026-12-14", "2026-11-15", { ...armed, exact: false }) &&
+      !reanchorNeedsPullBack(regen(["2026-12-14"]), "2026-12-14", "2026-11-15", { ...armed, exact: null }),
+  );
+  check(
+    "en el objetivo o antes no tira (lo de antes lo empuja reanchorCadence, como siempre)",
+    !reanchorNeedsPullBack(regen(["2026-11-15"]), "2026-11-15", "2026-11-15", armed) &&
+      !reanchorNeedsPullBack(regen(["2026-11-14"]), "2026-11-14", "2026-11-15", armed),
+  );
+  const skippedAfter = regen(["2027-01-28"], [at("2026-12-14T08:00:00+00:00", { skipped: true })]);
+  check(
+    "si el cliente saltó DESPUÉS del cambio, manda el salto: no tira y la intención converge",
+    !reanchorNeedsPullBack(skippedAfter, "2027-01-28", "2026-11-15", armed) &&
+      reanchorConverged("2027-01-28", "2026-11-15", armed) &&
+      customerActedSince(skippedAfter, armed.created_at),
+  );
+  check(
+    "si adelantó después del cambio (un cobro de hoy), tampoco",
+    !reanchorNeedsPullBack(regen(["2026-12-21"], [at("2026-11-06T09:00:00+00:00", { completed: true })]), "2026-12-21", "2026-11-15", armed),
+  );
+  check(
+    "los cobros y saltos de ANTES del cambio no cuentan como acción del cliente",
+    reanchorNeedsPullBack(
+      regen(["2026-12-14"], [at("2026-09-15T08:00:00+00:00", { completed: true }), at("2026-10-30T08:00:00+00:00", { skipped: true })]),
+      "2026-12-14",
+      "2026-11-15",
+      armed,
+    ),
+  );
+  check(
+    "sin hora de la intención no se tira de nada",
+    !reanchorNeedsPullBack(regen(["2026-12-14"]), "2026-12-14", "2026-11-15", { ...armed, created_at: null }),
+  );
+
+  {
+    // De punta a punta, el caso de la 16140086 con fechas relativas a hoy (`pullCadenceBackTo`
+    // no mueve nada al pasado, así que un caso con fechas fijas caducaría): alta hace 52 días,
+    // la próxima dentro de 8, y pasa de 2 meses a 45 días. `alta + 45 días` ya ha pasado, así
+    // que Seal se salta ese ciclo y regenera en alta + 90 / 135 / 180 días. El objetivo es la
+    // que tenía, y `pullCadenceBackTo` deja el calendario en ella y cada 45 días desde ahí
+    // (en la real: 15-nov, 30-dic, 13-feb). Seal sustituido en memoria.
+    const { seal } = await import("@/lib/seal");
+    const realGet = seal.getSubscriptionById;
+    const realReschedule = seal.rescheduleBillingAttempt;
+    const had = day(8);
+    const changedAt = new Date(Date.now() - 60_000).toISOString();
+    const objetivo = planChangeTargetDate({
+      attempts: [at(`${had}T08:00:00+00:00`)],
+      orderPlaced: `${day(-52)}T08:00:00Z`,
+      changedAt: new Date(changedAt),
+      previousNextShipYYYYMMDD: had,
+      current: "2mo",
+      target: "45d",
+    });
+    const fake = {
+      id: 16140086,
+      status: "ACTIVE",
+      delivery_interval: "45 days",
+      billing_attempts: [
+        { ...at(`${day(38)}T08:00:00+00:00`), id: 1 },
+        { ...at(`${day(83)}T08:00:00+00:00`), id: 2 },
+        { ...at(`${day(128)}T08:00:00+00:00`), id: 3 },
+      ],
+    } as unknown as SealSubscription;
+    const moves: string[] = [];
+    seal.getSubscriptionById = (async () => fake) as typeof seal.getSubscriptionById;
+    seal.rescheduleBillingAttempt = (async (attemptId: number, _sub: number, date: string) => {
+      moves.push(`${attemptId}→${date}`);
+      const a = fake.billing_attempts.find((x) => x.id === attemptId)!;
+      a.date = `${date}T08:00:00+00:00`;
+    }) as typeof seal.rescheduleBillingAttempt;
+    try {
+      const intent = { created_at: changedAt, updated_at: changedAt, exact: true };
+      const need = reanchorNeedsPullBack(fake, day(38), objetivo, intent);
+      const moved = need ? await seal.pullCadenceBackTo(16140086, objetivo) : 0;
+      const dates = fake.billing_attempts.map((a) => a.date.slice(0, 10)).sort();
+      check(
+        "acortar con un ciclo saltado: el objetivo es la que tenía y el calendario vuelve a ella, cada 45 días",
+        objetivo === had &&
+          need &&
+          moved === 3 &&
+          JSON.stringify(dates) === JSON.stringify([day(8), day(53), day(98)]),
+        `objetivo ${objetivo}; ${moves.join(", ")} → ${dates.join(", ")}`,
+      );
+      check(
+        "y al releer, en el objetivo exacto, ya no tira más (la cierra reanchorConverged al aguantar)",
+        !reanchorNeedsPullBack(fake, dates[0], objetivo, intent),
+      );
+    } finally {
+      seal.getSubscriptionById = realGet;
+      seal.rescheduleBillingAttempt = realReschedule;
+    }
+  }
+
+  // ── Cableado (guardas de código fuente) ──────────────────────────────────────
+  console.log("\n── cableado ──\n");
+  const { readFileSync } = await import("node:fs");
+  const src = (p: string) =>
+    readFileSync(p, "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+  const PLAN = src("src/lib/plan-core.ts");
+  check(
+    "plan-core: el objetivo solo en «Tu plan» (preserve) y solo si cambia la frecuencia; fromNext sigue con la espaciada",
+    /const planChangeTargetYYYYMMDD =\s*reanchorMode === "preserve" && planChanged && preserveYYYYMMDD\s*\?\s*planChangeTargetDate\(\{/.test(PLAN) &&
+      /attempts: preMutationSub\?\.billing_attempts,/.test(PLAN) &&
+      /const effectivePreserveYYYYMMDD = spacedYYYYMMDD \?\? planChangeTargetYYYYMMDD \?\? preserveYYYYMMDD;/.test(PLAN) &&
+      /const exactIntent = planChangeTargetYYYYMMDD !== null;/.test(PLAN),
+  );
+  check(
+    "§8.8 plan-core: la salida verificada, la sin verificar y el armado tras el intervalo guardan y prometen la MISMA fecha, exacta",
+    /recordReanchorIntent\(effectivePreserveYYYYMMDD, "verified"\)/.test(PLAN) &&
+      /recordReanchorIntent\(effectivePreserveYYYYMMDD, "unverified"\)/.test(PLAN) &&
+      /writeReanchorIntent\(ctx\.customerId, sealSubscriptionId, preserveYYYYMMDD, \{ exact: exactIntent \}\)/.test(PLAN) &&
+      /dateYYYYMMDD: string \| null = effectivePreserveYYYYMMDD,\s*exact: boolean = exactIntent,/.test(PLAN) &&
+      /finalNextShipDate = `\$\{armedDate\}T13:00:00Z`/.test(PLAN) &&
+      /const promised = unverifiedPromise \? `\$\{unverifiedPromise\}T13:00:00Z` : null;/.test(PLAN),
+  );
+  check(
+    "§8.7 regresión: fromNext sigue con la espaciada de siempre, y sin cambio de frecuencia (solo cajas) se promete la fecha VIVA de Seal",
+    /reanchorMode === "fromNext" && planChanged\s*\?\s*spacedNextShipDate\(nextAttemptDate, liveFrequency, targetFrequency\)/.test(PLAN) &&
+      /let finalNextShipDate: string \| null = getNextBillingAttempt\(verified\)\?\.date \?\? null;\s*if \(planChanged && effectivePreserveYYYYMMDD && /.test(PLAN) &&
+      /if \(planChanged && effectivePreserveYYYYMMDD && !isWithinCutoff\(`\$\{effectivePreserveYYYYMMDD\}T13:00:00Z`\)\) \{\s*const armedDate = await recordReanchorIntent\(effectivePreserveYYYYMMDD, "unverified"\);/.test(PLAN),
+  );
+  check(
+    "plan-core: con el intervalo sin confirmar, en preserve se arma la que TENÍA como suelo, nunca el objetivo",
+    /if \(reanchorMode === "preserve"\) await armReanchorAfterIntervalChange\(preserveYYYYMMDD, false\);/.test(PLAN),
+  );
+  const EVENTS = src("src/lib/sub-change-events.ts");
+  check(
+    "§8.8 sub-change-events: la reparación promete la fecha de la intención (el objetivo), igual que la ruta",
+    /\.from\("subscription_reanchor_intents"\)\s*\.select\("preserve_date"\)/.test(EVENTS) &&
+      /return `\$\{String\(data\.preserve_date\)\.slice\(0, 10\)\}T13:00:00Z`;/.test(EVENTS) &&
+      /if \(frequencyChanged\) \{[\s\S]{0,400}\}\s*return getNextBillingAttempt\(sub\)\?\.date \?\? null;/.test(EVENTS),
+  );
+  for (const [name, path, lock] of [
+    ["webhook de Seal", "src/app/api/webhooks/seal/route.ts", "reanchor-webhook"],
+    ["reanchor-drain", "src/app/api/cron/reanchor-drain/route.ts", "reanchor-drain"],
+    ["hub/dashboard", "src/app/api/hub/dashboard/route.ts", "reanchor-dashboard"],
+  ] as const) {
+    const s = src(path);
+    check(
+      `${name}: lee exact, mira reanchorNeedsPullBack y tira con pullCadenceBackTo bajo el cerrojo`,
+      /\.select\("[^"]*\bexact\b[^"]*"\)/.test(s) &&
+        /reanchorNeedsPullBack\(sub, firstDay, preserve,/.test(s) &&
+        new RegExp(`tryWithPlanLock\\([^;]*"${lock}"[^;]*pullCadenceBackTo\\(`).test(s.replace(/\n/g, " ")),
+    );
   }
 
   if (failures) {

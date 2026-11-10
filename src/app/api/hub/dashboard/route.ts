@@ -1,6 +1,6 @@
 import { ApiHttpError, withCustomer } from "@/lib/api-helpers";
 import { isWithinCutoff } from "@/lib/cutoff";
-import { reanchorConverged, reanchorEqualityTooFresh } from "@/lib/frequency-core";
+import { reanchorConverged, reanchorEqualityTooFresh, reanchorNeedsPullBack } from "@/lib/frequency-core";
 import { maskPendingLineRepair } from "@/lib/line-repair-runner";
 import { tryWithPlanLock } from "@/lib/plan-lock";
 import { langFromRequest } from "@/lib/request-lang";
@@ -127,7 +127,7 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
   try {
     const { data: intent } = await sb
       .from("subscription_reanchor_intents")
-      .select("preserve_date, seal_subscription_id, created_at, updated_at")
+      .select("preserve_date, seal_subscription_id, created_at, updated_at, exact")
       .eq("customer_id", ctx.customerId)
       .eq("seal_subscription_id", String(sub.id))
       .eq("status", "pending")
@@ -135,17 +135,22 @@ export const GET = withCustomer<HubDashboard>(async (req, ctx) => {
     if (intent && String(intent.seal_subscription_id) === String(sub.id)) {
       const preserve = String(intent.preserve_date).slice(0, 10);
       const firstDay = getNextBillingAttempt(sub)?.date?.slice(0, 10) ?? null;
+      // Intención EXACTA de «Tu plan» con Seal pasado del objetivo (10-nov-2026): se tira
+      // hacia atrás como se empuja hacia delante. Ver `reanchorNeedsPullBack`.
+      const pullBack =
+        !!firstDay &&
+        reanchorNeedsPullBack(sub, firstDay, preserve, intent as { created_at: string | null; exact: boolean | null });
       if (isWithinCutoff(`${preserve}T13:00:00Z`)) {
         // Dentro del corte de 24h no se re-ancla, pero tampoco se borra desde aquí
         // (14-oct-2026): el drain la borra AVISANDO a #incidents, y si el Hub llegaba
         // antes, el aviso no salía nunca.
-      } else if (firstDay && firstDay < preserve) {
+      } else if (firstDay && (firstDay < preserve || pullBack)) {
         // Con el cerrojo de la sub, como el webhook y el drain (14-oct-2026). Sin borrar
         // la intención: se cierra en una lectura posterior con `reanchorConverged`, sobre
         // lo que Seal enseñe de verdad, no a ciegas tras mover.
         const subId = Number(sub.id);
         const res = await tryWithPlanLock(ctx.customerId, subId, "reanchor-dashboard", () =>
-          seal.reanchorCadence(subId, preserve),
+          pullBack ? seal.pullCadenceBackTo(subId, preserve) : seal.reanchorCadence(subId, preserve),
         );
         if (res.ran) {
           // La hora del movimiento, como el drain y el webhook (21-oct-2026). Ver
