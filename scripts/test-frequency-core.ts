@@ -39,6 +39,7 @@ import {
   type FrequencyChangeDeps,
   isFrequency,
   longerOptionsFromNext,
+  PLAN_CHANGE_MIN_LEAD_DAYS,
   planChangeTargetDate,
   probeReanchorStore,
   reanchorConverged,
@@ -544,7 +545,7 @@ const run = async () => {
   });
   const target = (
     name: string,
-    input: { attempts?: ReturnType<typeof at>[]; orderPlaced?: string; changedAt: string; had: string; to: Frequency },
+    input: { attempts?: ReturnType<typeof at>[]; orderPlaced?: string; changedAt: string; had: string; from: Frequency; to: Frequency },
     expected: string,
   ) => {
     const got = planChangeTargetDate({
@@ -552,6 +553,7 @@ const run = async () => {
       orderPlaced: input.orderPlaced ?? null,
       changedAt: new Date(input.changedAt),
       previousNextShipYYYYMMDD: input.had,
+      current: input.from,
       target: input.to,
     });
     check(name, got === expected, `${got}, se esperaba ${expected}`);
@@ -563,13 +565,14 @@ const run = async () => {
       orderPlaced: "2026-07-14T09:12:00Z",
       changedAt: "2026-11-08T11:47:32Z",
       had: "2026-11-14",
+      from: "2mo",
       to: "3mo",
     },
     "2026-12-14",
   );
   target(
     "§8.2 alargar 45 días → 2 meses sin intentos pasados: ancla en order_placed 16-oct → 16-dic (la 16967885)",
-    { attempts: [at("2026-11-30T08:00:00+00:00")], orderPlaced: "2026-10-16T10:31:00Z", changedAt: "2026-10-20T20:16:50Z", had: "2026-11-30", to: "2mo" },
+    { attempts: [at("2026-11-30T08:00:00+00:00")], orderPlaced: "2026-10-16T10:31:00Z", changedAt: "2026-10-20T20:16:50Z", had: "2026-11-30", from: "45d", to: "2mo" },
     "2026-12-16",
   );
   target(
@@ -578,6 +581,7 @@ const run = async () => {
       attempts: [at("2026-08-27T08:00:00+00:00", { completed: true }), at("2026-09-27T08:00:00+00:00", { status: "pending" }), at("2026-10-27T08:00:00+00:00")],
       changedAt: "2026-10-25T08:24:55Z",
       had: "2026-10-27",
+      from: "1mo",
       to: "2mo",
     },
     "2026-11-27",
@@ -588,23 +592,24 @@ const run = async () => {
       attempts: [at("2026-07-29T08:00:00+00:00", { completed: true }), at("2026-10-29T08:00:00+00:00", { skipped: true }), at("2027-01-29T08:00:00+00:00")],
       changedAt: "2026-10-27T18:33:17Z",
       had: "2027-01-29",
+      from: "3mo",
       to: "4mo",
     },
     "2027-01-29",
   );
   target(
-    "§8.5 acortar 3 → 2 meses, ancla 14-sep, tenía 14-dic → 14-dic, la que tenía",
-    { attempts: [at("2026-09-14T08:00:00+00:00", { completed: true }), at("2026-12-14T08:00:00+00:00")], changedAt: "2026-11-08T10:00:00Z", had: "2026-12-14", to: "2mo" },
+    "§8.5 acortar 3 → 2 meses, ancla 14-sep, tenía 14-dic (dentro de un ciclo nuevo) → 14-dic, la que tenía",
+    { attempts: [at("2026-09-14T08:00:00+00:00", { completed: true }), at("2026-12-14T08:00:00+00:00")], changedAt: "2026-11-08T10:00:00Z", had: "2026-12-14", from: "3mo", to: "2mo" },
     "2026-12-14",
   );
   target(
     "§8.6 acortar 2 meses → 45 días con ancla + 45 días ya pasado: tenía 15-nov → 15-nov, nunca se salta un ciclo (la 16140086)",
-    { attempts: [at("2026-11-15T08:00:00+00:00")], orderPlaced: "2026-09-15T08:00:00Z", changedAt: "2026-11-05T07:00:30Z", had: "2026-11-15", to: "45d" },
+    { attempts: [at("2026-11-15T08:00:00+00:00")], orderPlaced: "2026-09-15T08:00:00Z", changedAt: "2026-11-05T07:00:30Z", had: "2026-11-15", from: "2mo", to: "45d" },
     "2026-11-15",
   );
   target(
     "los meses se sujetan al último día: 29-oct + 4 meses = 28-feb, como Seal (la 12450258)",
-    { attempts: [at("2026-10-29T08:00:00+00:00", { completed: true }), at("2027-01-29T08:00:00+00:00")], changedAt: "2026-11-03T16:35:51Z", had: "2027-01-29", to: "4mo" },
+    { attempts: [at("2026-10-29T08:00:00+00:00", { completed: true }), at("2027-01-29T08:00:00+00:00")], changedAt: "2026-11-03T16:35:51Z", had: "2027-01-29", from: "3mo", to: "4mo" },
     "2027-02-28",
   );
   target(
@@ -613,16 +618,76 @@ const run = async () => {
       attempts: [at("2026-12-01T08:00:00+00:00"), at("2026-10-01T08:00:00+00:00", { completed: true }), at("2026-09-01T08:00:00+00:00", { completed: true })],
       changedAt: "2026-10-20T12:00:00Z",
       had: "2026-11-01",
+      from: "1mo",
       to: "3mo",
     },
     "2027-01-01",
   );
   target(
     "un cobro del mismo día, anterior al cambio, ya es el ancla",
-    { attempts: [at("2026-11-08T08:00:00+00:00", { completed: true }), at("2026-12-08T08:00:00+00:00")], changedAt: "2026-11-08T11:00:00Z", had: "2026-12-08", to: "2mo" },
+    { attempts: [at("2026-11-08T08:00:00+00:00", { completed: true }), at("2026-12-08T08:00:00+00:00")], changedAt: "2026-11-08T11:00:00Z", had: "2026-12-08", from: "1mo", to: "2mo" },
     "2027-01-08",
   );
-  target("sin intentos ni order_placed, la que tenía", { changedAt: "2026-11-08T11:00:00Z", had: "2026-12-08", to: "6mo" }, "2026-12-08");
+  target("sin intentos ni order_placed, la que tenía", { changedAt: "2026-11-08T11:00:00Z", had: "2026-12-08", from: "3mo", to: "6mo" }, "2026-12-08");
+
+  // Acortar con la que tenía MÁS LEJOS de un ciclo nuevo (opción 2 de Juan, 10-nov-2026): se
+  // adelanta a `ancla + frecuencia nueva`, nunca a menos de 3 días desde el cambio. Casos reales.
+  target(
+    "acortar 6 → 1 mes con la próxima a 182 días → 11-nov, como si siempre hubiera sido mensual (la 15528766)",
+    {
+      attempts: [at("2026-10-09T12:13:00+00:00", { status: "failed" }), at("2026-10-11T16:04:00+00:00", { status: "failed" }), at("2027-04-11T16:00:00+00:00")],
+      orderPlaced: "2026-08-17T00:27:54+02:00",
+      changedAt: "2026-10-11T16:07:00Z",
+      had: "2027-04-11",
+      from: "6mo",
+      to: "1mo",
+    },
+    "2026-11-11",
+  );
+  target(
+    "acortar 6 → 2 meses sin caja desde el 26-ago: el natural (26-oct) ya pasó → a 3 días, 11-nov (la 13924051)",
+    { attempts: [at("2026-08-26T08:00:00+00:00", { completed: true }), at("2027-02-26T08:00:00+00:00")], changedAt: "2026-11-08T09:21:00Z", had: "2027-02-26", from: "6mo", to: "2mo" },
+    "2026-11-11",
+  );
+  target(
+    "acortar 3 → 1 mes con la próxima a 52 días → 8-nov (la 15126838, que pulsó Adelantar ese mismo día)",
+    { attempts: [at("2026-09-27T08:00:00+00:00", { completed: true }), at("2026-12-27T08:00:00+00:00")], changedAt: "2026-11-05T12:17:00Z", had: "2026-12-27", from: "3mo", to: "1mo" },
+    "2026-11-08",
+  );
+  target(
+    "acortar 4 meses → 45 días con la próxima a 98 días → 27-oct, el natural (la 16079216)",
+    { attempts: [at("2026-09-12T08:00:00+00:00", { completed: true }), at("2027-01-12T08:00:00+00:00")], changedAt: "2026-10-06T10:00:00Z", had: "2027-01-12", from: "4mo", to: "45d" },
+    "2026-10-27",
+  );
+  target(
+    "acortar 6 → 4 meses con la próxima a 147 días (más de un ciclo de 4) → 25-dic (la 15126594)",
+    { attempts: [at("2026-08-25T08:00:00+00:00", { completed: true }), at("2027-02-25T08:00:00+00:00")], changedAt: "2026-10-01T15:48:00Z", had: "2027-02-25", from: "6mo", to: "4mo" },
+    "2026-12-25",
+  );
+  target(
+    "acortar 4 → 3 meses con la próxima a 35 días (dentro de un ciclo de 3) → se mantiene el 19-oct (la 13779024)",
+    { attempts: [at("2026-06-19T08:00:00+00:00", { completed: true }), at("2026-10-19T08:00:00+00:00")], changedAt: "2026-09-14T16:25:00Z", had: "2026-10-19", from: "4mo", to: "3mo" },
+    "2026-10-19",
+  );
+  target(
+    "acortar con el natural mañana: nunca a menos de 3 días desde el cambio",
+    { attempts: [at("2026-10-11T08:00:00+00:00", { completed: true }), at("2027-01-11T08:00:00+00:00")], changedAt: "2026-11-10T10:00:00Z", had: "2027-01-11", from: "3mo", to: "1mo" },
+    "2026-11-13",
+  );
+  target(
+    "acortar con la que tenía JUSTO a un ciclo nuevo: se mantiene",
+    { attempts: [at("2026-10-10T08:00:00+00:00", { completed: true }), at("2026-12-10T08:00:00+00:00")], changedAt: "2026-11-10T10:00:00Z", had: "2026-12-10", from: "2mo", to: "1mo" },
+    "2026-12-10",
+  );
+  target(
+    "ALARGAR con saltos por delante (la que tenía muy lejos) nunca adelanta: un salto no se deshace",
+    { attempts: [at("2026-10-20T08:00:00+00:00", { completed: true }), at("2027-04-20T08:00:00+00:00")], changedAt: "2026-11-10T10:00:00Z", had: "2027-04-20", from: "1mo", to: "2mo" },
+    "2027-04-20",
+  );
+  check(
+    "el margen mínimo al adelantar es de 3 días",
+    PLAN_CHANGE_MIN_LEAD_DAYS === 3,
+  );
   check(
     "addIntervalUtc: 31-ene + 1 mes = 28-feb (29 en bisiesto) y 45 días son días",
     addIntervalUtc(new Date("2026-01-31T08:00:00Z"), "1mo").toISOString() === "2026-02-28T08:00:00.000Z" &&
@@ -692,6 +757,7 @@ const run = async () => {
       orderPlaced: `${day(-52)}T08:00:00Z`,
       changedAt: new Date(changedAt),
       previousNextShipYYYYMMDD: had,
+      current: "2mo",
       target: "45d",
     });
     const fake = {

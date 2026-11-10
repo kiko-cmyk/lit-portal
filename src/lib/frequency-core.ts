@@ -150,11 +150,17 @@ export interface PlanChangeTargetInput {
   orderPlaced: string | null | undefined;
   /** Cuándo se cambia la frecuencia. */
   changedAt: Date;
-  /** YYYY-MM-DD: la próxima entrega que tenía el cliente. Nunca se queda antes. */
+  /** YYYY-MM-DD: la próxima entrega que tenía el cliente. */
   previousNextShipYYYYMMDD: string;
+  /** La frecuencia de antes del cambio (la de Seal): decide si se alarga o se acorta. */
+  current: Frequency;
   /** La frecuencia nueva. */
   target: Frequency;
 }
+
+/** Al acortar y adelantar, la caja nunca se cobra antes de estos días desde el cambio: le
+ *  llega el email «Plan actualizado», el aviso de 48 h, y puede saltar antes del corte de 24 h. */
+export const PLAN_CHANGE_MIN_LEAD_DAYS = 3;
 
 /**
  * El ancla con la que Seal regenera el calendario al cambiar la frecuencia: el ÚLTIMO
@@ -181,20 +187,29 @@ export function planChangeAnchor(
 
 /**
  * La fecha en la que queda la próxima entrega cuando el cliente cambia la frecuencia desde
- * «Tu plan» (modo `preserve`). Regla de Juan, 10-nov-2026:
+ * «Tu plan» (modo `preserve`). Reglas de Juan, 10-nov-2026 (el «natural» es
+ * `ancla + frecuencia nueva`: cuando le tocaría si siempre hubiera tenido el ritmo nuevo):
  *
- *   objetivo   = max( la que tenía el cliente, ancla + frecuencia nueva )
+ *   - AL ALARGAR: max(la que tenía, natural). Casi siempre el natural, que es donde Seal la
+ *     deja solo: de 2 a 3 meses con el último cobro el 14-sep y la próxima el 14-nov, el
+ *     14-dic. Si había saltado y la que tenía es posterior, la que tenía: un salto no se
+ *     deshace al alargar.
+ *   - AL ACORTAR, si la que tenía llega dentro de UN CICLO del ritmo nuevo desde hoy, se
+ *     mantiene y la frecuencia nueva cuenta desde ella: ya cae dentro de lo que ha pedido.
+ *     Nunca se salta un ciclo: si el natural ya ha pasado, Seal salta ciclos enteros (la
+ *     16140086, de 2 meses a 45 días con alta el 15-sep y la próxima el 15-nov, quedó el
+ *     14-dic) y el re-anclaje la trae de vuelta (`reanchorNeedsPullBack`).
+ *   - AL ACORTAR con la que tenía MÁS LEJOS de un ciclo nuevo, se adelanta al natural, y
+ *     nunca a menos de `PLAN_CHANGE_MIN_LEAD_DAYS` desde hoy. Quien pasa de 6 meses a 1 con
+ *     la próxima a 5 meses quiere la caja antes (la 15528766: 11-nov y no 11-abr). De los
+ *     ~51 que acortaron entre agosto y noviembre, 14 pulsaron Adelantar en la semana
+ *     siguiente; con la regla anterior esperaban meses.
+ *
  *   siguientes = objetivo + n × frecuencia nueva
  *
- *   - AL ALARGAR la entrega pasa a `ancla + frecuencia nueva`, que es donde Seal la deja
- *     solo: de 2 a 3 meses con el último cobro el 14-sep y la próxima el 14-nov, el 14-dic.
- *   - AL ACORTAR se queda en la que tenía y la frecuencia nueva cuenta desde ella. Nunca se
- *     salta un ciclo: si `ancla + frecuencia nueva` ya ha pasado, Seal salta ciclos enteros
- *     (la 16140086, de 2 meses a 45 días con alta el 15-sep, quedó el 14-dic en vez del
- *     15-nov), y el re-anclaje la trae de vuelta (`reanchorNeedsPullBack`).
- *
  * Es la fecha que se le PROMETE (evento SUB-05, respuesta de la ruta, portada) y la que
- * guarda la intención de re-anclaje, que con `exact` hace que Seal acabe exactamente ahí.
+ * guarda la intención de re-anclaje, que con `exact` hace que Seal acabe exactamente ahí,
+ * hacia delante o hacia atrás.
  *
  * Hasta el 10-nov-2026 se prometía la que tenía el cliente: la intención era solo un suelo,
  * Seal al alargar la dejaba más tarde, y el email «Plan actualizado» anunció a 49 clientes
@@ -206,11 +221,19 @@ export function planChangeAnchor(
  * pasa por aquí.
  */
 export function planChangeTargetDate(input: PlanChangeTargetInput): string {
-  const floor = input.previousNextShipYYYYMMDD.slice(0, 10);
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  const had = input.previousNextShipYYYYMMDD.slice(0, 10);
   const anchor = planChangeAnchor(input.attempts, input.orderPlaced, input.changedAt);
-  if (!anchor) return floor;
-  const regenerated = addIntervalUtc(anchor, input.target).toISOString().slice(0, 10);
-  return regenerated > floor ? regenerated : floor;
+  if (!anchor) return had;
+  const natural = ymd(addIntervalUtc(anchor, input.target));
+  const shortening = FREQUENCY_DAYS[input.target] < FREQUENCY_DAYS[input.current];
+  if (!shortening) return natural > had ? natural : had;
+  // Al acortar: si la que tenía ya cae dentro de un ciclo nuevo desde hoy, se mantiene.
+  if (had <= ymd(addIntervalUtc(input.changedAt, input.target))) return had;
+  // Si no, se adelanta al natural, con un margen mínimo desde hoy. Siempre antes de la que
+  // tenía: el natural lo es al acortar, y el margen también, porque es menor que un ciclo.
+  const soonest = ymd(new Date(input.changedAt.getTime() + PLAN_CHANGE_MIN_LEAD_DAYS * 86_400_000));
+  return natural > soonest ? natural : soonest;
 }
 
 /**
@@ -443,10 +466,15 @@ export function customerActedSince(
  * seguidos. Regla de Juan: nunca se salta un ciclo. Lo mueve `seal.pullCadenceBackTo`, que no
  * deja nada antes del objetivo ni en el pasado.
  *
- * Una lectura atrasada del calendario VIEJO no lo dispara: el objetivo nunca es anterior a la
- * fecha que tenía el cliente, que es el primer cobro de ese calendario. Y si el cliente ha
- * saltado o adelantado después del cambio, manda lo que hizo: no se tira de nada y la
- * intención converge como siempre (`reanchorConverged`).
+ * También al acortar con la fecha que tenía a más de un ciclo nuevo: el objetivo se adelanta
+ * (`planChangeTargetDate`) y Seal puede regenerar por detrás de él.
+ *
+ * Una lectura atrasada del calendario VIEJO sí puede dispararlo en ese último caso (su primer
+ * cobro es la fecha que tenía, posterior al objetivo). No hace daño: la intención se arma
+ * cuando Seal ya enseña el intervalo nuevo y ha borrado esos cobros, así que reprogramarlos
+ * falla, se reintenta en la pasada siguiente y para entonces se lee el calendario nuevo. Y si
+ * el cliente ha saltado o adelantado después del cambio, manda lo que hizo: no se tira de
+ * nada y la intención converge como siempre (`reanchorConverged`).
  */
 export function reanchorNeedsPullBack(
   sub: Pick<SealSubscription, "billing_attempts">,

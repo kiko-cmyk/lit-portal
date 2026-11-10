@@ -145,13 +145,13 @@ export type PlanChangeBody = {
   /**
    * Re-anchor policy after a frequency change:
    *   - "preserve" (default, the «Tu plan» overlay): the next delivery lands on
-   *     max(the date the customer had, anchor + new frequency), the target of
-   *     `planChangeTargetDate`. Lengthening moves it to anchor + new frequency
-   *     (where Seal lands by itself); shortening keeps the date they had and never
-   *     skips a cycle. It is never earlier than the date they had, so an imminent
-   *     order or a prior skip is not undone. Until 2026-11-10 the comment said
-   *     "keep the current next-ship date" and the route promised exactly that,
-   *     while Seal left it later on every lengthening.
+   *     the target of `planChangeTargetDate`. Lengthening: max(the date the
+   *     customer had, anchor + new frequency), where Seal lands by itself, so a
+   *     prior skip is not undone. Shortening: the date they had if it comes within
+   *     one new cycle from now (never skipping a cycle); if it is further away,
+   *     brought forward to anchor + new frequency, at least 3 days out. Until
+   *     2026-11-10 the comment said "keep the current next-ship date" and the
+   *     route promised exactly that, while Seal left it later on every lengthening.
    *   - "fromNext": the customer is SPACING their cadence instead of skipping
    *     (SkipOverlay «Ajustar mi plan», CancelTakeover, profile-survey offer).
    *     The next order moves to current next − one current cycle + one new
@@ -1099,11 +1099,13 @@ export async function changePlan(
       ? spacedNextShipDate(nextAttemptDate, liveFrequency, targetFrequency)
       : null;
   // «Tu plan» (modo "preserve") con cambio de frecuencia (10-nov-2026): la próxima entrega
-  // queda en max(la que tenía, ancla + frecuencia nueva), `planChangeTargetDate`. Es la que se
-  // PROMETE (evento SUB-05, respuesta, portada) y la que guarda la intención, EXACTA: el
-  // re-anclaje deja Seal justo ahí, también tirando hacia atrás si al acortar Seal salta un
-  // ciclo. Hasta hoy se prometía la que tenía, y al alargar Seal la dejaba más tarde: el email
-  // «Plan actualizado» anunció a 49 clientes en 3 semanas una entrega que no iba a llegar.
+  // queda en el objetivo de `planChangeTargetDate`. Al alargar, `ancla + frecuencia nueva`;
+  // al acortar, la que tenía si llega dentro de un ciclo nuevo, y si no, adelantada a
+  // `ancla + frecuencia nueva` (mínimo 3 días). Es la que se PROMETE (evento SUB-05,
+  // respuesta, portada) y la que guarda la intención, EXACTA: el re-anclaje deja Seal justo
+  // ahí, hacia delante o hacia atrás. Hasta hoy se prometía la que tenía, y al alargar Seal la
+  // dejaba más tarde: el email «Plan actualizado» anunció a 49 clientes en 3 semanas una
+  // entrega que no iba a llegar.
   // Los intentos pasados salen de la sub de ANTES de escribir; el ancla es el último anterior
   // a ahora, que es cuando se cambia. `preMutationSub` siempre existe aquí (sin ella la
   // comprobación de la línea principal ya ha devuelto 403); sin ella, la que tenía.
@@ -1114,6 +1116,7 @@ export async function changePlan(
           orderPlaced: preMutationSub?.order_placed,
           changedAt: new Date(),
           previousNextShipYYYYMMDD: preserveYYYYMMDD,
+          current: liveFrequency,
           target: targetFrequency,
         })
       : null;
